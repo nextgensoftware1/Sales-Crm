@@ -283,6 +283,7 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { allocatePractices } from './actions'
+import { assignLeadsToAgent } from './assign-actions'
 
 type Practice = {
   practiceCode: string
@@ -309,6 +310,8 @@ type Props = {
   companies?: Company[]
   isSuperAdmin?: boolean
   currentUser?: { full_name: string; role: string; company: string } | null
+  canAssign?: boolean
+  myAgents?: { id: string; full_name: string; role: string }[]
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -327,7 +330,33 @@ const C = {
   violet: '#8b5cf6',
 }
 
-const SIGNALS: { key: keyof Practice; label: string }[] = [
+// Each signal pill has a key (for toggle state) and a test(p) => boolean.
+// Booleans (CCM/PCM/…) test their flag; MIPS tests for real MIPS data.
+const hasRealMips = (p: Practice) => {
+  const v = (p.mipsByYear?.[2026] ?? '').toString().trim().toLowerCase()
+  if (!v) return false
+  // Real MIPS participation = the row mentions Individual or Group (or MIPS APM),
+  // even if "Excluded" also appears (e.g. "Individual + Group / Excluded - low volume").
+  if (v.includes('individual')) return true
+  if (v.includes('group')) return true
+  if (v.includes('apm')) return true
+  // Otherwise it's purely No record / Excluded → not real participation.
+  return false
+}
+
+const SIGNALS: { key: string; label: string; test: (p: Practice) => boolean }[] = [
+  { key: 'ccm',    label: 'CCM',     test: (p) => !!p.ccm },
+  { key: 'pcm',    label: 'PCM',     test: (p) => !!p.pcm },
+  { key: 'awv',    label: 'AWV',     test: (p) => !!p.awv },
+  { key: 'tcm',    label: 'TCM',     test: (p) => !!p.tcm },
+  { key: 'bhi',    label: 'BHI',     test: (p) => !!p.bhi },
+  { key: 'rpm',    label: 'RPM',     test: (p) => !!p.rpm },
+  { key: 'rcmFit', label: 'RCM Fit', test: (p) => !!p.rcmFit },
+  { key: 'mips',   label: 'MIPS',    test: (p) => hasRealMips(p) },
+]
+
+// The 7 boolean signal COLUMNS shown in the table (MIPS has its own column).
+const COLUMN_SIGNALS: { key: keyof Practice; label: string }[] = [
   { key: 'ccm', label: 'CCM' },
   { key: 'pcm', label: 'PCM' },
   { key: 'awv', label: 'AWV' },
@@ -346,18 +375,26 @@ const ZONES = [
   { key: 'Other', count: 0 },
 ]
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser }: Props) {
+export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [] }: Props) {
   const router = useRouter()
 
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
-  const [activeSignals, setActiveSignals] = useState<Set<keyof Practice>>(new Set())
+  const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [targetCompany, setTargetCompany] = useState('')
   const [allocMsg, setAllocMsg] = useState('')
+
+  // ---- REAL assign state (company_admin / manager / team_lead) ----
+  const [targetAgent, setTargetAgent] = useState('')
+  const [assignMsg, setAssignMsg] = useState('')
+
+  // ---- range-select state (pick rows N..M of the filtered list) ----
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
 
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
@@ -368,7 +405,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     [practices]
   )
 
-  const toggleSignal = (key: keyof Practice) => {
+  const toggleSignal = (key: string) => {
     setActiveSignals((prev) => {
       const next = new Set(prev)
       next.has(key) ? next.delete(key) : next.add(key)
@@ -380,15 +417,59 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     return practices.filter((p) => {
       if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
-      for (const key of activeSignals) if (!p[key]) return false
+
+      // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
+      for (const key of activeSignals) {
+        const sig = SIGNALS.find((s) => s.key === key)
+        if (sig && !sig.test(p)) return false
+      }
+
+      // Category tab filter (All / MIPS / RCM / CCM)
+      if (catTab === 'MIPS' && !hasRealMips(p)) return false
+      if (catTab === 'RCM' && !p.rcmFit) return false
+      if (catTab === 'CCM' && !p.ccm) return false
+
       return true
     })
-  }, [practices, search, stateFilter, activeSignals])
+  }, [practices, search, stateFilter, activeSignals, catTab])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
       const next = new Set(prev)
       next.has(code) ? next.delete(code) : next.add(code)
+      return next
+    })
+  }
+
+  // Select-all: reflects the currently FILTERED rows.
+  const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.practiceCode))
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allSelected) {
+        for (const p of filtered) next.delete(p.practiceCode)   // clear filtered
+      } else {
+        for (const p of filtered) next.add(p.practiceCode)      // select all filtered
+      }
+      return next
+    })
+  }
+
+  // Select rows N..M (1-based, inclusive) of the currently filtered list.
+  const applyRange = () => {
+    const total = filtered.length
+    let from = parseInt(rangeFrom, 10)
+    let to = parseInt(rangeTo, 10)
+    if (isNaN(from)) from = 1
+    if (isNaN(to)) to = total
+    from = Math.max(1, from)
+    to = Math.min(total, to)
+    if (from > to) { const t = from; from = to; to = t } // swap if reversed
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (let i = from - 1; i <= to - 1; i++) {
+        if (filtered[i]) next.add(filtered[i].practiceCode)
+      }
       return next
     })
   }
@@ -404,8 +485,19 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     }
   }
 
+  const handleAssign = async () => {
+    if (selected.size === 0) { setAssignMsg('Select at least one lead.'); return }
+    if (!targetAgent) { setAssignMsg('Pick an agent.'); return }
+    const res = await assignLeadsToAgent(Array.from(selected), targetAgent)
+    setAssignMsg(res.message)
+    if (res.ok) {
+      setSelected(new Set())
+      router.refresh()
+    }
+  }
+
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setActiveSignals(new Set())
+    setSearch(''); setStateFilter(''); setActiveSignals(new Set()); setCatTab('All Categories')
   }
 
   return (
@@ -501,16 +593,55 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         </section>
       )}
 
+      {/* ---- Assign bar (Company Admin / Manager / Team Lead) ---- */}
+      {canAssign && (
+        <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.green }}>
+          <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.dim }}>
+            <span>Range</span>
+            <input
+              type="number" min={1} placeholder="from"
+              value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)}
+              style={{ ...input, width: 74, padding: '6px 8px' }}
+            />
+            <span>to</span>
+            <input
+              type="number" min={1} placeholder="to"
+              value={rangeTo} onChange={(e) => setRangeTo(e.target.value)}
+              style={{ ...input, width: 74, padding: '6px 8px' }}
+            />
+            <button onClick={applyRange} style={btnGhost}>Select range</button>
+            <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
+          </div>
+          <select value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
+            <option value="">Assign to…</option>
+            {myAgents.map((a) => <option key={a.id} value={a.id}>{a.full_name} · {a.role}</option>)}
+          </select>
+          <button onClick={handleAssign} style={{ ...btnPrimary, background: C.green }}>Assign Selected</button>
+          {myAgents.length === 0 && <span style={{ fontSize: 13, color: C.faint }}>No direct reports to assign to.</span>}
+          {assignMsg && <span style={{ fontSize: 13, color: C.dim }}>{assignMsg}</span>}
+        </section>
+      )}
+
       {/* ---- Table ---- */}
       <section style={{ ...panel, padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.line}` }}>
-              {isSuperAdmin && <th style={th}></th>}
+              {(isSuperAdmin || canAssign) && (
+                <th style={th}>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    title={allSelected ? 'Clear all' : 'Select all'}
+                  />
+                </th>
+              )}
               <th style={thLeft}>Practice</th>
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
-              {SIGNALS.map((s) => <th key={s.key as string} style={th}>{s.label}</th>)}
+              {COLUMN_SIGNALS.map((s) => <th key={s.key as string} style={th}>{s.label}</th>)}
               <th style={thLeft}>MIPS 2026</th>
               <th style={thLeft}>Status</th>
             </tr>
@@ -518,7 +649,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           <tbody>
             {filtered.map((p) => (
               <tr key={p.practiceCode} style={{ borderBottom: `1px solid ${C.line}` }}>
-                {isSuperAdmin && (
+                {(isSuperAdmin || canAssign) && (
                   <td style={td}>
                     <input type="checkbox" checked={selected.has(p.practiceCode)} onChange={() => toggleSelect(p.practiceCode)} />
                   </td>
@@ -529,12 +660,17 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                 </td>
                 <td style={{ ...td, color: C.dim }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim }}>{p.specialty ?? '—'}</td>
-                {SIGNALS.map((s) => (
+                {COLUMN_SIGNALS.map((s) => (
                   <td key={s.key as string} style={td}>
                     {p[s.key] ? <span style={{ color: C.green }}>✓</span> : <span style={{ color: C.faint }}>—</span>}
                   </td>
                 ))}
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.mipsByYear?.[2026] ?? '—'}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>
+                  {hasRealMips(p)
+                    ? <span style={{ color: C.green, marginRight: 6 }}>✓</span>
+                    : <span style={{ color: C.faint, marginRight: 6 }}>—</span>}
+                  {p.mipsByYear?.[2026] ?? ''}
+                </td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.status || '—'}</td>
               </tr>
             ))}

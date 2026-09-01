@@ -11,7 +11,7 @@ const NAV: NavItem[] = [
 ]
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false,
+  title, subtitle, currentUser, active, children, showAdmin = false, headerRight = null,
 }: {
   title: string
   subtitle?: string
@@ -19,6 +19,7 @@ export default function AppShell({
   active: string
   children: React.ReactNode
   showAdmin?: boolean
+  headerRight?: React.ReactNode
 }) {
   const items = NAV.filter((n) => n.href !== '/admin' || showAdmin)
   return (
@@ -48,6 +49,7 @@ export default function AppShell({
             {subtitle && <div className="sub">{subtitle}</div>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            {headerRight}
             <ThemeToggle />
             {currentUser && (
               <div className="who"><b>{currentUser.full_name}</b>{currentUser.role}</div>
