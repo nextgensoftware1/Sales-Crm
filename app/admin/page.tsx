@@ -62,7 +62,15 @@ export default async function AdminPage() {
     <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ fontSize: 28 }}>Admin — Users & Companies</h1>
-        <a href="/" style={{ color: '#2563eb', textDecoration: 'none', fontSize: 14 }}>← Back to practices</a>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <a href="/admin/view" style={{
+            background: '#2563eb', color: '#fff', padding: '9px 16px', borderRadius: 8,
+            textDecoration: 'none', fontSize: 14, fontWeight: 600,
+          }}>
+            View as role →
+          </a>
+          <a href="/" style={{ color: '#2563eb', textDecoration: 'none', fontSize: 14 }}>← Back to practices</a>
+        </div>
       </div>
 
       <h2 style={{ fontSize: 18, marginBottom: 12 }}>Companies ({tenants?.length ?? 0})</h2>

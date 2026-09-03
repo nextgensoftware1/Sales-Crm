@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import ThemeToggle from './ThemeToggle'
+import SignOutButton from './SignOutButton'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
@@ -40,6 +41,7 @@ export default function AppShell({
               <span>{currentUser.role} · {currentUser.company}</span>
             </div>
           )}
+          <SignOutButton />
         </div>
       </aside>
       <div className="main-col">

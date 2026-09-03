@@ -301,6 +301,8 @@ type Practice = {
   mipsByYear?: Record<number, string> | null
   allocatedOn?: string | null
   status?: string | null
+  source?: string | null
+  allocatedTo?: string | null
 }
 
 type Company = { slug: string; name: string }
@@ -312,6 +314,7 @@ type Props = {
   currentUser?: { full_name: string; role: string; company: string } | null
   canAssign?: boolean
   myAgents?: { id: string; full_name: string; role: string }[]
+  myAssignedCodes?: string[]
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -375,7 +378,7 @@ const ZONES = [
   { key: 'Other', count: 0 },
 ]
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [] }: Props) {
+export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [] }: Props) {
   const router = useRouter()
 
   // ---- REAL filter state ----
@@ -396,6 +399,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   const [rangeFrom, setRangeFrom] = useState('')
   const [rangeTo, setRangeTo] = useState('')
 
+  // Priority = leads assigned to me by my boss. Toggle between showing only
+  // those ("My assigned") and the whole company pool ("All company").
+  const prioritySet = useMemo(() => new Set(myAssignedCodes), [myAssignedCodes])
+  const hasPriority = prioritySet.size > 0
+  const [assignedView, setAssignedView] = useState<'all' | 'mine'>('all')
+
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
   const [catTab, setCatTab] = useState('All Categories')
@@ -414,7 +423,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const filtered = useMemo(() => {
-    return practices.filter((p) => {
+    const rows = practices.filter((p) => {
       if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
 
@@ -429,9 +438,23 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       if (catTab === 'RCM' && !p.rcmFit) return false
       if (catTab === 'CCM' && !p.ccm) return false
 
+      // "My assigned" view: only leads assigned to me (priority).
+      if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
+
       return true
     })
-  }, [practices, search, stateFilter, activeSignals, catTab])
+
+    // Priority leads (assigned to me) float to the top; otherwise keep name order.
+    if (hasPriority && assignedView === 'all') {
+      rows.sort((a, b) => {
+        const pa = prioritySet.has(a.practiceCode) ? 0 : 1
+        const pb = prioritySet.has(b.practiceCode) ? 0 : 1
+        if (pa !== pb) return pa - pb
+        return a.name.localeCompare(b.name)
+      })
+    }
+    return rows
+  }, [practices, search, stateFilter, activeSignals, catTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -548,6 +571,22 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>{t}</span>
           ))}
         </div>
+        {hasPriority && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span
+              onClick={() => setAssignedView('mine')}
+              style={{ ...pill(assignedView === 'mine'), cursor: 'pointer', borderColor: C.amber, color: assignedView === 'mine' ? C.text : C.amber }}
+            >
+              ★ My assigned ({prioritySet.size})
+            </span>
+            <span
+              onClick={() => setAssignedView('all')}
+              style={{ ...pill(assignedView === 'all'), cursor: 'pointer' }}
+            >
+              All company
+            </span>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 6 }}>
           {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
             <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
@@ -643,6 +682,8 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
               <th style={thLeft}>Specialty</th>
               {COLUMN_SIGNALS.map((s) => <th key={s.key as string} style={th}>{s.label}</th>)}
               <th style={thLeft}>MIPS 2026</th>
+              <th style={thLeft}>Source</th>
+              <th style={thLeft}>Assigned On</th>
               <th style={thLeft}>Status</th>
             </tr>
           </thead>
@@ -655,6 +696,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                   </td>
                 )}
                 <td style={tdLeft}>
+                  {prioritySet.has(p.practiceCode) && (
+                    <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
+                  )}
                   <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 600 }}>{p.name}</a>
                   <div style={{ fontSize: 11, color: C.faint }}>Solo Practice</div>
                 </td>
@@ -671,11 +715,13 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                     : <span style={{ color: C.faint, marginRight: 6 }}>—</span>}
                   {p.mipsByYear?.[2026] ?? ''}
                 </td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.status || '—'}</td>
+                <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source, p.allocatedTo)}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{fmtDateTime(p.allocatedOn)}</td>
+                <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={13} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
+              <tr><td colSpan={15} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
             )}
           </tbody>
         </table>
@@ -702,6 +748,58 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       </div>
     )
   }
+}
+
+// Format an ISO timestamp as "12 Sep 2026, 3:04 PM" (blank if none).
+function fmtDateTime(iso?: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  })
+}
+
+// Source badge: where the lead came from — Allocated (Super Admin) or Uploaded (company).
+function sourceBadge(source?: string | null, allocatedTo?: string | null) {
+  const s = (source ?? '').trim()
+  if (!s) return <span style={{ color: '#566472' }}>—</span>
+  const isAllocated = s.toLowerCase().includes('alloc')
+  const color = isAllocated ? '#8b5cf6' : '#22d3ee' // violet vs cyan
+  const label = isAllocated ? 'Allocated' : 'Uploaded'
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{
+        display: 'inline-block', fontSize: 11, fontWeight: 600,
+        color, border: `1px solid ${color}`, borderRadius: 999,
+        padding: '2px 10px', background: color + '22',
+      }}>{label}</span>
+      {isAllocated && allocatedTo && (
+        <span style={{ fontSize: 11, color: '#8a99a8' }}>→ {allocatedTo}</span>
+      )}
+    </span>
+  )
+}
+
+// Colored status badge. Maps the agent's chosen action to a colored pill.
+function statusBadge(status?: string | null) {
+  const s = (status ?? '').trim()
+  if (!s) return <span style={{ color: '#566472' }}>—</span>
+  const key = s.toLowerCase()
+  let color = '#8a99a8' // default grey
+  if (key.includes('sold')) color = '#22c55e'          // green
+  else if (key.includes('clos')) color = '#3b82f6'      // blue
+  else if (key.includes('follow')) color = '#f59e0b'    // amber
+  else if (key.includes('interest')) color = '#22d3ee'  // cyan
+  else if (key.includes('not interest') || key.includes('dnc')) color = '#ef4444' // red
+  return (
+    <span style={{
+      display: 'inline-block', fontSize: 11, fontWeight: 600,
+      color, border: `1px solid ${color}`, borderRadius: 999,
+      padding: '2px 10px', background: color + '22',
+    }}>{s}</span>
+  )
 }
 
 function SampleTag({ note }: { note?: string }) {

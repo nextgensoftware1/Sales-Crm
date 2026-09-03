@@ -64,6 +64,17 @@ export async function assignLeadsToAgent(
     return { ok: false, message: 'None of those leads belong to your company.' }
   }
 
+  // Look up any EXISTING origin for these practices so we carry it forward
+  // (a lead that came from the admin keeps admin as its origin as it moves down).
+  const { data: existingRows } = await supabase
+    .from('lead_assignments')
+    .select('practice_id, origin_user_id')
+    .in('practice_id', ids)
+  const originByPractice = new Map<string, string | null>()
+  for (const r of (existingRows ?? []) as any[]) {
+    originByPractice.set(r.practice_id, r.origin_user_id ?? null)
+  }
+
   // 3) Upsert assignments. If a practice is already assigned to someone,
   //    re-point it to this agent (assigned_to) and keep it active.
   const now = new Date().toISOString()
@@ -71,6 +82,8 @@ export async function assignLeadsToAgent(
     practice_id: pid,
     assigned_to: agentUserId,
     assigned_by: myId,
+    // origin = whoever FIRST pushed it in; keep it if present, else it's me.
+    origin_user_id: originByPractice.get(pid) ?? myId,
     tenant_id: myTenantId,
     assigned_at: now,
     status: 'active',

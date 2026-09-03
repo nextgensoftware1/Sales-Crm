@@ -42,11 +42,25 @@ export async function uploadLeadsCsv(
     .single()
 
   const roleKey = (me as any)?.roles?.key ?? ''
-  const tenantId = (me as any)?.tenant_id
-  if (!tenantId) return { ok: false, message: 'No company linked to your account.' }
-  if (roleKey !== 'company_admin' && roleKey !== 'manager') {
-    return { ok: false, message: 'Only a Company Admin or Manager can upload leads.' }
+  let tenantId = (me as any)?.tenant_id
+
+  // Who may upload: company_admin, manager, OR super_admin.
+  if (!['company_admin', 'manager', 'super_admin'].includes(roleKey)) {
+    return { ok: false, message: 'Only a Company Admin, Manager, or Super Admin can upload leads.' }
   }
+
+  // Super Admin's uploads are owned by the PLATFORM tenant (not their own).
+  if (roleKey === 'super_admin') {
+    const { data: platform } = await supabase
+      .from('tenants')
+      .select('id')
+      .eq('is_platform', true)
+      .maybeSingle()
+    if (!platform) return { ok: false, message: 'No Platform tenant found. Run migration 014.' }
+    tenantId = (platform as any).id
+  }
+
+  if (!tenantId) return { ok: false, message: 'No company linked to your account.' }
   if (!Array.isArray(rows) || rows.length === 0) {
     return { ok: false, message: 'No rows found in the file.' }
   }
