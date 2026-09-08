@@ -5,7 +5,6 @@ import { createSupabaseServer } from '../lib/supabase-server'
 export async function allocatePractices(practiceCodes: string[], tenantSlug: string) {
   const supabase = await createSupabaseServer()
 
-  // Verify the caller is the Super Admin
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
@@ -19,7 +18,6 @@ export async function allocatePractices(practiceCodes: string[], tenantSlug: str
     return { ok: false, message: 'Only Super Admin can allocate' }
   }
 
-  // Find the target company
   const { data: tenant } = await supabase
     .from('tenants')
     .select('id')
@@ -27,7 +25,6 @@ export async function allocatePractices(practiceCodes: string[], tenantSlug: str
     .single()
   if (!tenant) return { ok: false, message: 'Company not found' }
 
-  // Find the practice ids from their codes
   const { data: practices } = await supabase
     .from('master_practices')
     .select('id')
@@ -37,7 +34,6 @@ export async function allocatePractices(practiceCodes: string[], tenantSlug: str
     return { ok: false, message: 'No practices selected' }
   }
 
-  // Build allocation rows and insert (skip duplicates)
   const rows = practices.map((p: any) => ({
     practice_id: p.id,
     tenant_id: tenant.id,
@@ -77,7 +73,6 @@ export async function logActivity(
     .single()
   if (!practice) return { ok: false, message: 'Practice not found' }
 
-  // Write the activity
   const { error } = await supabase.from('lead_activity').insert({
     practice_id: practice.id,
     tenant_id: (me as any).tenant_id,
@@ -88,7 +83,6 @@ export async function logActivity(
   })
   if (error) return { ok: false, message: error.message }
 
-  // Update the assignment's current status (if this agent has it assigned)
   if (disposition) {
     await supabase
       .from('lead_assignments')
@@ -99,9 +93,10 @@ export async function logActivity(
 
   return { ok: true, message: 'Activity logged' }
 }
+
 export async function setReminder(
   practiceCode: string,
-  remindAt: string,   // ISO date-time string
+  remindAt: string,
   note: string
 ) {
   const supabase = await createSupabaseServer()
@@ -134,7 +129,9 @@ export async function setReminder(
 
   return { ok: true, message: 'Reminder set' }
 }
-// List closers in the current user's company (for the transfer dropdown)
+
+// List closers in the current user's company (for the transfer dropdown),
+// PLUS the current user themselves (so an agent can keep/close the lead).
 export async function getClosers() {
   const supabase = await createSupabaseServer()
   const { data: { user } } = await supabase.auth.getUser()
@@ -142,21 +139,34 @@ export async function getClosers() {
 
   const { data: me } = await supabase
     .from('users')
-    .select('tenant_id')
+    .select('id, full_name, email, tenant_id, roles(key, label)')
     .eq('auth_id', user.id)
     .single()
   if (!me) return []
 
-  const { data: closers } = await supabase
+  const { data: people } = await supabase
     .from('users')
-    .select('id, full_name, email, roles(key)')
+    .select('id, full_name, email, roles(key, label)')
     .eq('tenant_id', (me as any).tenant_id)
     .eq('status', 'active')
 
-  // keep only closers
-  return (closers ?? [])
+  // All closers in the company.
+  const closers = (people ?? [])
     .filter((c: any) => c.roles?.key === 'closer')
     .map((c: any) => ({ id: c.id, name: c.full_name, email: c.email }))
+
+  // Add the current user themselves at the top (unless already a closer).
+  const meId = (me as any).id
+  const alreadyIncluded = closers.some((c) => c.id === meId)
+  if (!alreadyIncluded) {
+    closers.unshift({
+      id: meId,
+      name: `${(me as any).full_name} (myself)`,
+      email: (me as any).email,
+    })
+  }
+
+  return closers
 }
 
 export async function transferToCloser(
@@ -183,7 +193,6 @@ export async function transferToCloser(
     .single()
   if (!practice) return { ok: false, message: 'Practice not found' }
 
-  // 1. Record the transfer
   const { error: tErr } = await supabase.from('lead_transfers').insert({
     practice_id: practice.id,
     tenant_id: (me as any).tenant_id,
@@ -193,7 +202,6 @@ export async function transferToCloser(
   })
   if (tErr) return { ok: false, message: tErr.message }
 
-  // 2. Assign the lead to the closer (so it appears in their list)
   const { error: aErr } = await supabase
     .from('lead_assignments')
     .upsert(
@@ -208,7 +216,6 @@ export async function transferToCloser(
     )
   if (aErr) return { ok: false, message: aErr.message }
 
-  // 3. Log it as activity
   await supabase.from('lead_activity').insert({
     practice_id: practice.id,
     tenant_id: (me as any).tenant_id,
@@ -220,6 +227,7 @@ export async function transferToCloser(
 
   return { ok: true, message: 'Transferred to closer' }
 }
+
 export async function markAsSold(
   practiceCode: string,
   serviceSold: string,
@@ -239,7 +247,6 @@ export async function markAsSold(
     .single()
   if (!me) return { ok: false, message: 'User not found' }
 
-  // Only closers (or company admins) may mark a sale
   const roleKey = (me as any).roles?.key
   if (roleKey !== 'closer' && roleKey !== 'company_admin') {
     return { ok: false, message: 'Only a Closer or Company Admin can mark a sale' }
@@ -252,7 +259,6 @@ export async function markAsSold(
     .single()
   if (!practice) return { ok: false, message: 'Practice not found' }
 
-  // 1. Create the sale
   const { data: sale, error: sErr } = await supabase
     .from('sales')
     .insert({
@@ -268,7 +274,6 @@ export async function markAsSold(
     .single()
   if (sErr) return { ok: false, message: sErr.message }
 
-  // 2. Create the client-ownership lock (fails if already owned = already sold)
   const { error: oErr } = await supabase
     .from('client_ownership')
     .insert({
@@ -279,14 +284,12 @@ export async function markAsSold(
     })
   if (oErr) return { ok: false, message: 'This practice is already a client (locked): ' + oErr.message }
 
-  // 3. Update the assignment status to 'Sold'
   await supabase
     .from('lead_assignments')
     .update({ current_status: 'Sold' })
     .eq('practice_id', practice.id)
     .eq('assigned_to', (me as any).id)
 
-  // 4. Log activity
   await supabase.from('lead_activity').insert({
     practice_id: practice.id,
     tenant_id: (me as any).tenant_id,

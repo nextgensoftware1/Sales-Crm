@@ -28,10 +28,30 @@ export default async function DashboardPage() {
     return q.eq('tenant_id', myTenantId)
   }
 
-  // --- Activities (dispositions) ---  [REAL]
+  // --- Build all four queries, then run them IN PARALLEL (one latency hit) ---
   let actQ = supabase.from('lead_activity').select('disposition', { count: 'exact' })
   actQ = scope(actQ)
-  const { data: activities, count: activityCount } = await actQ
+
+  let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
+  if (isSuperAdmin) { /* all */ }
+  else if (isAgentOrCloser) transQ = transQ.eq('from_user_id', myUserId)
+  else transQ = transQ.eq('tenant_id', myTenantId)
+
+  let salesQ = supabase.from('sales').select('contract_value, mrr')
+  if (isSuperAdmin) { /* all */ }
+  else if (isAgentOrCloser) salesQ = salesQ.eq('sold_by', myUserId)
+  else salesQ = salesQ.eq('tenant_id', myTenantId)
+
+  let clientQ = supabase.from('client_ownership').select('id', { count: 'exact', head: true }).eq('active', true)
+  if (!isSuperAdmin) clientQ = clientQ.eq('owner_tenant_id', myTenantId)
+
+  const [actRes, transRes, salesRes, clientRes] = await Promise.all([actQ, transQ, salesQ, clientQ])
+
+  const activities = actRes.data
+  const activityCount = actRes.count
+  const transferCount = transRes.count
+  const sales = salesRes.data
+  const clientCount = clientRes.count
 
   // Disposition breakdown  [REAL]
   const dispoCounts: Record<string, number> = {}
@@ -40,28 +60,9 @@ export default async function DashboardPage() {
     dispoCounts[d] = (dispoCounts[d] ?? 0) + 1
   }
 
-  // --- Transfers ---  [REAL]
-  let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) transQ = transQ.eq('from_user_id', myUserId)
-  else transQ = transQ.eq('tenant_id', myTenantId)
-  const { count: transferCount } = await transQ
-
-  // --- Sales ---  [REAL]
-  let salesQ = supabase.from('sales').select('contract_value, mrr')
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) salesQ = salesQ.eq('sold_by', myUserId)
-  else salesQ = salesQ.eq('tenant_id', myTenantId)
-  const { data: sales } = await salesQ
-
   const saleCount = sales?.length ?? 0
   const totalValue = (sales ?? []).reduce((s: number, r: any) => s + (Number(r.contract_value) || 0), 0)
   const totalMrr = (sales ?? []).reduce((s: number, r: any) => s + (Number(r.mrr) || 0), 0)
-
-  // --- Active clients ---  [REAL]
-  let clientQ = supabase.from('client_ownership').select('id', { count: 'exact', head: true }).eq('active', true)
-  if (!isSuperAdmin) clientQ = clientQ.eq('owner_tenant_id', myTenantId)
-  const { count: clientCount } = await clientQ
 
   const scopeLabel = isSuperAdmin
     ? 'Platform-wide · all companies'

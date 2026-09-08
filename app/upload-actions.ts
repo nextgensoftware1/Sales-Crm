@@ -105,14 +105,24 @@ export async function uploadLeadsCsv(
   const providerRows = toInsert.map((code) => {
     const row = byCode.get(code)!
     const npi = clean(row[npiKey])
+    const numMembers = col(row, 'Num_Org_Members')
+    const pecos = col(row, 'PECOS_ASCT_CNTL_ID') || null
+    const enrlmt = col(row, 'ENRLMT_ID') || null
     return {
       npi,
       name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (NPI ${npi})`,
-      state: col(row, 'NPPES_State') || col(row, 'State') || null,
-      city: col(row, 'NPPES_City') || col(row, 'City') || null,
-      postal: col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
-      taxonomy_desc: col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || col(row, 'Taxonomy') || null,
-      phone: col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
+      state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
+      city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
+      postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
+      taxonomy_desc: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || null,
+      phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
+      org_pac_id: col(row, 'Org_PAC_ID') || null,
+      org_name: col(row, 'Org_Name') || null,
+      num_org_members: numMembers ? parseInt(numMembers, 10) || null : null,
+      pecos_asct_cntl_id: pecos,
+      enrlmt_id: enrlmt,
+      // Anchor = a parent lead: has BOTH PECOS and ENRLMT ids.
+      is_anchor: !!(pecos && enrlmt),
       owner_tenant_id: tenantId,
     }
   })
@@ -125,17 +135,24 @@ export async function uploadLeadsCsv(
     for (const p of (data ?? []) as any[]) providerIdByCode.set(`PR-${p.npi}`, p.id)
   }
 
-  // 2) MASTER PRACTICES --------------------------------------------------------
-  const practiceRows = toInsert.map((code) => {
+  // Helper: is this row an anchor (parent lead)? Has BOTH PECOS + ENRLMT ids.
+  const isAnchorRow = (code: string) => {
+    const row = byCode.get(code)!
+    return !!(col(row, 'PECOS_ASCT_CNTL_ID') && col(row, 'ENRLMT_ID'))
+  }
+  const anchorCodes = toInsert.filter(isAnchorRow)
+
+  // 2) MASTER PRACTICES — only for ANCHORS (roster members are providers only).
+  const practiceRows = anchorCodes.map((code) => {
     const row = byCode.get(code)!
     return {
       practice_code: code,
       name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (${code})`,
-      state: col(row, 'NPPES_State') || col(row, 'State') || null,
-      city: col(row, 'NPPES_City') || col(row, 'City') || null,
-      postal: col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
-      specialty: col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || col(row, 'Taxonomy') || null,
-      phone: col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
+      state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
+      city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
+      postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
+      specialty: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || null,
+      phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
       owner_tenant_id: tenantId,
     }
   })
@@ -147,9 +164,9 @@ export async function uploadLeadsCsv(
     for (const m of (data ?? []) as any[]) practiceIdByCode.set(m.practice_code, m.id)
   }
 
-  // 3) LINKS -------------------------------------------------------------------
+  // 3) LINKS — link only anchors (they're the only ones with a practice).
   const linkRows: any[] = []
-  for (const code of toInsert) {
+  for (const code of anchorCodes) {
     const pid = providerIdByCode.get(code)
     const mid = practiceIdByCode.get(code)
     if (pid && mid) linkRows.push({ practice_id: mid, provider_id: pid, is_primary: true })
@@ -202,10 +219,13 @@ export async function uploadLeadsCsv(
     if (error) return { ok: false, message: `MIPS insert failed: ${error.message}` }
   }
 
+  const rosterCount = toInsert.length - anchorCodes.length
   return {
     ok: true,
-    message: `Uploaded ${toInsert.length} lead(s)${skipped ? `, skipped ${skipped} duplicate(s)` : ''}.`,
-    inserted: toInsert.length,
+    message: `Uploaded ${anchorCodes.length} lead(s)` +
+      (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
+      (skipped ? `, skipped ${skipped} duplicate(s)` : '') + '.',
+    inserted: anchorCodes.length,
     skipped,
   }
 }

@@ -203,19 +203,20 @@ export default async function Home() {
     return out
   }
 
-  // Fetch rows whose id is in a (possibly large) list, chunked.
+  // Fetch rows whose id is in a (possibly large) list, chunked — chunks run in parallel.
   const fetchByIds = async (idsIn: string[]) => {
     const ids = (idsIn ?? []).filter((id) => typeof id === 'string' && id.length > 0)
     if (ids.length === 0) return []
-    const out: any[] = []
-    for (let i = 0; i < ids.length; i += CHUNK_IDS) {
-      const chunk = ids.slice(i, i + CHUNK_IDS)
-      const rows = await fetchAllPaged(() =>
-        supabase.from('master_practices').select(SELECT).in('id', chunk).order('name')
+    const chunks: string[][] = []
+    for (let i = 0; i < ids.length; i += CHUNK_IDS) chunks.push(ids.slice(i, i + CHUNK_IDS))
+    const results = await Promise.all(
+      chunks.map((chunk) =>
+        fetchAllPaged(() =>
+          supabase.from('master_practices').select(SELECT).in('id', chunk).order('name')
+        )
       )
-      out.push(...rows)
-    }
-    return out
+    )
+    return results.flat()
   }
 
   let data: any[] = []
@@ -229,11 +230,13 @@ export default async function Home() {
     } else if (roleKey === 'agent' || roleKey === 'closer') {
       data = await fetchByIds(assignedIds ?? [])
     } else {
-      // company roles: OWNED (single equality, scalable) + ALLOCATED (chunked ids)
-      const owned = await fetchAllPaged(() =>
-        supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).order('name')
-      )
-      const allocated = await fetchByIds(myAllocatedIds)
+      // company roles: OWNED + ALLOCATED — run both in parallel.
+      const [owned, allocated] = await Promise.all([
+        fetchAllPaged(() =>
+          supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).order('name')
+        ),
+        fetchByIds(myAllocatedIds),
+      ])
       data = [...owned, ...allocated]
     }
   } catch (e: any) {

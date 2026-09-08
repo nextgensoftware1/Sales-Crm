@@ -1,4 +1,5 @@
-import WorkPanel from './WorkPanel'
+import OrgRoster from '../../OrgRoster'
+import Worksheet from '../../Worksheet'
 import { supabase } from '../../../lib/supabase'
 
 export default async function PracticeDetail({
@@ -12,6 +13,9 @@ export default async function PracticeDetail({
     .from('master_practices')
     .select(`
       id, practice_code, name, state, city, postal, specialty, phone,
+      ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
+      ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
+      ws_updated_at, ws_updated_by,
       practice_providers (
         providers (
           npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone,
@@ -22,7 +26,6 @@ export default async function PracticeDetail({
     `)
     .eq('practice_code', code)
     .single()
-    // ← CHANGED above: added `id,` at the start of the select (needed to fetch activity)
 
   if (error || !practice) {
     return (
@@ -34,7 +37,7 @@ export default async function PracticeDetail({
     )
   }
 
-  // ← ADDED: fetch past activity for this practice (dispositions + notes)
+  // Fetch past activity for this practice (dispositions + notes)
   const { data: activity } = await supabase
     .from('lead_activity')
     .select('disposition, note, created_at, users(full_name)')
@@ -48,6 +51,33 @@ export default async function PracticeDetail({
     ? provider.provider_mips[0]
     : provider?.provider_mips
 
+  // Worksheet: prefill from saved fields; look up who last edited it.
+  const pr = practice as any
+  let updatedByName: string | null = null
+  if (pr.ws_updated_by) {
+    const { data: editor } = await supabase
+      .from('users').select('full_name').eq('id', pr.ws_updated_by).single()
+    updatedByName = (editor as any)?.full_name ?? null
+  }
+  const toLocalInput = (iso: string | null) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const worksheetInitial = {
+    callDetails: pr.ws_call_details ?? '',
+    additionalPhone: pr.ws_additional_phone ?? '',
+    email: pr.ws_email ?? '',
+    concernedPerson: pr.ws_concerned_person ?? '',
+    directLine: pr.ws_direct_line ?? '',
+    callbackAt: toLocalInput(pr.ws_callback_at ?? null),
+    timezone: pr.ws_timezone ?? 'Eastern',
+    disposition: pr.ws_disposition ?? 'New',
+    updatedByName,
+    updatedAt: pr.ws_updated_at ?? null,
+  }
+
   const box = { border: '1px solid #ddd', borderRadius: 8, padding: 20, marginBottom: 20, maxWidth: 700 }
   const label = { color: '#666', fontSize: 13 }
   const value = { fontSize: 15, marginBottom: 12 }
@@ -59,10 +89,39 @@ export default async function PracticeDetail({
       <h1 style={{ fontSize: 28, margin: '16px 0 4px' }}>{practice.name}</h1>
       <p style={{ color: '#666', marginBottom: 24 }}>{practice.practice_code}</p>
 
-      {/* ← ADDED: the "Work this lead" panel (disposition buttons + note box) */}
-      <WorkPanel practiceCode={code} />
+      {/* Two-column: main content on the left, Worksheet on the right */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 720px) minmax(320px, 460px)', gap: 24, alignItems: 'start' }}>
+        <div>
 
-      {/* ← ADDED: activity history (past dispositions + notes) */}
+      {/* Intelligence Signals — moved to top */}
+      <div style={box}>
+        <h2 style={{ fontSize: 18, marginBottom: 16 }}>Intelligence Signals</h2>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {[
+            ['CCM', signals?.ccm], ['PCM', signals?.pcm], ['AWV', signals?.awv],
+            ['TCM', signals?.tcm], ['BHI', signals?.bhi], ['RPM', signals?.rpm],
+            ['RCM Fit', signals?.rcm_fit],
+          ].map(([name, on]) => (
+            <span key={name as string} style={{
+              padding: '6px 12px', borderRadius: 20, fontSize: 13,
+              background: on ? '#dcfce7' : '#f2f2f2',
+              color: on ? '#166534' : '#999',
+              border: `1px solid ${on ? '#86efac' : '#ddd'}`,
+            }}>
+              {name as string}: {on ? 'Yes' : 'No'}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* MIPS — moved to top */}
+      <div style={box}>
+        <h2 style={{ fontSize: 18, marginBottom: 16 }}>MIPS</h2>
+        <div style={label}>MIPS By Year (as reported)</div>
+        <div style={value}>{mips?.reporting_option || '—'}</div>
+      </div>
+
+      {/* Activity history */}
       <div style={box}>
         <h2 style={{ fontSize: 18, marginBottom: 16 }}>Activity History ({activity?.length ?? 0})</h2>
         {(!activity || activity.length === 0) && <p style={{ color: '#888' }}>No activity yet.</p>}
@@ -103,31 +162,20 @@ export default async function PracticeDetail({
         </div>
       )}
 
-      <div style={box}>
-        <h2 style={{ fontSize: 18, marginBottom: 16 }}>Intelligence Signals</h2>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {[
-            ['CCM', signals?.ccm], ['PCM', signals?.pcm], ['AWV', signals?.awv],
-            ['TCM', signals?.tcm], ['BHI', signals?.bhi], ['RPM', signals?.rpm],
-            ['RCM Fit', signals?.rcm_fit],
-          ].map(([name, on]) => (
-            <span key={name as string} style={{
-              padding: '6px 12px', borderRadius: 20, fontSize: 13,
-              background: on ? '#dcfce7' : '#f2f2f2',
-              color: on ? '#166534' : '#999',
-              border: `1px solid ${on ? '#86efac' : '#ddd'}`,
-            }}>
-              {name as string}: {on ? 'Yes' : 'No'}
-            </span>
-          ))}
+      {/* Organization roster — everyone sharing this provider's Org_PAC_ID */}
+      {provider?.npi && (
+        <div style={{ maxWidth: 1100 }}>
+          <OrgRoster npi={provider.npi} />
         </div>
-      </div>
+      )}
 
-      <div style={box}>
-        <h2 style={{ fontSize: 18, marginBottom: 16 }}>MIPS</h2>
-        <div style={label}>MIPS By Year (as reported)</div>
-        <div style={value}>{mips?.reporting_option || '—'}</div>
-      </div>
+        </div>{/* end left column */}
+
+        {/* Right column — shared Worksheet */}
+        <div style={{ position: 'sticky', top: 24 }}>
+          <Worksheet practiceCode={code} initial={worksheetInitial} />
+        </div>
+      </div>{/* end two-column grid */}
     </div>
   )
 }

@@ -9,6 +9,9 @@ const DISPOSITIONS = [
   'Callback', 'Qualified', 'DNC',
 ]
 
+// Handoff status options — replaces the old free-text handoff note.
+const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
+
 export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
   const router = useRouter()
 
@@ -26,7 +29,7 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
   // Transfer
   const [closers, setClosers] = useState<{ id: string; name: string; email: string }[]>([])
   const [closerId, setCloserId] = useState('')
-  const [transferNote, setTransferNote] = useState('')
+  const [handoffStatus, setHandoffStatus] = useState('')
   const [transferMsg, setTransferMsg] = useState('')
 
   // Sale
@@ -41,7 +44,9 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
   }, [])
 
   const save = async () => {
-    if (!disposition && !note.trim()) { setMsg('Pick a disposition or write a note.'); return }
+    // A disposition now REQUIRES a note (what was discussed).
+    if (!disposition) { setMsg('Pick a disposition.'); return }
+    if (!note.trim()) { setMsg('Please write what was discussed before logging.'); return }
     setSaving(true)
     const res = await logActivity(practiceCode, disposition, note.trim())
     setSaving(false)
@@ -66,10 +71,12 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
 
   const doTransfer = async () => {
     if (!closerId) { setTransferMsg('Pick a closer.'); return }
-    const res = await transferToCloser(practiceCode, closerId, transferNote.trim())
+    if (!handoffStatus) { setTransferMsg('Pick a handoff status.'); return }
+    // The handoff status is stored in place of the old free-text note.
+    const res = await transferToCloser(practiceCode, closerId, handoffStatus)
     setTransferMsg(res.message)
     if (res.ok) {
-      setTransferNote('')
+      setHandoffStatus('')
       setCloserId('')
       router.refresh()
     }
@@ -86,6 +93,7 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
   }
 
   const box = { border: '1px solid #ddd', borderRadius: 8, padding: 20, marginBottom: 20, maxWidth: 700 }
+  const noteMissing = !!disposition && !note.trim()
 
   return (
     <div style={box}>
@@ -112,21 +120,33 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
         </div>
       </div>
 
-      {/* Note */}
+      {/* Note — required once a disposition is chosen */}
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>Note</div>
+        <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>
+          Note {disposition && <span style={{ color: '#dc2626' }}>*required</span>}
+        </div>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="What was discussed…"
-          style={{ width: '100%', minHeight: 70, padding: 10, border: '1px solid #ccc', borderRadius: 6, fontSize: 14, boxSizing: 'border-box', color: '#000' }}
+          style={{
+            width: '100%', minHeight: 70, padding: 10,
+            border: `1px solid ${noteMissing ? '#dc2626' : '#ccc'}`,
+            borderRadius: 6, fontSize: 14, boxSizing: 'border-box', color: '#000',
+          }}
         />
       </div>
 
       <button
         onClick={save}
-        disabled={saving}
-        style={{ padding: '10px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 14, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}
+        disabled={saving || noteMissing}
+        title={noteMissing ? 'Write what was discussed first' : ''}
+        style={{
+          padding: '10px 18px', borderRadius: 6, border: 'none',
+          background: '#2563eb', color: '#fff', fontSize: 14,
+          cursor: (saving || noteMissing) ? 'not-allowed' : 'pointer',
+          opacity: (saving || noteMissing) ? 0.6 : 1,
+        }}
       >
         {saving ? 'Saving…' : 'Log activity'}
       </button>
@@ -171,13 +191,17 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
             <option value="">Choose closer…</option>
             {closers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
           </select>
-          <input
-            type="text"
-            value={transferNote}
-            onChange={(e) => setTransferNote(e.target.value)}
-            placeholder="Handoff note (optional)"
-            style={{ padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, minWidth: 220, color: '#000' }}
-          />
+
+          {/* Handoff status dropdown replaces the free-text handoff note */}
+          <select
+            value={handoffStatus}
+            onChange={(e) => setHandoffStatus(e.target.value)}
+            style={{ padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, color: '#000' }}
+          >
+            <option value="">Handoff status…</option>
+            {HANDOFF_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+
           <button
             onClick={doTransfer}
             style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 14, cursor: 'pointer' }}
@@ -188,7 +212,7 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
         </div>
       </div>
 
-      {/* Close the sale  ← ADDED: this whole section was missing */}
+      {/* Close the sale */}
       <div style={{ marginTop: 20, paddingTop: 16, borderTop: '2px solid #16a34a' }}>
         <div style={{ fontSize: 14, color: '#16a34a', fontWeight: 600, marginBottom: 8 }}>Close the sale 🎉</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
