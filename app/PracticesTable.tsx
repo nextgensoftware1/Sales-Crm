@@ -303,6 +303,11 @@ type Practice = {
   status?: string | null
   source?: string | null
   allocatedTo?: string | null
+  sex?: string | null
+  orgName?: string | null
+  risk?: string | null
+  paymentAdj?: string | null
+  lastDialed?: string | null
 }
 
 type Company = { slug: string; name: string }
@@ -408,6 +413,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
   const [catTab, setCatTab] = useState('All Categories')
+  const [sourceTab, setSourceTab] = useState<'All' | 'Allocated' | 'Uploaded'>('All')
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -438,6 +444,14 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       if (catTab === 'RCM' && !p.rcmFit) return false
       if (catTab === 'CCM' && !p.ccm) return false
 
+      // Source filter: All / Allocated (from Super Admin) / Uploaded (own)
+      if (sourceTab !== 'All') {
+        const src = (p.source ?? '').toLowerCase()
+        const isAllocated = src.includes('alloc')
+        if (sourceTab === 'Allocated' && !isAllocated) return false
+        if (sourceTab === 'Uploaded' && isAllocated) return false
+      }
+
       // "My assigned" view: only leads assigned to me (priority).
       if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
 
@@ -454,7 +468,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, activeSignals, catTab, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -520,7 +534,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setActiveSignals(new Set()); setCatTab('All Categories')
+    setSearch(''); setStateFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
   return (
@@ -590,6 +604,17 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         <div style={{ display: 'flex', gap: 6 }}>
           {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
             <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {(['All', 'Allocated', 'Uploaded'] as const).map((t) => (
+            <span key={t} onClick={() => setSourceTab(t)}
+              style={{
+                ...pill(sourceTab === t), cursor: 'pointer',
+                borderColor: sourceTab === t ? (t === 'Allocated' ? '#8b5cf6' : t === 'Uploaded' ? '#22d3ee' : C.blue) : C.line,
+              }}>
+              {t === 'All' ? 'All Sources' : t}
+            </span>
           ))}
         </div>
       </section>
@@ -680,9 +705,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
               <th style={thLeft}>Practice</th>
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
-              {COLUMN_SIGNALS.map((s) => <th key={s.key as string} style={th}>{s.label}</th>)}
-              <th style={thLeft}>MIPS 2026</th>
+              <th style={th}>Sex</th>
+              <th style={thLeft}>Org Name</th>
+              <th style={th}>Risk</th>
+              <th style={th}>Payment Adj %</th>
               <th style={thLeft}>Source</th>
+              <th style={thLeft}>Last Dialed</th>
               <th style={thLeft}>Assigned On</th>
               <th style={thLeft}>Status</th>
             </tr>
@@ -704,18 +732,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                 </td>
                 <td style={{ ...td, color: C.dim }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim }}>{p.specialty ?? '—'}</td>
-                {COLUMN_SIGNALS.map((s) => (
-                  <td key={s.key as string} style={td}>
-                    {p[s.key] ? <span style={{ color: C.green }}>✓</span> : <span style={{ color: C.faint }}>—</span>}
-                  </td>
-                ))}
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>
-                  {hasRealMips(p)
-                    ? <span style={{ color: C.green, marginRight: 6 }}>✓</span>
-                    : <span style={{ color: C.faint, marginRight: 6 }}>—</span>}
-                  {p.mipsByYear?.[2026] ?? ''}
-                </td>
+                <td style={{ ...td, color: C.dim }}>{p.sex ?? '—'}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
+                <td style={{ ...td, color: C.dim, fontSize: 12 }}>{p.risk ?? '—'}</td>
+                <td style={{ ...td, color: C.dim, fontSize: 12 }}>{p.paymentAdj ?? '—'}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source, p.allocatedTo)}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{fmtDateTime(p.lastDialed)}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{fmtDateTime(p.allocatedOn)}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
               </tr>

@@ -4,15 +4,16 @@ import SignOutButton from './SignOutButton'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
-  { href: '/',          label: 'Leads Engine',   icon: '▤' },
-  { href: '/dashboard', label: 'Dashboard',      icon: '◫' },
-  { href: '/reminders', label: 'My Reminders',   icon: '◷' },
-  { href: '/clients',   label: 'Active Clients', icon: '◇' },
-  { href: '/admin',     label: 'Admin',          icon: '⚙' },
+  { href: '/',               label: 'Leads Engine',        icon: '▤' },
+  { href: '/dashboard',      label: 'Dashboard',           icon: '◫' },
+  { href: '/agent-assigned', label: 'Agent Assigned Leads', icon: '◨' },
+  { href: '/reminders',      label: 'My Reminders',        icon: '◷' },
+  { href: '/clients',        label: 'Active Clients',      icon: '◇' },
+  { href: '/admin',          label: 'Admin',               icon: '⚙' },
 ]
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, headerRight = null,
+  title, subtitle, currentUser, active, children, showAdmin = false, showAgentAssigned = false, headerRight = null,
 }: {
   title: string
   subtitle?: string
@@ -20,9 +21,14 @@ export default function AppShell({
   active: string
   children: React.ReactNode
   showAdmin?: boolean
+  showAgentAssigned?: boolean
   headerRight?: React.ReactNode
 }) {
-  const items = NAV.filter((n) => n.href !== '/admin' || showAdmin)
+  const items = NAV.filter((n) => {
+    if (n.href === '/admin') return showAdmin
+    if (n.href === '/agent-assigned') return showAgentAssigned
+    return true
+  })
   return (
     <div className="app-shell">
       <aside className="sidebar">

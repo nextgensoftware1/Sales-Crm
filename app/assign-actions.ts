@@ -52,14 +52,31 @@ export async function assignLeadsToAgent(
     return { ok: false, message: 'That agent does not report directly to you.' }
   }
 
-  // 2) Resolve practice_codes → practice ids, scoped to the caller's company.
+  // 2) Resolve practice_codes → practice ids. A company may assign leads it
+  //    OWNS (its own uploads) OR that are ALLOCATED to it by Super Admin.
   const { data: practices } = await supabase
     .from('master_practices')
-    .select('id, practice_code')
-    .eq('owner_tenant_id', myTenantId)
+    .select('id, practice_code, owner_tenant_id')
     .in('practice_code', practiceCodes)
 
-  const ids = (practices ?? []).map((p: any) => p.id)
+  // Which of these are allocated to my tenant?
+  const allPracticeIds = (practices ?? []).map((p: any) => p.id)
+  let allocatedIds = new Set<string>()
+  if (allPracticeIds.length) {
+    const { data: allocs } = await supabase
+      .from('lead_allocations')
+      .select('practice_id')
+      .eq('tenant_id', myTenantId)
+      .eq('status', 'active')
+      .in('practice_id', allPracticeIds)
+    allocatedIds = new Set((allocs ?? []).map((a: any) => a.practice_id))
+  }
+
+  // Keep practices my company owns OR is allocated.
+  const ids = (practices ?? [])
+    .filter((p: any) => p.owner_tenant_id === myTenantId || allocatedIds.has(p.id))
+    .map((p: any) => p.id)
+
   if (ids.length === 0) {
     return { ok: false, message: 'None of those leads belong to your company.' }
   }
@@ -89,10 +106,11 @@ export async function assignLeadsToAgent(
     status: 'active',
   }))
 
-  // onConflict on practice_id so re-assigning updates instead of duplicating.
+  // onConflict matches the UNIQUE (practice_id, assigned_to) constraint:
+  // re-assigning the same lead to the same person updates instead of duplicating.
   const { error } = await supabase
     .from('lead_assignments')
-    .upsert(rows, { onConflict: 'practice_id' })
+    .upsert(rows, { onConflict: 'practice_id,assigned_to' })
 
   if (error) {
     return { ok: false, message: `Assign failed: ${error.message}` }

@@ -145,21 +145,23 @@ export default async function Home() {
       .filter((id: any) => typeof id === 'string' && id.length > 0)
   }
 
-  // Set of practice IDs that are ALLOCATED (from Super Admin). For a company,
-  // that's their own allocations; for Super Admin, all active allocations.
-  const allocatedIdSet = new Set<string>()
-  const allocatedCompanyById: Record<string, string> = {} // practice_id -> company name (Super Admin only)
+  // ALLOCATED tagging is done by practice_code (which embeds the NPI), NOT by row
+  // id — because a company sees its OWN copy of a practice, while the allocation
+  // points to the Platform copy. Same NPI = same practice_code, so we match on that.
+  const allocatedCodeSet = new Set<string>()
+  const allocatedCompanyByCode: Record<string, string> = {} // code -> company name (Super Admin only)
   {
     let aq = supabase
       .from('lead_allocations')
-      .select('practice_id, tenants(name)')
+      .select('tenant_id, master_practices(practice_code), tenants(name)')
       .eq('status', 'active')
     if (!isSuperAdmin && myTenantId) aq = aq.eq('tenant_id', myTenantId)
     const { data: allocAll } = await aq
     for (const a of (allocAll ?? []) as any[]) {
-      if (a.practice_id) {
-        allocatedIdSet.add(a.practice_id)
-        if (isSuperAdmin && a.tenants?.name) allocatedCompanyById[a.practice_id] = a.tenants.name
+      const code = a.master_practices?.practice_code
+      if (code) {
+        allocatedCodeSet.add(code)
+        if (isSuperAdmin && a.tenants?.name) allocatedCompanyByCode[code] = a.tenants.name
       }
     }
   }
@@ -180,6 +182,7 @@ export default async function Home() {
     id, practice_code, name, state, specialty, owner_tenant_id,
     practice_providers (
       providers (
+        npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk,
         provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit ),
         provider_mips ( performance_year, status, reporting_option )
       )
@@ -258,9 +261,11 @@ export default async function Home() {
   }
 
   // Post-filters (JS side). These apply ONLY to company-level roles browsing
-  // the pool — never to an agent/closer, who see exactly their assigned leads.
+  // the pool — never to an agent/closer (who see their assigned leads), and
+  // never to the Company Admin (who oversees everything in the company).
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
-  if (!isSuperAdmin && !isAgentOrCloser) {
+  const isCompanyAdmin = roleKey === 'company_admin'
+  if (!isSuperAdmin && !isAgentOrCloser && !isCompanyAdmin) {
     if (assignedAwayIds.length) {
       const awaySet = new Set(assignedAwayIds)
       data = data.filter((p: any) => !awaySet.has(p.id))
@@ -277,6 +282,24 @@ export default async function Home() {
     seen.add(p.practice_code)
     return true
   })
+
+  // Last Dialed = latest activity date per practice (live from lead_activity).
+  const lastDialed: Record<string, string> = {}
+  {
+    const pids = data.map((p: any) => p.id)
+    for (let i = 0; i < pids.length; i += 300) {
+      const part = pids.slice(i, i + 300)
+      const { data: acts } = await supabase
+        .from('lead_activity')
+        .select('practice_id, created_at')
+        .in('practice_id', part)
+        .order('created_at', { ascending: false })
+      for (const a of (acts ?? []) as any[]) {
+        // first seen per practice_id is the latest (ordered desc)
+        if (a.practice_id && !lastDialed[a.practice_id]) lastDialed[a.practice_id] = a.created_at
+      }
+    }
+  }
 
   const practices = data.map((p: any) => {
     const provider = p.practice_providers?.[0]?.providers
@@ -300,11 +323,16 @@ export default async function Home() {
       practiceCode: p.practice_code,
       allocatedOn: allocatedOn[p.id] ?? null,
       status: leadStatus[p.id] ?? null,
-      source: allocatedIdSet.has(p.id) ? 'Allocated' : 'Uploaded',
-      allocatedTo: allocatedCompanyById[p.id] ?? null,
+      source: allocatedCodeSet.has(p.practice_code) ? 'Allocated' : 'Uploaded',
+      allocatedTo: allocatedCompanyByCode[p.practice_code] ?? null,
       name: p.name,
       state: p.state,
       specialty: p.specialty,
+      sex: provider?.nppes_sex ?? null,
+      orgName: provider?.org_name ?? null,
+      risk: provider?.at_risk ?? null,
+      paymentAdj: provider?.payment_adj_pct ?? null,
+      lastDialed: lastDialed[p.id] ?? null,
       ccm: s.ccm ?? false,
       pcm: s.pcm ?? false,
       awv: s.awv ?? false,

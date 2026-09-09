@@ -1,6 +1,6 @@
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
-import { supabase } from '../../../lib/supabase'
+import { createSupabaseServer } from '../../../lib/supabase-server'
 
 export default async function PracticeDetail({
   params,
@@ -8,24 +8,61 @@ export default async function PracticeDetail({
   params: Promise<{ code: string }>
 }) {
   const { code } = await params
+  const supabase = await createSupabaseServer()
 
-  const { data: practice, error } = await supabase
-    .from('master_practices')
-    .select(`
-      id, practice_code, name, state, city, postal, specialty, phone,
-      ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
-      ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
-      ws_updated_at, ws_updated_by,
-      practice_providers (
-        providers (
-          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone,
-          provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
-          provider_mips ( reporting_option )
-        )
+  // Who is viewing? Needed because the same practice_code can now exist for
+  // multiple companies (each has its own copy). We must pick the RIGHT copy.
+  const { data: { user } } = await supabase.auth.getUser()
+  const { data: me } = user
+    ? await supabase.from('users').select('tenant_id, roles(key)').eq('auth_id', user.id).single()
+    : { data: null as any }
+  const roleKey = (me as any)?.roles?.key ?? ''
+  const isSuperAdmin = roleKey === 'super_admin'
+  const myTenantId = (me as any)?.tenant_id
+
+  const SELECT = `
+    id, practice_code, name, state, city, postal, specialty, phone, owner_tenant_id,
+    ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
+    ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
+    ws_updated_at, ws_updated_by,
+    practice_providers (
+      providers (
+        npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone,
+        provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
+        provider_mips ( reporting_option )
       )
-    `)
+    )
+  `
+
+  // Get ALL copies of this practice_code, then choose the one for this viewer.
+  const { data: candidates, error } = await supabase
+    .from('master_practices')
+    .select(SELECT)
     .eq('practice_code', code)
-    .single()
+
+  let practice: any = null
+  if (candidates && candidates.length > 0) {
+    if (isSuperAdmin) {
+      // Prefer a copy allocated to a company; else just the first.
+      practice = candidates[0]
+    } else {
+      // The copy my company OWNS…
+      practice = candidates.find((c: any) => c.owner_tenant_id === myTenantId)
+      // …or, if none owned, a copy allocated to my company.
+      if (!practice && myTenantId) {
+        const ids = candidates.map((c: any) => c.id)
+        const { data: alloc } = await supabase
+          .from('lead_allocations')
+          .select('practice_id')
+          .eq('tenant_id', myTenantId)
+          .eq('status', 'active')
+          .in('practice_id', ids)
+        const allocatedIds = new Set((alloc ?? []).map((a: any) => a.practice_id))
+        practice = candidates.find((c: any) => allocatedIds.has(c.id)) ?? candidates[0]
+      }
+      if (!practice) practice = candidates[0]
+    }
+  }
 
   if (error || !practice) {
     return (

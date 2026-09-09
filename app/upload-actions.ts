@@ -95,7 +95,30 @@ export async function uploadLeadsCsv(
     for (const e of (existing ?? []) as any[]) existingCodes.add(e.practice_code)
   }
 
-  const toInsert = allCodes.filter((c) => !existingCodes.has(c))
+  const toInsertByCode = allCodes.filter((c) => !existingCodes.has(c))
+
+  // Per-company NPI dedup: the same NPI may exist for DIFFERENT companies, but
+  // not twice for THIS company. So check only NPIs already owned by this tenant.
+  const npiByCode = new Map<string, string>()
+  for (const code of toInsertByCode) {
+    const npi = clean(byCode.get(code)![npiKey])
+    if (npi) npiByCode.set(code, npi)
+  }
+  const incomingNpis = Array.from(new Set(npiByCode.values()))
+  const existingNpis = new Set<string>()
+  for (const part of chunk(incomingNpis, 300)) {
+    const { data: existProv } = await supabase
+      .from('providers')
+      .select('npi')
+      .eq('owner_tenant_id', tenantId)   // ← only THIS company's providers
+      .in('npi', part)
+    for (const p of (existProv ?? []) as any[]) existingNpis.add(p.npi)
+  }
+
+  const toInsert = toInsertByCode.filter((c) => {
+    const npi = npiByCode.get(c)
+    return npi ? !existingNpis.has(npi) : true
+  })
   const skipped = allCodes.length - toInsert.length
   if (toInsert.length === 0) {
     return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
@@ -121,6 +144,10 @@ export async function uploadLeadsCsv(
       num_org_members: numMembers ? parseInt(numMembers, 10) || null : null,
       pecos_asct_cntl_id: pecos,
       enrlmt_id: enrlmt,
+      nppes_sex: col(row, 'NPPES_Sex') || null,
+      nppes_last_updated: col(row, 'NPPES_LastUpdated') || null,
+      payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || null,
+      at_risk: col(row, 'At_Risk') || null,
       // Anchor = a parent lead: has BOTH PECOS and ENRLMT ids.
       is_anchor: !!(pecos && enrlmt),
       owner_tenant_id: tenantId,
