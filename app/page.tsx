@@ -182,7 +182,7 @@ export default async function Home() {
   }
 
   const SELECT = `
-    id, practice_code, name, state, specialty, owner_tenant_id,
+    id, practice_code, name, state, specialty, owner_tenant_id, created_at,
     practice_providers (
       providers (
         npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk,
@@ -289,7 +289,9 @@ export default async function Home() {
   })
 
   // Last Dialed = latest activity date per practice (live from lead_activity).
+  // We also capture which practices have ANY activity — those are "Worked Leads".
   const lastDialed: Record<string, string> = {}
+  const workedPracticeIds = new Set<string>()
   {
     const pids = data.map((p: any) => p.id)
     for (let i = 0; i < pids.length; i += 300) {
@@ -300,8 +302,39 @@ export default async function Home() {
         .in('practice_id', part)
         .order('created_at', { ascending: false })
       for (const a of (acts ?? []) as any[]) {
-        // first seen per practice_id is the latest (ordered desc)
-        if (a.practice_id && !lastDialed[a.practice_id]) lastDialed[a.practice_id] = a.created_at
+        if (a.practice_id) {
+          workedPracticeIds.add(a.practice_id)
+          // first seen per practice_id is the latest (ordered desc)
+          if (!lastDialed[a.practice_id]) lastDialed[a.practice_id] = a.created_at
+        }
+      }
+    }
+  }
+
+  // "New Leads" = rows from the most recent upload batch — i.e. practices
+  // whose created_at is within 5 minutes of the latest created_at in the
+  // visible set. Handles bulk uploads that stamp thousands of rows at once.
+  const newLeadCodes = new Set<string>()
+  const workedLeadCodes = new Set<string>()
+  {
+    const timestamps = data
+      .map((p: any) => p.created_at)
+      .filter(Boolean)
+      .map((s: string) => new Date(s).getTime())
+    if (timestamps.length) {
+      const maxT = Math.max(...timestamps)
+      const windowMs = 5 * 60 * 1000  // 5-minute batch window
+      for (const p of data) {
+        if (p.created_at) {
+          const t = new Date(p.created_at).getTime()
+          if (maxT - t <= windowMs) newLeadCodes.add(p.practice_code)
+        }
+        if (workedPracticeIds.has(p.id)) workedLeadCodes.add(p.practice_code)
+      }
+    } else {
+      // No timestamps at all — no way to compute "new". Still fill worked set.
+      for (const p of data) {
+        if (workedPracticeIds.has(p.id)) workedLeadCodes.add(p.practice_code)
       }
     }
   }
@@ -367,6 +400,8 @@ export default async function Home() {
         canAssign={canAssign}
         myAgents={myAgents}
         myAssignedCodes={myAssignedCodes}
+        newLeadCodes={Array.from(newLeadCodes)}
+        workedLeadCodes={Array.from(workedLeadCodes)}
       />
     </AppShell>
   )

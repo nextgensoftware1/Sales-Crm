@@ -1,6 +1,5 @@
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
-import { supabase } from '../../../lib/supabase'
 import { createSupabaseServer } from '../../../lib/supabase-server'
 import AppShell from '../../AppShell'
 
@@ -42,16 +41,21 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
 
-  // Current user, for the shared app chrome (sidebar / topbar) only.
+  // One Supabase client — handles auth AND data (matches the pattern in app/page.tsx).
+  const supabase = await createSupabaseServer()
+
+  // Current user, for the shared app chrome (sidebar / topbar) AND for
+  // picking the right copy of a practice when the same practice_code
+  // exists for multiple tenants.
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
+  let myTenantId: string | null = null
   try {
-    const authClient = await createSupabaseServer()
-    const { data: { user: authUser } } = await authClient.auth.getUser()
+    const { data: { user: authUser } } = await supabase.auth.getUser()
     if (authUser) {
-      const { data: me } = await authClient
+      const { data: me } = await supabase
         .from('users')
-        .select('full_name, roles(key, label), tenants(name)')
+        .select('full_name, tenant_id, roles(key, label), tenants(name)')
         .eq('auth_id', authUser.id)
         .single()
       if (me) {
@@ -61,16 +65,21 @@ export default async function PracticeDetail({
           company: (me as any).tenants?.name ?? '',
         }
         isSuperAdmin = (me as any).roles?.key === 'super_admin'
+        myTenantId = (me as any).tenant_id ?? null
       }
     }
   } catch {
     // Chrome is cosmetic here — if this lookup fails, the page still renders.
   }
 
-  const { data: practice, error } = await supabase
+  // Fetch ALL rows matching this practice_code — same code may exist in multiple
+  // tenants (Platform copy + each company's copy). We pick ONE row based on who's
+  // viewing. Using .single() here would crash with "Cannot coerce" when >1 exists.
+  let query = supabase
     .from('master_practices')
     .select(`
       id, practice_code, name, state, city, postal, specialty, phone,
+      owner_tenant_id, deleted_at,
       ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
       ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
       ws_updated_at, ws_updated_by,
@@ -83,7 +92,29 @@ export default async function PracticeDetail({
       )
     `)
     .eq('practice_code', code)
-    .single()
+
+  // Super Admin: hide soft-deleted from the detail page too (they belong in
+  // /deleted-leads). Company users still see soft-deleted leads if they had
+  // them allocated — matches the visibility rule in the Lead Pool.
+  if (isSuperAdmin) {
+    query = query.is('deleted_at', null)
+  }
+
+  const { data: candidates, error } = await query
+  const rows = (candidates ?? []) as any[]
+
+  // Pick the best row for this viewer:
+  //   1. Company users → their own tenant's copy first
+  //   2. Otherwise    → the Platform copy (owner_tenant_id typically NULL)
+  //   3. Fallback     → first row available
+  let practice: any = null
+  if (rows.length > 0) {
+    if (myTenantId && !isSuperAdmin) {
+      practice = rows.find((r) => r.owner_tenant_id === myTenantId) ?? rows[0]
+    } else {
+      practice = rows.find((r) => !r.owner_tenant_id) ?? rows[0]
+    }
+  }
 
   if (error || !practice) {
     return (
@@ -91,20 +122,31 @@ export default async function PracticeDetail({
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
-          <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error?.message}</pre>
+          <p style={{ marginTop: 12, color: 'var(--muted)' }}>
+            {rows.length === 0
+              ? `No practice with code "${code}" is visible to you.`
+              : `Found ${rows.length} matches but could not choose one.`}
+          </p>
+          {error?.message && <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error.message}</pre>}
         </div>
       </AppShell>
     )
   }
 
-  // Prev/Next pagination — ordered by name, same universe of leads the bulk
-  // Leads Engine lists. (This route has no per-role visibility filter today,
-  // same as before; the pager doesn't add one.)
-  const { data: allCodes } = await supabase
+  // Prev/Next pagination — ordered by name, deduped by practice_code so we
+  // don't count the same code multiple times when it exists per-tenant.
+  const { data: allCodesRows } = await supabase
     .from('master_practices')
     .select('practice_code')
     .order('name', { ascending: true })
-  const codesList = (allCodes ?? []).map((p: any) => p.practice_code as string)
+  const seenCodes = new Set<string>()
+  const codesList: string[] = []
+  for (const r of (allCodesRows ?? []) as any[]) {
+    if (r.practice_code && !seenCodes.has(r.practice_code)) {
+      seenCodes.add(r.practice_code)
+      codesList.push(r.practice_code)
+    }
+  }
   const currentIndex = codesList.indexOf(code)
   const totalCount = codesList.length
   const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
@@ -114,7 +156,7 @@ export default async function PracticeDetail({
   const { data: activity } = await supabase
     .from('lead_activity')
     .select('disposition, note, created_at, users(full_name)')
-    .eq('practice_id', (practice as any).id)
+    .eq('practice_id', practice.id)
     .order('created_at', { ascending: false })
     .limit(20)
 
@@ -143,7 +185,7 @@ export default async function PracticeDetail({
   let updatedByName: string | null = null
   if (pr.ws_updated_by) {
     const { data: editor } = await supabase
-      .from('users').select('full_name').eq('id', pr.ws_updated_by).single()
+      .from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
     updatedByName = (editor as any)?.full_name ?? null
   }
   const toLocalInput = (iso: string | null) => {

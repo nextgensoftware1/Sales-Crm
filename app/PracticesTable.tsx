@@ -40,6 +40,8 @@ type Props = {
   canAssign?: boolean
   myAgents?: { id: string; full_name: string; role: string }[]
   myAssignedCodes?: string[]
+  newLeadCodes?: string[]      // practices from the most recent upload batch
+  workedLeadCodes?: string[]   // practices with any lead_activity entries
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -108,7 +110,7 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 }
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [] }: Props) {
+export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [] }: Props) {
   const router = useRouter()
 
   // ---- REAL filter state ----
@@ -140,6 +142,10 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   const prioritySet = useMemo(() => new Set(myAssignedCodes), [myAssignedCodes])
   const hasPriority = prioritySet.size > 0
   const [assignedView, setAssignedView] = useState<'all' | 'mine'>('all')
+
+  // Lookup sets for the Lead Pool tabs.
+  const newLeadSet    = useMemo(() => new Set(newLeadCodes),    [newLeadCodes])
+  const workedLeadSet = useMemo(() => new Set(workedLeadCodes), [workedLeadCodes])
 
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
@@ -200,6 +206,10 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         if (sourceTab === 'Uploaded' && isAllocated) return false
       }
 
+      // Pool tab filter (All Leads / New Leads / Worked Leads)
+      if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
+      if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
+
       // "My assigned" view: only leads assigned to me (priority).
       if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
 
@@ -216,7 +226,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, sourceTab, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -359,9 +369,16 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage unassigned master records</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {['All Leads', 'New Leads', 'Worked Leads'].map((t) => (
-            <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>{t}</span>
-          ))}
+          {(['All Leads', 'New Leads', 'Worked Leads'] as const).map((t) => {
+            let count: number | null = null
+            if (t === 'New Leads')    count = newLeadSet.size
+            if (t === 'Worked Leads') count = workedLeadSet.size
+            return (
+              <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>
+                {t}{count !== null ? ` (${count})` : ''}
+              </span>
+            )
+          })}
         </div>
         {hasPriority && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
