@@ -1,6 +1,5 @@
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
-import { supabase } from '../../../lib/supabase'
 import { createSupabaseServer } from '../../../lib/supabase-server'
 import AppShell from '../../AppShell'
 
@@ -42,17 +41,21 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
 
-  // Current user, for the shared app chrome (sidebar / topbar) only.
+  // One Supabase client — handles auth AND data (matches the pattern in app/page.tsx).
+  const supabase = await createSupabaseServer()
+
+  // Current user, for the shared app chrome (sidebar / topbar) AND for
+  // picking the right copy of a practice when the same practice_code
+  // exists for multiple tenants.
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
-  let showTransfers = false
+  let myTenantId: string | null = null
   try {
-    const authClient = await createSupabaseServer()
-    const { data: { user: authUser } } = await authClient.auth.getUser()
+    const { data: { user: authUser } } = await supabase.auth.getUser()
     if (authUser) {
-      const { data: me } = await authClient
+      const { data: me } = await supabase
         .from('users')
-        .select('full_name, roles(key, label), tenants(name)')
+        .select('full_name, tenant_id, roles(key, label), tenants(name)')
         .eq('auth_id', authUser.id)
         .single()
       if (me) {
@@ -62,58 +65,88 @@ export default async function PracticeDetail({
           company: (me as any).tenants?.name ?? '',
         }
         isSuperAdmin = (me as any).roles?.key === 'super_admin'
-        showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+        myTenantId = (me as any).tenant_id ?? null
       }
     }
   } catch {
     // Chrome is cosmetic here — if this lookup fails, the page still renders.
   }
 
-  const { data: practice, error } = await supabase
+  // Fetch ALL rows matching this practice_code — same code may exist in multiple
+  // tenants (Platform copy + each company's copy). We pick ONE row based on who's
+  // viewing. Using .single() here would crash with "Cannot coerce" when >1 exists.
+  let query = supabase
     .from('master_practices')
     .select(`
       id, practice_code, name, state, city, postal, specialty, phone,
+      owner_tenant_id, deleted_at,
       ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
       ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
       ws_updated_at, ws_updated_by,
       practice_providers (
         providers (
-          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone, org_name,
+          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
         )
       )
     `)
     .eq('practice_code', code)
-    .maybeSingle()
 
-  // maybeSingle() returns { data: null, error: null } when the code matches
-  // nothing (e.g. it was permanently deleted, or the link is stale/incorrect)
-  // — no exception thrown. It only sets `error` for a genuine problem, such
-  // as more than one row sharing this practice_code (a real data issue).
+  // Super Admin: hide soft-deleted from the detail page too (they belong in
+  // /deleted-leads). Company users still see soft-deleted leads if they had
+  // them allocated — matches the visibility rule in the Lead Pool.
+  if (isSuperAdmin) {
+    query = query.is('deleted_at', null)
+  }
+
+  const { data: candidates, error } = await query
+  const rows = (candidates ?? []) as any[]
+
+  // Pick the best row for this viewer:
+  //   1. Company users → their own tenant's copy first
+  //   2. Otherwise    → the Platform copy (owner_tenant_id typically NULL)
+  //   3. Fallback     → first row available
+  let practice: any = null
+  if (rows.length > 0) {
+    if (myTenantId && !isSuperAdmin) {
+      practice = rows.find((r) => r.owner_tenant_id === myTenantId) ?? rows[0]
+    } else {
+      practice = rows.find((r) => !r.owner_tenant_id) ?? rows[0]
+    }
+  }
+
   if (error || !practice) {
-    const notFoundReason = error
-      ? 'More than one record shares this practice code — this is a data issue, not a missing record. Please contact support.'
-      : 'This practice may have been permanently deleted, or the link is incorrect.'
     return (
-      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers}>
+      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin}>
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
-          <p className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{notFoundReason}</p>
+          <p style={{ marginTop: 12, color: 'var(--muted)' }}>
+            {rows.length === 0
+              ? `No practice with code "${code}" is visible to you.`
+              : `Found ${rows.length} matches but could not choose one.`}
+          </p>
+          {error?.message && <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error.message}</pre>}
         </div>
       </AppShell>
     )
   }
 
-  // Prev/Next pagination — ordered by name, same universe of leads the bulk
-  // Leads Engine lists. (This route has no per-role visibility filter today,
-  // same as before; the pager doesn't add one.)
-  const { data: allCodes } = await supabase
+  // Prev/Next pagination — ordered by name, deduped by practice_code so we
+  // don't count the same code multiple times when it exists per-tenant.
+  const { data: allCodesRows } = await supabase
     .from('master_practices')
     .select('practice_code')
     .order('name', { ascending: true })
-  const codesList = (allCodes ?? []).map((p: any) => p.practice_code as string)
+  const seenCodes = new Set<string>()
+  const codesList: string[] = []
+  for (const r of (allCodesRows ?? []) as any[]) {
+    if (r.practice_code && !seenCodes.has(r.practice_code)) {
+      seenCodes.add(r.practice_code)
+      codesList.push(r.practice_code)
+    }
+  }
   const currentIndex = codesList.indexOf(code)
   const totalCount = codesList.length
   const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
@@ -123,7 +156,7 @@ export default async function PracticeDetail({
   const { data: activity } = await supabase
     .from('lead_activity')
     .select('disposition, note, created_at, users(full_name)')
-    .eq('practice_id', (practice as any).id)
+    .eq('practice_id', practice.id)
     .order('created_at', { ascending: false })
     .limit(20)
 
@@ -131,14 +164,6 @@ export default async function PracticeDetail({
   const providerLinks = (pr.practice_providers ?? []) as any[]
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
-
-  // Show the organization name at the top when this practice/clinician is
-  // affiliated with one (from NPPES provider data). Falls back to the
-  // practice/clinician's own name for solo practices with no organization.
-  const orgName: string | null = providersList
-    .map((prov) => (prov?.org_name ?? '').toString().trim())
-    .find((n) => n.length > 0) || null
-  const displayTitle = orgName || practice.name
 
   // Aggregate MIPS eligibility + CCM qualification across ALL providers at this practice.
   let mipsIndividual = 0, mipsGroup = 0, mipsNonEligible = 0
@@ -160,7 +185,7 @@ export default async function PracticeDetail({
   let updatedByName: string | null = null
   if (pr.ws_updated_by) {
     const { data: editor } = await supabase
-      .from('users').select('full_name').eq('id', pr.ws_updated_by).single()
+      .from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
     updatedByName = (editor as any)?.full_name ?? null
   }
   const toLocalInput = (iso: string | null) => {
@@ -189,7 +214,6 @@ export default async function PracticeDetail({
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
-      showTransfers={showTransfers}
     >
       <div className="lead-page">
         {/* ---- Header: back / pager / title+badges / address+phone ---- */}
@@ -214,7 +238,7 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <div className="lead-title-row">
-                  <h2 className="lead-title">{displayTitle}</h2>
+                  <h2 className="lead-title">{practice.name}</h2>
                   <span className="lead-code">{practice.practice_code}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
