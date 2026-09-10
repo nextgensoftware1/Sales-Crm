@@ -15,6 +15,7 @@ export default async function RemindersPage() {
     .single()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
@@ -69,6 +70,7 @@ export default async function RemindersPage() {
       currentUser={currentUser}
       active="/reminders"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div className="card">

@@ -1,9 +1,9 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
-import AssignmentsClient from './AssignmentsClient'
+import TransfersClient from './TransfersClient'
 
-export default async function ManageAssignmentsPage() {
+export default async function TransfersPage() {
   const supabase = await createSupabaseServer()
 
   const { data: { user } } = await supabase.auth.getUser()
@@ -15,8 +15,8 @@ export default async function ManageAssignmentsPage() {
     .eq('auth_id', user.id)
     .single()
 
-  const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
-  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+  const roleKey = (me as any)?.roles?.key ?? ''
+  const isSuperAdmin = roleKey === 'super_admin'
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
@@ -27,17 +27,14 @@ export default async function ManageAssignmentsPage() {
 
   return (
     <AppShell
-      title="Manage Assignments"
-      subtitle="Leads you assigned. Remove one to send it back to the unassigned pool."
+      title="Transfers"
+      subtitle="Leads handed off to a closer, with the full worksheet from the transferring agent."
       currentUser={currentUser}
-      active="/dashboard"
+      active="/transfers"
       showAdmin={isSuperAdmin}
-      showTransfers={showTransfers}
-      headerRight={
-        <a href="/dashboard" className="btn" style={{ textDecoration: 'none' }}>← Back to dashboard</a>
-      }
+      showTransfers
     >
-      <AssignmentsClient />
+      <TransfersClient />
     </AppShell>
   )
 }

@@ -45,6 +45,7 @@ export default async function PracticeDetail({
   // Current user, for the shared app chrome (sidebar / topbar) only.
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
+  let showTransfers = false
   try {
     const authClient = await createSupabaseServer()
     const { data: { user: authUser } } = await authClient.auth.getUser()
@@ -61,6 +62,7 @@ export default async function PracticeDetail({
           company: (me as any).tenants?.name ?? '',
         }
         isSuperAdmin = (me as any).roles?.key === 'super_admin'
+        showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
       }
     }
   } catch {
@@ -76,7 +78,7 @@ export default async function PracticeDetail({
       ws_updated_at, ws_updated_by,
       practice_providers (
         providers (
-          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone,
+          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone, org_name,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
         )
@@ -87,7 +89,7 @@ export default async function PracticeDetail({
 
   if (error || !practice) {
     return (
-      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin}>
+      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers}>
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
@@ -122,6 +124,14 @@ export default async function PracticeDetail({
   const providerLinks = (pr.practice_providers ?? []) as any[]
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
+
+  // Show the organization name at the top when this practice/clinician is
+  // affiliated with one (from NPPES provider data). Falls back to the
+  // practice/clinician's own name for solo practices with no organization.
+  const orgName: string | null = providersList
+    .map((prov) => (prov?.org_name ?? '').toString().trim())
+    .find((n) => n.length > 0) || null
+  const displayTitle = orgName || practice.name
 
   // Aggregate MIPS eligibility + CCM qualification across ALL providers at this practice.
   let mipsIndividual = 0, mipsGroup = 0, mipsNonEligible = 0
@@ -172,6 +182,7 @@ export default async function PracticeDetail({
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
     >
       <div className="lead-page">
         {/* ---- Header: back / pager / title+badges / address+phone ---- */}
@@ -196,7 +207,7 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <div className="lead-title-row">
-                  <h2 className="lead-title">{practice.name}</h2>
+                  <h2 className="lead-title">{displayTitle}</h2>
                   <span className="lead-code">{practice.practice_code}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}

@@ -8,12 +8,21 @@ import SignOutButton from './SignOutButton'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
+<<<<<<< HEAD
   { href: '/',              label: 'Leads Engine',   icon: '▤' },
   { href: '/dashboard',     label: 'Dashboard',      icon: '◫' },
   { href: '/reminders',     label: 'My Reminders',   icon: '◷' },
   { href: '/clients',       label: 'Active Clients', icon: '◇' },
   { href: '/admin',         label: 'Admin',          icon: '⚙' },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },   // ← NEW (Super Admin only)
+=======
+  { href: '/',          label: 'Leads Engine',   icon: '▤' },
+  { href: '/dashboard', label: 'Dashboard',      icon: '◫' },
+  { href: '/reminders', label: 'My Reminders',   icon: '◷' },
+  { href: '/clients',   label: 'Active Clients', icon: '◇' },
+  { href: '/transfers', label: 'Transfers',      icon: '⇄' },
+  { href: '/admin',     label: 'Admin',          icon: '⚙' },
+>>>>>>> 54f7635 (mine)
 ]
 
 // First letter of the first two words, e.g. "Hired Billing Support" -> "HB".
@@ -25,7 +34,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, headerRight = null,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, headerRight = null,
 }: {
   title: string
   subtitle?: string
@@ -33,13 +42,18 @@ export default function AppShell({
   active: string
   children: React.ReactNode
   showAdmin?: boolean
+  showTransfers?: boolean
   headerRight?: React.ReactNode
 }) {
+<<<<<<< HEAD
   // Both Admin and Deleted Leads are Super Admin only — controlled by same flag.
   const items = NAV.filter((n) => {
     if (n.href === '/admin' || n.href === '/deleted-leads') return showAdmin
     return true
   })
+=======
+  const items = NAV.filter((n) => (n.href !== '/admin' || showAdmin) && (n.href !== '/transfers' || showTransfers))
+>>>>>>> 54f7635 (mine)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const pathname = usePathname()

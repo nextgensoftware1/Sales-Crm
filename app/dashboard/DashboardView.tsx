@@ -51,6 +51,7 @@ export default function DashboardView(p: Props) {
       currentUser={currentUser}
       active="/dashboard"
       showAdmin={!!p.isSuperAdmin}
+      showTransfers
       headerRight={
         p.canManageAssignments ? (
           <a href="/assignments" className="btn btn-primary" style={{ textDecoration: 'none' }}>
