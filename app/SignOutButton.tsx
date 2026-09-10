@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createSupabaseBrowser } from '../lib/supabase-browser'
 
-export default function SignOutButton() {
+export default function SignOutButton({ variant = 'sidebar' }: { variant?: 'sidebar' | 'icon' }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
 
@@ -20,26 +20,38 @@ export default function SignOutButton() {
     }
   }
 
+  const icon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    </svg>
+  )
+
+  if (variant === 'icon') {
+    return (
+      <button
+        onClick={signOut}
+        disabled={busy}
+        className="topbar-signout"
+        aria-label="Sign out"
+        title="Sign out"
+        style={{ opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+      >
+        {icon}
+      </button>
+    )
+  }
+
   return (
     <button
       onClick={signOut}
       disabled={busy}
-      style={{
-        marginTop: 10,
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        background: 'transparent',
-        color: '#8a99a8',
-        border: '1px solid #1c2836',
-        borderRadius: 8,
-        padding: '8px 12px',
-        fontSize: 13,
-        cursor: busy ? 'default' : 'pointer',
-      }}
+      className="sidebar-signout"
+      style={{ opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
     >
-      <span aria-hidden>⇥</span>{busy ? 'Signing out…' : 'Sign out'}
+      {icon}
+      <span>{busy ? 'Signing out…' : 'Sign Out'}</span>
     </button>
   )
 }

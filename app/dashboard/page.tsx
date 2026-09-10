@@ -64,6 +64,11 @@ export default async function DashboardPage() {
   const totalValue = (sales ?? []).reduce((s: number, r: any) => s + (Number(r.contract_value) || 0), 0)
   const totalMrr = (sales ?? []).reduce((s: number, r: any) => s + (Number(r.mrr) || 0), 0)
 
+  // Proposals Shared / Contracts Signed are real counts of logged dispositions
+  // (agents can log "Proposal" / "Contract" as a Call Disposition on the Worksheet).
+  const proposalsCount = dispoCounts['Proposal'] ?? 0
+  const contractsCount = dispoCounts['Contract'] ?? 0
+
   const scopeLabel = isSuperAdmin
     ? 'Platform-wide · all companies'
     : isAgentOrCloser
@@ -89,6 +94,8 @@ export default async function DashboardPage() {
       totalValue={totalValue}
       totalMrr={totalMrr}
       clientCount={clientCount ?? 0}
+      proposalsCount={proposalsCount}
+      contractsCount={contractsCount}
       dispoCounts={dispoCounts}
       canManageAssignments={canManageAssignments}
       isSuperAdmin={isSuperAdmin}

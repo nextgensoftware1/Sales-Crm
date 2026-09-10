@@ -1,5 +1,6 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
 import { redirect } from 'next/navigation'
+import AppShell from '../AppShell'
 
 export default async function RemindersPage() {
   const supabase = await createSupabaseServer()
@@ -9,9 +10,18 @@ export default async function RemindersPage() {
 
   const { data: me } = await supabase
     .from('users')
-    .select('id')
+    .select('id, full_name, roles(key, label), tenants(name)')
     .eq('auth_id', user.id)
     .single()
+
+  const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const currentUser = me
+    ? {
+        full_name: (me as any).full_name,
+        role: (me as any).roles?.label ?? 'Unknown',
+        company: (me as any).tenants?.name ?? '',
+      }
+    : null
 
   const { data: reminders } = await supabase
     .from('lead_reminders')
@@ -23,48 +33,53 @@ export default async function RemindersPage() {
   const overdue = (reminders ?? []).filter((r: any) => !r.done && new Date(r.remind_at) < now)
   const upcoming = (reminders ?? []).filter((r: any) => !r.done && new Date(r.remind_at) >= now)
 
-  const cell = { padding: 10, border: '1px solid #ddd', fontSize: 14, textAlign: 'left' as const }
-  const head = { ...cell, background: '#f2f2f2', color: '#000', fontWeight: 600 }
-
   const renderTable = (rows: any[], emptyMsg: string) => (
-    rows.length === 0 ? <p style={{ color: '#888' }}>{emptyMsg}</p> : (
-      <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 800, marginBottom: 24 }}>
-        <thead>
-          <tr>
-            <th style={head}>When</th>
-            <th style={head}>Practice</th>
-            <th style={head}>Note</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r: any, i) => (
-            <tr key={i}>
-              <td style={cell}>{new Date(r.remind_at).toLocaleString()}</td>
-              <td style={cell}>
-                <a href={`/practice/${r.master_practices?.practice_code}`} style={{ color: '#2563eb', textDecoration: 'none' }}>
-                  {r.master_practices?.name ?? '—'}
-                </a>
-              </td>
-              <td style={cell}>{r.note ?? '—'}</td>
+    rows.length === 0 ? <p className="subtle">{emptyMsg}</p> : (
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Practice</th>
+              <th>Note</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r: any, i) => (
+              <tr key={i}>
+                <td>{new Date(r.remind_at).toLocaleString()}</td>
+                <td>
+                  <a href={`/practice/${r.master_practices?.practice_code}`}>
+                    {r.master_practices?.name ?? '—'}
+                  </a>
+                </td>
+                <td>{r.note ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     )
   )
 
   return (
-    <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ fontSize: 28 }}>My Reminders</h1>
-        <a href="/" style={{ color: '#2563eb', textDecoration: 'none', fontSize: 14 }}>← Back to practices</a>
+    <AppShell
+      title="My Reminders"
+      subtitle="Follow-ups and callbacks you've scheduled"
+      currentUser={currentUser}
+      active="/reminders"
+      showAdmin={isSuperAdmin}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div className="card">
+          <h2 className="h-section" style={{ color: 'var(--danger)' }}>Overdue ({overdue.length})</h2>
+          {renderTable(overdue, 'Nothing overdue.')}
+        </div>
+        <div className="card">
+          <h2 className="h-section" style={{ color: 'var(--warn)' }}>Upcoming ({upcoming.length})</h2>
+          {renderTable(upcoming, 'No upcoming reminders.')}
+        </div>
       </div>
-
-      <h2 style={{ fontSize: 18, marginBottom: 12, color: '#dc2626' }}>Overdue ({overdue.length})</h2>
-      {renderTable(overdue, 'Nothing overdue.')}
-
-      <h2 style={{ fontSize: 18, marginBottom: 12, color: '#d97706' }}>Upcoming ({upcoming.length})</h2>
-      {renderTable(upcoming, 'No upcoming reminders.')}
-    </div>
+    </AppShell>
   )
 }

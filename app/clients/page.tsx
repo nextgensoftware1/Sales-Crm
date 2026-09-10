@@ -1,5 +1,6 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
 import { redirect } from 'next/navigation'
+import AppShell from '../AppShell'
 
 export default async function ClientsPage() {
   const supabase = await createSupabaseServer()
@@ -9,11 +10,18 @@ export default async function ClientsPage() {
 
   const { data: me } = await supabase
     .from('users')
-    .select('tenant_id, roles(key)')
+    .select('full_name, tenant_id, roles(key, label), tenants(name)')
     .eq('auth_id', user.id)
     .single()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const currentUser = me
+    ? {
+        full_name: (me as any).full_name,
+        role: (me as any).roles?.label ?? 'Unknown',
+        company: (me as any).tenants?.name ?? '',
+      }
+    : null
 
   // Super Admin sees all clients; others see only their company's clients
   let query = supabase
@@ -28,48 +36,50 @@ export default async function ClientsPage() {
 
   const { data: clients } = await query
 
-  const cell = { padding: 10, border: '1px solid #ddd', fontSize: 14, textAlign: 'left' as const }
-  const head = { ...cell, background: '#f2f2f2', color: '#000', fontWeight: 600 }
-
   return (
-    <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ fontSize: 28 }}>{isSuperAdmin ? 'Global Client Registry' : 'Active Clients'} ({clients?.length ?? 0})</h1>
-        <a href="/" style={{ color: '#2563eb', textDecoration: 'none', fontSize: 14 }}>← Back to practices</a>
+    <AppShell
+      title={isSuperAdmin ? 'Global Client Registry' : 'Active Clients'}
+      subtitle={`${clients?.length ?? 0} active client${(clients?.length ?? 0) === 1 ? '' : 's'}`}
+      currentUser={currentUser}
+      active="/clients"
+      showAdmin={isSuperAdmin}
+    >
+      <div className="card">
+        {(!clients || clients.length === 0) ? (
+          <p className="subtle">No clients yet.</p>
+        ) : (
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Practice</th>
+                  {isSuperAdmin && <th>Owner Company</th>}
+                  <th>Service</th>
+                  <th>Contract Value</th>
+                  <th>MRR</th>
+                  <th>Sale Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((c: any, i) => (
+                  <tr key={i}>
+                    <td>
+                      <a href={`/practice/${c.master_practices?.practice_code}`}>
+                        {c.master_practices?.name ?? '—'}
+                      </a>
+                    </td>
+                    {isSuperAdmin && <td>{c.tenants?.name ?? '—'}</td>}
+                    <td>{c.sales?.service_sold ?? '—'}</td>
+                    <td>{c.sales?.contract_value != null ? '$' + c.sales.contract_value : '—'}</td>
+                    <td>{c.sales?.mrr != null ? '$' + c.sales.mrr : '—'}</td>
+                    <td>{c.sales?.sale_date ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
-
-      {(!clients || clients.length === 0) ? (
-        <p style={{ color: '#888' }}>No clients yet.</p>
-      ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 1000 }}>
-          <thead>
-            <tr>
-              <th style={head}>Practice</th>
-              {isSuperAdmin && <th style={head}>Owner Company</th>}
-              <th style={head}>Service</th>
-              <th style={head}>Contract Value</th>
-              <th style={head}>MRR</th>
-              <th style={head}>Sale Date</th>
-            </tr>
-          </thead>
-          <tbody>
-            {clients.map((c: any, i) => (
-              <tr key={i}>
-                <td style={cell}>
-                  <a href={`/practice/${c.master_practices?.practice_code}`} style={{ color: '#2563eb', textDecoration: 'none' }}>
-                    {c.master_practices?.name ?? '—'}
-                  </a>
-                </td>
-                {isSuperAdmin && <td style={cell}>{c.tenants?.name ?? '—'}</td>}
-                <td style={cell}>{c.sales?.service_sold ?? '—'}</td>
-                <td style={cell}>{c.sales?.contract_value != null ? '$' + c.sales.contract_value : '—'}</td>
-                <td style={cell}>{c.sales?.mrr != null ? '$' + c.sales.mrr : '—'}</td>
-                <td style={cell}>{c.sales?.sale_date ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+    </AppShell>
   )
 }

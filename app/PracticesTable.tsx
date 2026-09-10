@@ -324,18 +324,18 @@ type Props = {
 
 // ---- palette (dark, matches the sample) ----
 const C = {
-  bg: '#0a0e14',
-  panel: '#0f1620',
-  panelAlt: '#0b1119',
-  line: '#1c2836',
-  text: '#e6edf3',
-  dim: '#8a99a8',
-  faint: '#566472',
-  blue: '#3b82f6',
-  cyan: '#22d3ee',
-  green: '#22c55e',
-  amber: '#f59e0b',
-  violet: '#8b5cf6',
+  bg: 'var(--bg)',
+  panel: 'var(--surface)',
+  panelAlt: 'var(--surface-2)',
+  line: 'var(--border-dim)',
+  text: 'var(--ink-strong)',
+  dim: 'var(--muted)',
+  faint: 'var(--muted-2)',
+  blue: 'var(--accent)',
+  cyan: 'var(--c-transfers)',
+  green: 'var(--ok)',
+  amber: 'var(--warn)',
+  violet: 'var(--purple)',
 }
 
 // Each signal pill has a key (for toggle state) and a test(p) => boolean.
@@ -374,14 +374,19 @@ const COLUMN_SIGNALS: { key: keyof Practice; label: string }[] = [
   { key: 'rcmFit', label: 'RCM Fit' },
 ]
 
-// placeholder timezone buckets — no zone data wired yet
-const ZONES = [
-  { key: 'EST', count: 0 },
-  { key: 'CST', count: 0 },
-  { key: 'MST', count: 0 },
-  { key: 'PST', count: 0 },
-  { key: 'Other', count: 0 },
-]
+// Deterministic state -> US timezone-zone mapping (same lookup used on the
+// single-practice page), so these counts reflect the real practices in view.
+const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
+  CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
+  NJ: 'EST', NY: 'EST', NC: 'EST', OH: 'EST', PA: 'EST', RI: 'EST', SC: 'EST', VT: 'EST',
+  VA: 'EST', WV: 'EST', DC: 'EST', MI: 'EST', IN: 'EST', KY: 'EST',
+  AL: 'CST', AR: 'CST', IL: 'CST', IA: 'CST', KS: 'CST', LA: 'CST', MN: 'CST', MS: 'CST',
+  MO: 'CST', NE: 'CST', ND: 'CST', OK: 'CST', SD: 'CST', TN: 'CST', TX: 'CST', WI: 'CST',
+  AZ: 'MST', CO: 'MST', ID: 'MST', MT: 'MST', NM: 'MST', UT: 'MST', WY: 'MST',
+  CA: 'PST', NV: 'PST', OR: 'PST', WA: 'PST',
+  AK: 'Other', HI: 'Other',
+}
+const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 
 export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [] }: Props) {
   const router = useRouter()
@@ -389,6 +394,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
+  const [dispositionFilter, setDispositionFilter] = useState('')
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
@@ -420,6 +426,22 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     [practices]
   )
 
+  const dispositions = useMemo(
+    () => Array.from(new Set(practices.map((p) => p.status).filter(Boolean))).sort() as string[],
+    [practices]
+  )
+
+  // Real zone counts, derived from each practice's state — same lookup used
+  // on the single-practice page's zone badge.
+  const zoneCounts = useMemo(() => {
+    const counts: Record<string, number> = { EST: 0, CST: 0, MST: 0, PST: 0, Other: 0 }
+    for (const p of practices) {
+      const zone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'
+      counts[zone] = (counts[zone] ?? 0) + 1
+    }
+    return counts
+  }, [practices])
+
   const toggleSignal = (key: string) => {
     setActiveSignals((prev) => {
       const next = new Set(prev)
@@ -430,8 +452,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
   const filtered = useMemo(() => {
     const rows = practices.filter((p) => {
-      if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
+      if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
+      if (dispositionFilter && p.status !== dispositionFilter) return false
 
       // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
       for (const key of activeSignals) {
@@ -468,7 +491,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, dispositionFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -534,40 +557,40 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
+    setSearch(''); setStateFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
   return (
     <div style={{ color: C.text, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
       {/* ---- Distribution Console (placeholder) ---- */}
       <section style={{ ...panel, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-          <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+          <div style={{ minWidth: 0 }}>
             <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Leads Distribution Console</h2>
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
               <span key={t} style={pill(t === 'All Leads')}>{t}</span>
             ))}
             <SampleTag />
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
-          {ZONES.map((z) => (
-            <div key={z.key} style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 12, background: C.panelAlt }}>
+        <div className="grid-zones" style={{ marginBottom: 14 }}>
+          {ZONE_KEYS.map((z) => (
+            <div key={z} style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: 12, background: C.panelAlt, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.dim }}>
-                <span style={{ letterSpacing: 0.5 }}>{z.key} ZONE</span>
-                <span style={{ color: C.amber }}>{z.count}</span>
+                <span style={{ letterSpacing: 0.5 }}>{z} ZONE</span>
+                <span style={{ color: C.amber }}>{zoneCounts[z]}</span>
               </div>
-              <input disabled value={0} style={{ ...input, marginTop: 8, textAlign: 'center' }} />
+              <input disabled value={zoneCounts[z]} style={{ ...input, width: '100%', minWidth: 0, boxSizing: 'border-box', marginTop: 8, textAlign: 'center' }} />
             </div>
           ))}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.4fr 1fr', gap: 10 }}>
+        <div className="grid-console">
           <LabeledSelect label="TARGET AGENT" options={['— Select Agent / Closer —']} />
           <LabeledSelect label="SPECIALTY" options={['— All Specialties —']} />
-          <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', background: C.panelAlt }}>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
             <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>1 &nbsp;to&nbsp; 15</div>
           </div>
@@ -580,13 +603,13 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Lead Pool <span style={{ color: C.dim, fontWeight: 400 }}>({filtered.length} leads)</span></h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage unassigned master records</div>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {['All Leads', 'New Leads', 'Worked Leads'].map((t) => (
             <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>{t}</span>
           ))}
         </div>
         {hasPriority && (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <span
               onClick={() => setAssignedView('mine')}
               style={{ ...pill(assignedView === 'mine'), cursor: 'pointer', borderColor: C.amber, color: assignedView === 'mine' ? C.text : C.amber }}
@@ -601,17 +624,17 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             </span>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
             <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {(['All', 'Allocated', 'Uploaded'] as const).map((t) => (
             <span key={t} onClick={() => setSourceTab(t)}
               style={{
                 ...pill(sourceTab === t), cursor: 'pointer',
-                borderColor: sourceTab === t ? (t === 'Allocated' ? '#8b5cf6' : t === 'Uploaded' ? '#22d3ee' : C.blue) : C.line,
+                borderColor: sourceTab === t ? (t === 'Allocated' ? 'var(--purple)' : t === 'Uploaded' ? 'var(--c-transfers)' : C.blue) : C.line,
               }}>
               {t === 'All' ? 'All Sources' : t}
             </span>
@@ -622,16 +645,19 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       {/* ---- Filter bar (real: search, state, signals) ---- */}
       <section style={{ ...panel, marginBottom: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input placeholder="Practice name…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, minWidth: 220 }} />
+          <input placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, minWidth: 220 }} />
           <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <select disabled style={{ ...input, opacity: 0.6 }}><option>MIPS Year 2026</option></select>
-          <select disabled style={{ ...input, opacity: 0.6 }}><option>All Dispositions</option></select>
+          <select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
+            <option value="">All Dispositions</option>
+            {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
           <select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select>
           <button onClick={resetFilters} style={btnGhost}>Reset</button>
-          <SampleTag note="dispositions / enrichment / dates not wired" />
+          <SampleTag note="MIPS year / enrichment filters not wired" />
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: C.dim }}>Filter by signal:</span>
@@ -688,7 +714,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       )}
 
       {/* ---- Table ---- */}
-      <section style={{ ...panel, padding: 0, overflowX: 'auto' }}>
+      <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.line}` }}>
@@ -702,7 +728,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                   />
                 </th>
               )}
-              <th style={thLeft}>Practice</th>
+              <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
               <th style={th}>Sex</th>
@@ -717,28 +743,28 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           </thead>
           <tbody>
             {filtered.map((p) => (
-              <tr key={p.practiceCode} style={{ borderBottom: `1px solid ${C.line}` }}>
+              <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
                 {(isSuperAdmin || canAssign) && (
                   <td style={td}>
                     <input type="checkbox" checked={selected.has(p.practiceCode)} onChange={() => toggleSelect(p.practiceCode)} />
                   </td>
                 )}
-                <td style={tdLeft}>
+                <td style={{ ...tdLeft, minWidth: 240 }}>
                   {prioritySet.has(p.practiceCode) && (
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
-                  <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 600 }}>{p.name}</a>
-                  <div style={{ fontSize: 11, color: C.faint }}>Solo Practice</div>
+                  <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</a>
+                  <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
                 </td>
-                <td style={{ ...td, color: C.dim }}>{p.state ?? '—'}</td>
-                <td style={{ ...tdLeft, color: C.dim }}>{p.specialty ?? '—'}</td>
-                <td style={{ ...td, color: C.dim }}>{p.sex ?? '—'}</td>
+                <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
+                <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
-                <td style={{ ...td, color: C.dim, fontSize: 12 }}>{p.risk ?? '—'}</td>
-                <td style={{ ...td, color: C.dim, fontSize: 12 }}>{p.paymentAdj ?? '—'}</td>
+                <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
+                <td style={{ ...td, color: p.paymentAdj ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.paymentAdj ?? '—'}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source, p.allocatedTo)}</td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{fmtDateTime(p.lastDialed)}</td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{fmtDateTime(p.allocatedOn)}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.lastDialed)}</td>
+                <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.allocatedOn)}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
               </tr>
             ))}
@@ -762,7 +788,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // ---- small components ----
   function LabeledSelect({ label, options }: { label: string; options: string[] }) {
     return (
-      <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: '6px 12px', background: C.panelAlt }}>
+      <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '6px 12px', background: C.panelAlt }}>
         <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>{label}</div>
         <select disabled style={{ ...input, border: 'none', background: 'transparent', padding: '4px 0', width: '100%' }}>
           {options.map((o) => <option key={o}>{o}</option>)}
@@ -786,19 +812,22 @@ function fmtDateTime(iso?: string | null): string {
 // Source badge: where the lead came from — Allocated (Super Admin) or Uploaded (company).
 function sourceBadge(source?: string | null, allocatedTo?: string | null) {
   const s = (source ?? '').trim()
-  if (!s) return <span style={{ color: '#566472' }}>—</span>
+  if (!s) return <span style={{ color: 'var(--muted-2)' }}>—</span>
   const isAllocated = s.toLowerCase().includes('alloc')
-  const color = isAllocated ? '#8b5cf6' : '#22d3ee' // violet vs cyan
+  const color = isAllocated ? 'var(--purple)' : 'var(--c-transfers)' // violet vs cyan
   const label = isAllocated ? 'Allocated' : 'Uploaded'
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <span style={{
-        display: 'inline-block', fontSize: 11, fontWeight: 600,
+        display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700,
         color, border: `1px solid ${color}`, borderRadius: 999,
-        padding: '2px 10px', background: color + '22',
-      }}>{label}</span>
+        padding: '4px 12px', background: `color-mix(in srgb, ${color} 15%, transparent)`, lineHeight: 1,
+      }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+        {label}
+      </span>
       {isAllocated && allocatedTo && (
-        <span style={{ fontSize: 11, color: '#8a99a8' }}>→ {allocatedTo}</span>
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>→ {allocatedTo}</span>
       )}
     </span>
   )
@@ -807,46 +836,49 @@ function sourceBadge(source?: string | null, allocatedTo?: string | null) {
 // Colored status badge. Maps the agent's chosen action to a colored pill.
 function statusBadge(status?: string | null) {
   const s = (status ?? '').trim()
-  if (!s) return <span style={{ color: '#566472' }}>—</span>
+  if (!s) return <span style={{ color: 'var(--muted-2)' }}>—</span>
   const key = s.toLowerCase()
-  let color = '#8a99a8' // default grey
-  if (key.includes('sold')) color = '#22c55e'          // green
-  else if (key.includes('clos')) color = '#3b82f6'      // blue
-  else if (key.includes('follow')) color = '#f59e0b'    // amber
-  else if (key.includes('interest')) color = '#22d3ee'  // cyan
-  else if (key.includes('not interest') || key.includes('dnc')) color = '#ef4444' // red
+  let color = 'var(--muted)' // default grey
+  if (key.includes('sold')) color = 'var(--ok)'
+  else if (key.includes('clos')) color = 'var(--accent)'
+  else if (key.includes('follow')) color = 'var(--warn)'
+  else if (key.includes('interest')) color = 'var(--c-transfers)'
+  else if (key.includes('not interest') || key.includes('dnc')) color = 'var(--danger)'
   return (
     <span style={{
-      display: 'inline-block', fontSize: 11, fontWeight: 600,
+      display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700,
       color, border: `1px solid ${color}`, borderRadius: 999,
-      padding: '2px 10px', background: color + '22',
-    }}>{s}</span>
+      padding: '4px 12px', background: `color-mix(in srgb, ${color} 15%, transparent)`, lineHeight: 1,
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      {s}
+    </span>
   )
 }
 
 function SampleTag({ note }: { note?: string }) {
   return (
-    <span title={note} style={{ fontSize: 9, color: '#566472', border: '1px solid #1c2836', borderRadius: 4, padding: '2px 6px', alignSelf: 'center' }}>
+    <span title={note} style={{ fontSize: 9, color: 'var(--muted-2)', border: '1px solid var(--border-dim)', borderRadius: 0, padding: '2px 6px', alignSelf: 'center' }}>
       sample
     </span>
   )
 }
 
 // ---- shared styles ----
-const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }
-const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', fontSize: 13 }
-const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
-const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
-const th: React.CSSProperties = { padding: '12px 10px', textAlign: 'center', fontSize: 11, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap' }
+const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 0, padding: 18 }
+const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
+const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
+const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
+const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.6, whiteSpace: 'nowrap' }
 const thLeft: React.CSSProperties = { ...th, textAlign: 'left' }
-const td: React.CSSProperties = { padding: '12px 10px', textAlign: 'center' }
-const tdLeft: React.CSSProperties = { padding: '12px 10px', textAlign: 'left' }
+const td: React.CSSProperties = { padding: '16px', textAlign: 'center' }
+const tdLeft: React.CSSProperties = { padding: '16px', textAlign: 'left' }
 
 function pill(active: boolean): React.CSSProperties {
   return {
     fontSize: 12, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', userSelect: 'none',
     border: `1px solid ${active ? C.blue : C.line}`,
-    background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
+    background: active ? 'rgba(var(--accent-rgb),0.15)' : 'transparent',
     color: active ? C.text : C.dim,
   }
 }
