@@ -8,11 +8,12 @@ import SignOutButton from './SignOutButton'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
-  { href: '/',          label: 'Leads Engine',   icon: '▤' },
-  { href: '/dashboard', label: 'Dashboard',      icon: '◫' },
-  { href: '/reminders', label: 'My Reminders',   icon: '◷' },
-  { href: '/clients',   label: 'Active Clients', icon: '◇' },
-  { href: '/admin',     label: 'Admin',          icon: '⚙' },
+  { href: '/',              label: 'Leads Engine',   icon: '▤' },
+  { href: '/dashboard',     label: 'Dashboard',      icon: '◫' },
+  { href: '/reminders',     label: 'My Reminders',   icon: '◷' },
+  { href: '/clients',       label: 'Active Clients', icon: '◇' },
+  { href: '/admin',         label: 'Admin',          icon: '⚙' },
+  { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },   // ← NEW (Super Admin only)
 ]
 
 // First letter of the first two words, e.g. "Hired Billing Support" -> "HB".
@@ -34,7 +35,11 @@ export default function AppShell({
   showAdmin?: boolean
   headerRight?: React.ReactNode
 }) {
-  const items = NAV.filter((n) => n.href !== '/admin' || showAdmin)
+  // Both Admin and Deleted Leads are Super Admin only — controlled by same flag.
+  const items = NAV.filter((n) => {
+    if (n.href === '/admin' || n.href === '/deleted-leads') return showAdmin
+    return true
+  })
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const pathname = usePathname()

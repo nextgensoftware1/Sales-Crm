@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
+import { revalidatePath } from 'next/cache'
 
 export async function allocatePractices(practiceCodes: string[], tenantSlug: string) {
   const supabase = await createSupabaseServer()
@@ -300,4 +301,120 @@ export async function markAsSold(
   })
 
   return { ok: true, message: 'Marked as SOLD — practice is now a locked client' }
+}
+
+// ============================================================================
+// SOFT-DELETE / RESTORE / HARD-DELETE  (Super Admin only)
+// Two-stage delete workflow:
+//   Stage 1 (softDeleteLeads): sets deleted_at → hidden from Super Admin main
+//           pool, moved to /deleted-leads page. Company admins with the lead
+//           allocated/assigned still see it in their pool.
+//   Stage 2 (hardDeleteLeads): DELETE FROM database — gone for everyone.
+//   Restore (restoreLeads): undo Stage 1, lead reappears in main pool.
+// ============================================================================
+
+/**
+ * STAGE 1 — Soft delete. Marks selected practice_codes as deleted (hidden
+ * from Super Admin main pool). Company admins/agents with the lead still
+ * allocated/assigned continue to see it in their pool until Stage 2 fires.
+ */
+export async function softDeleteLeads(codes: string[]) {
+  const supabase = await createSupabaseServer()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, message: 'Not signed in.' }
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('id, roles(key)')
+    .eq('auth_id', user.id)
+    .single()
+  const roleKey = (me as any)?.roles?.key
+  if (roleKey !== 'super_admin') {
+    return { ok: false, message: 'Only Super Admin can delete leads.' }
+  }
+  if (!codes || codes.length === 0) {
+    return { ok: false, message: 'No leads selected.' }
+  }
+
+  const { error, count } = await supabase
+    .from('master_practices')
+    .update(
+      { deleted_at: new Date().toISOString(), deleted_by: (me as any).id },
+      { count: 'exact' }
+    )
+    .in('practice_code', codes)
+    .is('deleted_at', null)   // don't touch rows already soft-deleted
+
+  if (error) return { ok: false, message: error.message }
+  revalidatePath('/')
+  revalidatePath('/deleted-leads')
+  return { ok: true, message: `Moved ${count ?? codes.length} lead(s) to Deleted Leads.` }
+}
+
+/**
+ * Restore soft-deleted leads back to the main pool.
+ */
+export async function restoreLeads(codes: string[]) {
+  const supabase = await createSupabaseServer()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, message: 'Not signed in.' }
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('id, roles(key)')
+    .eq('auth_id', user.id)
+    .single()
+  if ((me as any)?.roles?.key !== 'super_admin') {
+    return { ok: false, message: 'Only Super Admin can restore leads.' }
+  }
+  if (!codes || codes.length === 0) {
+    return { ok: false, message: 'No leads selected.' }
+  }
+
+  const { error, count } = await supabase
+    .from('master_practices')
+    .update({ deleted_at: null, deleted_by: null }, { count: 'exact' })
+    .in('practice_code', codes)
+    .not('deleted_at', 'is', null)
+
+  if (error) return { ok: false, message: error.message }
+  revalidatePath('/')
+  revalidatePath('/deleted-leads')
+  return { ok: true, message: `Restored ${count ?? codes.length} lead(s) to the pool.` }
+}
+
+/**
+ * STAGE 2 — Hard delete. Permanently removes rows from the database.
+ * Related rows (allocations, assignments, etc.) are removed via ON DELETE
+ * CASCADE / ON DELETE SET NULL — verify your FK constraints match intent.
+ */
+export async function hardDeleteLeads(codes: string[]) {
+  const supabase = await createSupabaseServer()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, message: 'Not signed in.' }
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('id, roles(key)')
+    .eq('auth_id', user.id)
+    .single()
+  if ((me as any)?.roles?.key !== 'super_admin') {
+    return { ok: false, message: 'Only Super Admin can permanently delete leads.' }
+  }
+  if (!codes || codes.length === 0) {
+    return { ok: false, message: 'No leads selected.' }
+  }
+
+  const { error, count } = await supabase
+    .from('master_practices')
+    .delete({ count: 'exact' })
+    .in('practice_code', codes)
+
+  if (error) return { ok: false, message: error.message }
+  revalidatePath('/')
+  revalidatePath('/deleted-leads')
+  return { ok: true, message: `Permanently deleted ${count ?? codes.length} lead(s).` }
 }

@@ -1,288 +1,8 @@
-// 'use client'
-
-// import { useState } from 'react'
-// import { useRouter } from 'next/navigation'
-// import { createSupabaseBrowser } from '../lib/supabase-browser'
-// import { allocatePractices } from './actions'          // ← CHANGED: removed old supabase-client import; kept this
-
-// type Practice = {
-//   practiceCode: string
-//   allocatedOn: string | null
-//   status: string | null
-//   name: string
-//   state: string | null
-//   specialty: string | null
-//   ccm: boolean
-//   pcm: boolean
-//   awv: boolean
-//   tcm: boolean
-//   bhi: boolean
-//   rpm: boolean
-//   rcmFit: boolean
-//   mipsByYear: Record<number, string>
-// }
-
-// type CurrentUser = { full_name: string; role: string; company: string } | null
-// type Company = { slug: string; name: string }
-
-// const SIGNALS: { key: keyof Practice; label: string }[] = [
-//   { key: 'ccm', label: 'CCM' },
-//   { key: 'pcm', label: 'PCM' },
-//   { key: 'awv', label: 'AWV' },
-//   { key: 'tcm', label: 'TCM' },
-//   { key: 'bhi', label: 'BHI' },
-//   { key: 'rpm', label: 'RPM' },
-//   { key: 'rcmFit', label: 'RCM Fit' },
-// ]
-// const STATUS_COLORS: Record<string, string> = {
-//   'New': '#6b7280',
-//   'Interested': '#16a34a',
-//   'Qualified': '#2563eb',
-//   'Callback': '#d97706',
-//   'No Answer': '#9ca3af',
-//   'Voicemail': '#9ca3af',
-//   'Not Interested': '#dc2626',
-//   'DNC': '#dc2626',
-// }
-// export default function PracticesTable({
-//   practices,
-//   currentUser,
-//   isSuperAdmin = false,
-//   companies = [],
-// }: {
-//   practices: Practice[]
-//   currentUser: CurrentUser
-//   isSuperAdmin?: boolean
-//   companies?: Company[]
-// }) {
-//   const router = useRouter()
-//   const [stateFilter, setStateFilter] = useState('')
-//   const [search, setSearch] = useState('')
-//   const [year, setYear] = useState('2026')
-//   const [activeSignals, setActiveSignals] = useState<Record<string, boolean>>({})
-
-//   // ← CHANGED: allocation state (selection, target company, message)
-//   const [selected, setSelected] = useState<Set<string>>(new Set())
-//   const [targetCompany, setTargetCompany] = useState('')
-//   const [allocMsg, setAllocMsg] = useState('')
-
-//   const handleLogout = async () => {
-//     const supabase = createSupabaseBrowser()
-//     await supabase.auth.signOut()
-//     router.push('/login')
-//     router.refresh()
-//   }
-
-//   // ← CHANGED: toggle a practice's checkbox
-//   const toggleSelect = (code: string) => {
-//     setSelected((prev) => {
-//       const next = new Set(prev)
-//       if (next.has(code)) next.delete(code)
-//       else next.add(code)
-//       return next
-//     })
-//   }
-
-//   // ← CHANGED: allocate handler (writes to DB via the server action)
-//   const handleAllocate = async () => {
-//     setAllocMsg('')
-//     if (selected.size === 0) { setAllocMsg('Select at least one practice.'); return }
-//     if (!targetCompany) { setAllocMsg('Pick a company.'); return }
-//     const res = await allocatePractices(Array.from(selected), targetCompany)
-//     setAllocMsg(res.message)
-//     if (res.ok) {
-//       setSelected(new Set())
-//       router.refresh()
-//     }
-//   }
-
-//   const states = Array.from(
-//     new Set(practices.map((p) => p.state).filter(Boolean))
-//   ).sort() as string[]
-
-//   const visible = practices.filter((p) => {
-//     if (stateFilter && p.state !== stateFilter) return false
-//     if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false
-//     for (const s of SIGNALS) {
-//       if (activeSignals[s.key] && !p[s.key]) return false
-//     }
-//     return true
-//   })
-
-//   const toggleSignal = (key: string) =>
-//     setActiveSignals((prev) => ({ ...prev, [key]: !prev[key] }))
-
-//   const resetAll = () => {
-//     setStateFilter('')
-//     setSearch('')
-//     setActiveSignals({})
-//   }
-
-//   const inputStyle = { padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14 }
-//   const cell = { padding: 8, border: '1px solid #ddd', fontSize: 13, textAlign: 'center' as const }
-//   const cellLeft = { ...cell, textAlign: 'left' as const }
-
-//   return (
-//     <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
-//       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-//         <h1 style={{ fontSize: 28 }}>Master Practices</h1>
-//         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-//           {/* ← CHANGED: use isSuperAdmin flag for the Admin link */}
-//           {isSuperAdmin && (
-//             <a href="/admin" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
-//               Admin
-//             </a>  
-//           )}
-//           <a href="/dashboard" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
-//             Dashboard
-//           </a>
-//           <a href="/reminders" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
-//             My Reminders
-//           </a>
-//           <a href="/clients" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
-//             My Clients
-//           </a>
-//           {currentUser && (
-//             <span style={{ fontSize: 13, color: '#555' }}>
-//               {currentUser.full_name} · <strong>{currentUser.role}</strong> · {currentUser.company}
-//             </span>
-//           )}
-//           <button
-//             onClick={handleLogout}
-//             style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #ccc', background: '#f2f2f2', color: '#000', cursor: 'pointer', fontSize: 14 }}
-//           >
-//             Log out
-//           </button>
-//         </div>
-//       </div>
-
-//       {/* ← CHANGED: allocation bar, only for Super Admin */}
-//       {isSuperAdmin && (
-//         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, padding: 12, border: '1px solid #2563eb', borderRadius: 8, background: '#eff6ff', flexWrap: 'wrap' }}>
-//           <strong style={{ fontSize: 14, color: '#000' }}>{selected.size} selected</strong>
-//           <select value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={{ ...inputStyle, color: '#000' }}>
-//             <option value="">Choose company…</option>
-//             {companies.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
-//           </select>
-//           <button onClick={handleAllocate} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 14 }}>
-//             Allocate Selected
-//           </button>
-//           {allocMsg && <span style={{ fontSize: 13, color: '#000' }}>{allocMsg}</span>}
-//         </div>
-//       )}
-
-//       <p style={{ color: '#666', marginBottom: 16 }}>
-//         Showing {visible.length} of {practices.length} practices
-//       </p>
-
-//       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-//         <input
-//           type="text"
-//           placeholder="Search practice name..."
-//           value={search}
-//           onChange={(e) => setSearch(e.target.value)}
-//           style={{ ...inputStyle, minWidth: 220 }}
-//         />
-//         <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={inputStyle}>
-//           <option value="">All States</option>
-//           {states.map((s) => <option key={s} value={s}>{s}</option>)}
-//         </select>
-//         <select value={year} onChange={(e) => setYear(e.target.value)} style={inputStyle}>
-//           {['2022', '2023', '2024', '2025', '2026'].map((y) => (
-//             <option key={y} value={y}>MIPS Year {y}</option>
-//           ))}
-//         </select>
-//         <button onClick={resetAll} style={{ ...inputStyle, cursor: 'pointer', background: '#f2f2f2', color: '#000' }}>
-//           Reset
-//         </button>
-//       </div>
-
-//       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
-//         <span style={{ color: '#666', fontSize: 13, alignSelf: 'center' }}>Filter by signal:</span>
-//         {SIGNALS.map((s) => (
-//           <button
-//             key={s.key}
-//             onClick={() => toggleSignal(s.key)}
-//             style={{
-//               padding: '6px 12px', borderRadius: 20, fontSize: 13, cursor: 'pointer',
-//               background: activeSignals[s.key] ? '#2563eb' : '#f2f2f2',
-//               color: activeSignals[s.key] ? '#fff' : '#333',
-//               border: '1px solid ' + (activeSignals[s.key] ? '#2563eb' : '#ddd'),
-//             }}
-//           >
-//             {s.label}
-//           </button>
-//         ))}
-//       </div>
-
-//       <div style={{ overflowX: 'auto' }}>
-//         <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-//           <thead>
-//             <tr style={{ background: '#f2f2f2', color: '#000' }}>
-//               {/* ← CHANGED: checkbox header column for Super Admin */}
-//               {isSuperAdmin && <th style={cell}></th>}
-//               <th style={cellLeft}>Practice</th>
-//               <th style={cell}>State</th>
-//               <th style={cellLeft}>Specialty</th>
-//               {SIGNALS.map((s) => <th key={s.key} style={cell}>{s.label}</th>)}
-//               <th style={cellLeft}>MIPS {year}</th>
-//               {!isSuperAdmin && <th style={cell}>Status</th>}
-//               {!isSuperAdmin && <th style={cellLeft}>Allocated On</th>}
-//             </tr>
-//           </thead>
-//           <tbody>
-//             {visible.map((p, i) => (
-//               <tr key={i}>
-//                 {/* ← CHANGED: checkbox cell for Super Admin */}
-//                 {isSuperAdmin && (
-//                   <td style={cell}>
-//                     <input
-//                       type="checkbox"
-//                       checked={selected.has(p.practiceCode)}
-//                       onChange={() => toggleSelect(p.practiceCode)}
-//                     />
-//                   </td>
-//                 )}
-//                 <td style={cellLeft}>
-//                   <a href={`/practice/${p.practiceCode}`} style={{ color: '#2563eb', textDecoration: 'none' }}>
-//                     {p.name}
-//                   </a>
-//                 </td>
-//                 <td style={cell}>{p.state}</td>
-//                 <td style={cellLeft}>{p.specialty}</td>
-//                 {SIGNALS.map((s) => (
-//                   <td key={s.key} style={cell}>{p[s.key] ? '✅' : '—'}</td>
-//                 ))}
-//                 <td style={{ ...cellLeft, fontSize: 12, color: '#555', maxWidth: 260 }}>
-//                   {p.mipsByYear[Number(year)] || '—'}
-//                 </td>
-//                 {!isSuperAdmin && (
-//                   <td style={cell}>
-//                     {p.status ? (
-//                       <span style={{ padding: '3px 10px', borderRadius: 12, fontSize: 12, color: '#fff',
-//                         background: STATUS_COLORS[p.status] ?? '#6b7280', }}>
-//                         {p.status}
-//                       </span>
-//                     ) : '—'}
-                    
-//                   </td>
-//                 )}
-//                 {!isSuperAdmin && (
-//                   <td style={{ ...cellLeft, fontSize: 12, color: '#555' }}></td>
-//                 )}
-//               </tr>
-//             ))}
-//           </tbody>
-//         </table>
-//       </div>
-//     </div>
-//   )
-// }
 'use client'
 
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { allocatePractices } from './actions'
+import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
 
 type Practice = {
@@ -394,6 +114,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
+  const [specialtyFilter, setSpecialtyFilter] = useState('')
   const [dispositionFilter, setDispositionFilter] = useState('')
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
@@ -401,6 +122,10 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [targetCompany, setTargetCompany] = useState('')
   const [allocMsg, setAllocMsg] = useState('')
+
+  // ---- REAL delete state (Super Admin only) ----
+  const [deleteMsg, setDeleteMsg] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // ---- REAL assign state (company_admin / manager / team_lead) ----
   const [targetAgent, setTargetAgent] = useState('')
@@ -418,11 +143,15 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
-  const [catTab, setCatTab] = useState('All Categories')
   const [sourceTab, setSourceTab] = useState<'All' | 'Allocated' | 'Uploaded'>('All')
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
+    [practices]
+  )
+
+  const specialties = useMemo(
+    () => Array.from(new Set(practices.map((p) => p.specialty).filter(Boolean))).sort() as string[],
     [practices]
   )
 
@@ -454,6 +183,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     const rows = practices.filter((p) => {
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
+      if (specialtyFilter && p.specialty !== specialtyFilter) return false
       if (dispositionFilter && p.status !== dispositionFilter) return false
 
       // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
@@ -461,11 +191,6 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         const sig = SIGNALS.find((s) => s.key === key)
         if (sig && !sig.test(p)) return false
       }
-
-      // Category tab filter (All / MIPS / RCM / CCM)
-      if (catTab === 'MIPS' && !hasRealMips(p)) return false
-      if (catTab === 'RCM' && !p.rcmFit) return false
-      if (catTab === 'CCM' && !p.ccm) return false
 
       // Source filter: All / Allocated (from Super Admin) / Uploaded (own)
       if (sourceTab !== 'All') {
@@ -491,7 +216,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, dispositionFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, sourceTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -545,6 +270,25 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     }
   }
 
+  const handleSoftDelete = async () => {
+    if (selected.size === 0) { setDeleteMsg('Select at least one lead.'); return }
+    const confirmed = window.confirm(
+      `Move ${selected.size} lead(s) to Deleted Leads?\n\n` +
+      `They will be hidden from the main pool but stay visible to any company ` +
+      `that already has them allocated. You can restore or permanently delete ` +
+      `them later from the Deleted Leads page.`
+    )
+    if (!confirmed) return
+    setIsDeleting(true)
+    const res = await softDeleteLeads(Array.from(selected))
+    setDeleteMsg(res.message)
+    setIsDeleting(false)
+    if (res.ok) {
+      setSelected(new Set())
+      router.refresh()
+    }
+  }
+
   const handleAssign = async () => {
     if (selected.size === 0) { setAssignMsg('Select at least one lead.'); return }
     if (!targetAgent) { setAssignMsg('Pick an agent.'); return }
@@ -557,7 +301,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
+    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setSourceTab('All')
   }
 
   return (
@@ -570,9 +314,6 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
-              <span key={t} style={pill(t === 'All Leads')}>{t}</span>
-            ))}
             <SampleTag />
           </div>
         </div>
@@ -588,8 +329,22 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           ))}
         </div>
         <div className="grid-console">
-          <LabeledSelect label="TARGET AGENT" options={['— Select Agent / Closer —']} />
-          <LabeledSelect label="SPECIALTY" options={['— All Specialties —']} />
+          {!isSuperAdmin && (
+            <LabeledSelect label="TARGET AGENT" options={['— Select Agent / Closer —']} />
+          )}
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '6px 12px', background: C.panelAlt }}>
+            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>SPECIALTY</div>
+            <select
+              value={specialtyFilter}
+              onChange={(e) => setSpecialtyFilter(e.target.value)}
+              style={{ ...input, border: 'none', background: 'transparent', padding: '4px 0', width: '100%' }}
+            >
+              <option value="">— All Specialties —</option>
+              {specialties.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
             <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>1 &nbsp;to&nbsp; 15</div>
@@ -624,11 +379,6 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             </span>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
-            <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
-          ))}
-        </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {(['All', 'Allocated', 'Uploaded'] as const).map((t) => (
             <span key={t} onClick={() => setSourceTab(t)}
@@ -672,14 +422,23 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
       {/* ---- Allocation bar (real, Super Admin) ---- */}
       {isSuperAdmin && (
-        <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', borderColor: C.blue }}>
+        <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.blue }}>
           <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
           <select value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
             <option value="">Choose company…</option>
             {companies.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
           </select>
           <button onClick={handleAllocate} style={btnPrimary}>Allocate Selected</button>
+          <button
+            onClick={handleSoftDelete}
+            disabled={isDeleting}
+            style={{ ...btnPrimary, background: 'var(--danger, #c0392b)', opacity: isDeleting ? 0.6 : 1 }}
+            title="Move selected leads to Deleted Leads (soft delete)"
+          >
+            {isDeleting ? 'Deleting…' : 'Delete Selected'}
+          </button>
           {allocMsg && <span style={{ fontSize: 13, color: C.dim }}>{allocMsg}</span>}
+          {deleteMsg && <span style={{ fontSize: 13, color: C.dim }}>{deleteMsg}</span>}
         </section>
       )}
 

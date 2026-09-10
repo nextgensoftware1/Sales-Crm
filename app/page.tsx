@@ -126,11 +126,14 @@ export default async function Home() {
 
   // ------------------------------------------------------------------
   // VISIBILITY — which practice IDs may this person see?
-  //   • Super Admin: everything (no filter).
-  //   • Agent/Closer: only assigned to them.
-  //   • Company roles: leads they OWN (upload) OR that are ALLOCATED to them,
-  //     minus leads engaged to another company.
-  // We compute an allow-list of practice IDs (null = no restriction).
+  //   • Super Admin: everything EXCEPT soft-deleted leads
+  //     (soft-deleted moved to /deleted-leads page).
+  //   • Agent/Closer: only assigned to them (soft-deleted still visible
+  //     to them if they're still assigned — Super Admin's soft-delete
+  //     doesn't yank the lead out from under active work).
+  //   • Company roles: leads they OWN (upload) OR that are ALLOCATED to
+  //     them, minus leads engaged to another company. Soft-deleted leads
+  //     stay visible here too until Super Admin hard-deletes them.
   // ------------------------------------------------------------------
   // Leads allocated to my company (Super Admin gave them to us).
   let myAllocatedIds: string[] = []
@@ -226,9 +229,11 @@ export default async function Home() {
   let error: any = null
   try {
     if (isSuperAdmin) {
-      // All practices.
+      // All practices EXCEPT soft-deleted — those live on /deleted-leads.  ← CHANGED
       data = await fetchAllPaged(() =>
-        supabase.from('master_practices').select(SELECT).order('name')
+        supabase.from('master_practices').select(SELECT)
+          .is('deleted_at', null)
+          .order('name')
       )
     } else if (roleKey === 'agent' || roleKey === 'closer') {
       data = await fetchByIds(assignedIds ?? [])
