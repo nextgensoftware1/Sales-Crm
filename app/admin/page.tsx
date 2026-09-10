@@ -22,9 +22,12 @@ export default async function AdminPage() {
       }
     : null
 
-  if ((me as any)?.roles?.key !== 'super_admin') {
+  const roleKey = (me as any)?.roles?.key ?? ''
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+
+  if (roleKey !== 'super_admin') {
     return (
-      <AppShell title="Admin" currentUser={currentUser} active="/admin" showAdmin={false}>
+      <AppShell title="Admin" currentUser={currentUser} active="/admin" showAdmin={false} showTransfers={showTransfers}>
         <div className="card" style={{ maxWidth: 480 }}>
           <h1 style={{ color: 'var(--danger)', fontSize: 20, margin: '0 0 8px' }}>Access denied</h1>
           <p className="subtle">Only the Super Admin can view user management.</p>
@@ -78,6 +81,7 @@ export default async function AdminPage() {
       currentUser={currentUser}
       active="/admin"
       showAdmin
+      showTransfers={showTransfers}
       headerRight={
         <a href="/admin/view" className="btn btn-primary" style={{ textDecoration: 'none' }}>
           View as role →

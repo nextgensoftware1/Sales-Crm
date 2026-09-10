@@ -15,6 +15,7 @@ export default async function ClientsPage() {
     .single()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
@@ -43,6 +44,7 @@ export default async function ClientsPage() {
       currentUser={currentUser}
       active="/clients"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
     >
       <div className="card">
         {(!clients || clients.length === 0) ? (
@@ -64,9 +66,13 @@ export default async function ClientsPage() {
                 {clients.map((c: any, i) => (
                   <tr key={i}>
                     <td>
-                      <a href={`/practice/${c.master_practices?.practice_code}`}>
-                        {c.master_practices?.name ?? '—'}
-                      </a>
+                      {c.master_practices ? (
+                        <a href={`/practice/${c.master_practices.practice_code}`}>
+                          {c.master_practices.name}
+                        </a>
+                      ) : (
+                        <span className="subtle" title="This practice was permanently deleted">— (deleted)</span>
+                      )}
                     </td>
                     {isSuperAdmin && <td>{c.tenants?.name ?? '—'}</td>}
                     <td>{c.sales?.service_sold ?? '—'}</td>

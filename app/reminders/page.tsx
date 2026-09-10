@@ -15,6 +15,7 @@ export default async function RemindersPage() {
     .single()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
@@ -49,9 +50,13 @@ export default async function RemindersPage() {
               <tr key={i}>
                 <td>{new Date(r.remind_at).toLocaleString()}</td>
                 <td>
-                  <a href={`/practice/${r.master_practices?.practice_code}`}>
-                    {r.master_practices?.name ?? '—'}
-                  </a>
+                  {r.master_practices ? (
+                    <a href={`/practice/${r.master_practices.practice_code}`}>
+                      {r.master_practices.name}
+                    </a>
+                  ) : (
+                    <span className="subtle" title="This practice was permanently deleted">— (deleted)</span>
+                  )}
                 </td>
                 <td>{r.note ?? '—'}</td>
               </tr>
@@ -69,6 +74,7 @@ export default async function RemindersPage() {
       currentUser={currentUser}
       active="/reminders"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div className="card">

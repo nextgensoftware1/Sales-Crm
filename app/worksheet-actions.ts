@@ -14,8 +14,14 @@ export type WorksheetData = {
 }
 
 // Save the shared per-practice worksheet. Anyone signed in may save (latest wins).
-// If a callback date is provided, also create a reminder for the caller.
+// Call details are required — this is the core record of what happened on the
+// call, so it can't be skipped. If a callback date is provided, also create a
+// reminder for the caller.
 export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Promise<{ ok: boolean; message: string }> {
+  if (!ws.callDetails || !ws.callDetails.trim()) {
+    return { ok: false, message: 'Call details are required before saving.' }
+  }
+
   const supabase = await createSupabaseServer()
 
   const { data: { user } } = await supabase.auth.getUser()
@@ -32,8 +38,8 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found.' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const callbackIso = ws.callbackAt ? new Date(ws.callbackAt).toISOString() : null
 

@@ -30,6 +30,7 @@ export default async function RoleView() {
       currentUser={currentUser}
       active="/admin"
       showAdmin
+      showTransfers
       headerRight={
         <a href="/admin" className="btn" style={{ textDecoration: 'none' }}>← Back to admin</a>
       }

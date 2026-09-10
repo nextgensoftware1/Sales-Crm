@@ -40,8 +40,6 @@ type Props = {
   canAssign?: boolean
   myAgents?: { id: string; full_name: string; role: string }[]
   myAssignedCodes?: string[]
-  newLeadCodes?: string[]      // practices from the most recent upload batch
-  workedLeadCodes?: string[]   // practices with any lead_activity entries
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -110,7 +108,7 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 }
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [] }: Props) {
+export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [] }: Props) {
   const router = useRouter()
 
   // ---- REAL filter state ----
@@ -143,13 +141,10 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   const hasPriority = prioritySet.size > 0
   const [assignedView, setAssignedView] = useState<'all' | 'mine'>('all')
 
-  // Lookup sets for the Lead Pool tabs.
-  const newLeadSet    = useMemo(() => new Set(newLeadCodes),    [newLeadCodes])
-  const workedLeadSet = useMemo(() => new Set(workedLeadCodes), [workedLeadCodes])
-
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
   const [sourceTab, setSourceTab] = useState<'All' | 'Allocated' | 'Uploaded'>('All')
+  const [catTab, setCatTab] = useState('All Categories')
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -190,6 +185,11 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
+
+      // Category tab filter (All / MIPS / RCM / CCM)
+      if (catTab === 'MIPS' && !hasRealMips(p)) return false
+      if (catTab === 'RCM' && !p.rcmFit) return false
+      if (catTab === 'CCM' && !p.ccm) return false
       if (dispositionFilter && p.status !== dispositionFilter) return false
 
       // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
@@ -205,10 +205,6 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         if (sourceTab === 'Allocated' && !isAllocated) return false
         if (sourceTab === 'Uploaded' && isAllocated) return false
       }
-
-      // Pool tab filter (All Leads / New Leads / Worked Leads)
-      if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
-      if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
 
       // "My assigned" view: only leads assigned to me (priority).
       if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
@@ -226,7 +222,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -311,7 +307,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setSourceTab('All')
+    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
   return (
@@ -324,6 +320,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
+              <span key={t} style={pill(t === 'All Leads')}>{t}</span>
+            ))}
             <SampleTag />
           </div>
         </div>
@@ -369,16 +368,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage unassigned master records</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {(['All Leads', 'New Leads', 'Worked Leads'] as const).map((t) => {
-            let count: number | null = null
-            if (t === 'New Leads')    count = newLeadSet.size
-            if (t === 'Worked Leads') count = workedLeadSet.size
-            return (
-              <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>
-                {t}{count !== null ? ` (${count})` : ''}
-              </span>
-            )
-          })}
+          {['All Leads', 'New Leads', 'Worked Leads'].map((t) => (
+            <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>{t}</span>
+          ))}
         </div>
         {hasPriority && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -405,6 +397,11 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
               }}>
               {t === 'All' ? 'All Sources' : t}
             </span>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
+            <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
           ))}
         </div>
       </section>

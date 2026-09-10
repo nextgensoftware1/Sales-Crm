@@ -50,6 +50,7 @@ export default function Worksheet({ practiceCode, initial }: { practiceCode: str
   // Save the worksheet. Also logs an activity (disposition + call details as the note)
   // so Activity History records it, and creates a reminder if a callback is set.
   const save = async () => {
+    if (!callDetails.trim()) { setMsg('Call details are required before saving.'); return }
     setSaving(true); setMsg('')
     const res = await saveWorksheet(practiceCode, {
       callDetails, additionalPhone, email, concernedPerson, directLine, callbackAt, timezone, disposition,
@@ -87,12 +88,15 @@ export default function Worksheet({ practiceCode, initial }: { practiceCode: str
         Worksheet
       </h4>
 
+      <label className="lead-field-label" style={{ display: 'block', marginBottom: 6 }}>
+        Call Details <span style={{ color: 'var(--danger)' }}>*</span>
+      </label>
       <textarea
         value={callDetails} onChange={(e) => setCallDetails(e.target.value)}
         placeholder="Type call details, gating factors, next steps…"
         rows={3}
         className="lead-textarea"
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: 16, borderColor: !callDetails.trim() && msg ? 'var(--danger)' : undefined }}
       />
 
       <div className="grid-fields-2" style={{ marginBottom: 16 }}>

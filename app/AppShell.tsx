@@ -12,8 +12,9 @@ const NAV: NavItem[] = [
   { href: '/dashboard',     label: 'Dashboard',      icon: '◫' },
   { href: '/reminders',     label: 'My Reminders',   icon: '◷' },
   { href: '/clients',       label: 'Active Clients', icon: '◇' },
+  { href: '/transfers',     label: 'Transfers',      icon: '⇄' },
   { href: '/admin',         label: 'Admin',          icon: '⚙' },
-  { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },   // ← NEW (Super Admin only)
+  { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },
 ]
 
 // First letter of the first two words, e.g. "Hired Billing Support" -> "HB".
@@ -25,7 +26,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, headerRight = null,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, headerRight = null,
 }: {
   title: string
   subtitle?: string
@@ -33,11 +34,13 @@ export default function AppShell({
   active: string
   children: React.ReactNode
   showAdmin?: boolean
+  showTransfers?: boolean
   headerRight?: React.ReactNode
 }) {
-  // Both Admin and Deleted Leads are Super Admin only — controlled by same flag.
+  // Admin and Deleted Leads are Super Admin only; Transfers are visible when enabled.
   const items = NAV.filter((n) => {
     if (n.href === '/admin' || n.href === '/deleted-leads') return showAdmin
+    if (n.href === '/transfers') return showTransfers
     return true
   })
   const [menuOpen, setMenuOpen] = useState(false)

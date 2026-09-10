@@ -71,8 +71,8 @@ export async function logActivity(
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const { error } = await supabase.from('lead_activity').insert({
     practice_id: practice.id,
@@ -116,8 +116,8 @@ export async function setReminder(
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const { error } = await supabase.from('lead_reminders').insert({
     practice_id: practice.id,
@@ -191,8 +191,8 @@ export async function transferToCloser(
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const { error: tErr } = await supabase.from('lead_transfers').insert({
     practice_id: practice.id,
@@ -257,8 +257,8 @@ export async function markAsSold(
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const { data: sale, error: sErr } = await supabase
     .from('sales')

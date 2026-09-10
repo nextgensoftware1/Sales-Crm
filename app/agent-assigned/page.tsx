@@ -16,6 +16,7 @@ export default async function AgentAssignedLeadsPage() {
     .single()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
@@ -31,6 +32,7 @@ export default async function AgentAssignedLeadsPage() {
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
       headerRight={
         <a href="/" className="btn" style={{ textDecoration: 'none' }}>← Back to practices</a>
       }

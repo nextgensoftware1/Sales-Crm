@@ -39,7 +39,7 @@ export default async function DeletedLeads() {
 
   if (error) {
     return (
-      <AppShell title="Deleted Leads" subtitle="Super Admin only" currentUser={currentUser} active="/deleted-leads" showAdmin>
+      <AppShell title="Deleted Leads" subtitle="Super Admin only" currentUser={currentUser} active="/deleted-leads" showAdmin showTransfers>
         <div style={{ padding: 24, color: '#f66' }}>Error: {error.message}</div>
       </AppShell>
     )
@@ -100,6 +100,7 @@ export default async function DeletedLeads() {
       currentUser={currentUser}
       active="/deleted-leads"
       showAdmin
+      showTransfers
     >
       <DeletedLeadsTable rows={rows} />
     </AppShell>

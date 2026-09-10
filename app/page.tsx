@@ -21,6 +21,7 @@ export default async function Home() {
   // Super Admin can now upload too (leads owned by Platform).
   const canUpload = ['company_admin', 'manager', 'super_admin'].includes(roleKey)
   const canAssign = ['company_admin', 'manager', 'team_lead'].includes(roleKey)
+  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
@@ -390,6 +391,7 @@ export default async function Home() {
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
       headerRight={canUpload ? <UploadLeadsButton /> : null}
     >
       <PracticesTable
