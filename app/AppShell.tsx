@@ -8,21 +8,13 @@ import SignOutButton from './SignOutButton'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
-<<<<<<< HEAD
   { href: '/',              label: 'Leads Engine',   icon: '▤' },
   { href: '/dashboard',     label: 'Dashboard',      icon: '◫' },
   { href: '/reminders',     label: 'My Reminders',   icon: '◷' },
   { href: '/clients',       label: 'Active Clients', icon: '◇' },
+  { href: '/transfers',     label: 'Transfers',      icon: '⇄' },
   { href: '/admin',         label: 'Admin',          icon: '⚙' },
-  { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },   // ← NEW (Super Admin only)
-=======
-  { href: '/',          label: 'Leads Engine',   icon: '▤' },
-  { href: '/dashboard', label: 'Dashboard',      icon: '◫' },
-  { href: '/reminders', label: 'My Reminders',   icon: '◷' },
-  { href: '/clients',   label: 'Active Clients', icon: '◇' },
-  { href: '/transfers', label: 'Transfers',      icon: '⇄' },
-  { href: '/admin',     label: 'Admin',          icon: '⚙' },
->>>>>>> 54f7635 (mine)
+  { href: '/deleted-leads', label: 'Deleted Leads',  icon: '🗑' },
 ]
 
 // First letter of the first two words, e.g. "Hired Billing Support" -> "HB".
@@ -45,15 +37,12 @@ export default function AppShell({
   showTransfers?: boolean
   headerRight?: React.ReactNode
 }) {
-<<<<<<< HEAD
-  // Both Admin and Deleted Leads are Super Admin only — controlled by same flag.
+  // Admin and Deleted Leads are Super Admin only; Transfers are visible when enabled.
   const items = NAV.filter((n) => {
     if (n.href === '/admin' || n.href === '/deleted-leads') return showAdmin
+    if (n.href === '/transfers') return showTransfers
     return true
   })
-=======
-  const items = NAV.filter((n) => (n.href !== '/admin' || showAdmin) && (n.href !== '/transfers' || showTransfers))
->>>>>>> 54f7635 (mine)
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const pathname = usePathname()
