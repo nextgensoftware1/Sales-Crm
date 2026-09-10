@@ -38,8 +38,8 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     .from('master_practices')
     .select('id')
     .eq('practice_code', practiceCode)
-    .single()
-  if (!practice) return { ok: false, message: 'Practice not found.' }
+    .maybeSingle()
+  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
   const callbackIso = ws.callbackAt ? new Date(ws.callbackAt).toISOString() : null
 

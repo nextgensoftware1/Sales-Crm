@@ -50,9 +50,13 @@ export default async function RemindersPage() {
               <tr key={i}>
                 <td>{new Date(r.remind_at).toLocaleString()}</td>
                 <td>
-                  <a href={`/practice/${r.master_practices?.practice_code}`}>
-                    {r.master_practices?.name ?? '—'}
-                  </a>
+                  {r.master_practices ? (
+                    <a href={`/practice/${r.master_practices.practice_code}`}>
+                      {r.master_practices.name}
+                    </a>
+                  ) : (
+                    <span className="subtle" title="This practice was permanently deleted">— (deleted)</span>
+                  )}
                 </td>
                 <td>{r.note ?? '—'}</td>
               </tr>

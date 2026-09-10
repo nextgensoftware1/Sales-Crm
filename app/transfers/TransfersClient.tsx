@@ -94,7 +94,13 @@ export default function TransfersClient() {
                         {isOpen ? '▾' : '▸'}
                       </button>
                     </td>
-                    <td><a href={`/practice/${t.practiceCode}`}>{t.practiceName}</a></td>
+                    <td>
+                      {t.practiceDeleted ? (
+                        <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
+                      ) : (
+                        <a href={`/practice/${t.practiceCode}`}>{t.practiceName}</a>
+                      )}
+                    </td>
                     <td>{t.state ?? '—'}</td>
                     <td>{t.specialty ?? '—'}</td>
                     {showCompanyCol && <td>{t.companyName ?? '—'}</td>}
@@ -107,7 +113,9 @@ export default function TransfersClient() {
                     <tr key={`${t.id}-details`}>
                       <td></td>
                       <td colSpan={showCompanyCol ? 8 : 7} style={{ background: 'var(--surface-2)', padding: 16 }}>
-                        {!hasDetails ? (
+                        {t.practiceDeleted ? (
+                          <p className="subtle" style={{ margin: 0 }}>This lead was permanently deleted — no worksheet is available.</p>
+                        ) : !hasDetails ? (
                           <p className="subtle" style={{ margin: 0 }}>No worksheet has been filled in for this lead yet.</p>
                         ) : (
                           <div className="grid-fields-2" style={{ maxWidth: 900 }}>

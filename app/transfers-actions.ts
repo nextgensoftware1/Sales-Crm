@@ -10,7 +10,7 @@ const CAN_VIEW = ['company_admin', 'manager', 'team_lead', 'super_admin', 'agent
 
 export type Transfer = {
   id: string
-  practiceCode: string
+  practiceCode: string | null
   practiceName: string
   state: string | null
   specialty: string | null
@@ -19,6 +19,10 @@ export type Transfer = {
   companyName: string | null
   handoffStatus: string | null
   createdAt: string | null
+  // True when the underlying lead has since been permanently deleted — the
+  // transfer record itself is kept for audit history, but there's no live
+  // practice to link to or worksheet to show.
+  practiceDeleted: boolean
   // Worksheet snapshot — the full call record for this lead, so whoever is
   // reviewing the transfer can see exactly what was filled in, not just the
   // handoff status. This is the practice's current worksheet (the same
@@ -106,7 +110,26 @@ export async function getTransfers(): Promise<{
   const transfers: Transfer[] = rows
     .map((r: any) => {
       const p = practiceById[r.practice_id]
-      if (!p) return null
+      // Keep the transfer record even if the underlying lead has since been
+      // permanently deleted — it's still real history of who handed off
+      // what to whom, it just has nothing live to link to or show anymore.
+      if (!p) {
+        return {
+          id: r.id,
+          practiceCode: null,
+          practiceName: '(deleted lead)',
+          state: null,
+          specialty: null,
+          fromUserName: r.from_user_id ? (nameByUserId[r.from_user_id] ?? null) : null,
+          toUserName: r.to_user_id ? (nameByUserId[r.to_user_id] ?? null) : null,
+          companyName: (isSuperAdmin || isAgentOrCloser) ? (nameByTenantId[r.tenant_id] ?? null) : null,
+          handoffStatus: r.note ?? null,
+          createdAt: r.created_at ?? null,
+          practiceDeleted: true,
+          wsCallDetails: null, wsAdditionalPhone: null, wsEmail: null, wsConcernedPerson: null,
+          wsDirectLine: null, wsTimezone: null, wsDisposition: null, wsUpdatedAt: null,
+        }
+      }
       return {
         id: r.id,
         practiceCode: p.practice_code,
@@ -121,6 +144,7 @@ export async function getTransfers(): Promise<{
         companyName: (isSuperAdmin || isAgentOrCloser) ? (nameByTenantId[r.tenant_id] ?? null) : null,
         handoffStatus: r.note ?? null,
         createdAt: r.created_at ?? null,
+        practiceDeleted: false,
         wsCallDetails: p.ws_call_details ?? null,
         wsAdditionalPhone: p.ws_additional_phone ?? null,
         wsEmail: p.ws_email ?? null,
@@ -131,7 +155,6 @@ export async function getTransfers(): Promise<{
         wsUpdatedAt: p.ws_updated_at ?? null,
       }
     })
-    .filter(Boolean) as Transfer[]
 
   return { ok: true, transfers, scope }
 }

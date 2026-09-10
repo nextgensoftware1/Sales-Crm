@@ -66,9 +66,13 @@ export default async function ClientsPage() {
                 {clients.map((c: any, i) => (
                   <tr key={i}>
                     <td>
-                      <a href={`/practice/${c.master_practices?.practice_code}`}>
-                        {c.master_practices?.name ?? '—'}
-                      </a>
+                      {c.master_practices ? (
+                        <a href={`/practice/${c.master_practices.practice_code}`}>
+                          {c.master_practices.name}
+                        </a>
+                      ) : (
+                        <span className="subtle" title="This practice was permanently deleted">— (deleted)</span>
+                      )}
                     </td>
                     {isSuperAdmin && <td>{c.tenants?.name ?? '—'}</td>}
                     <td>{c.sales?.service_sold ?? '—'}</td>

@@ -144,6 +144,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // ---- placeholder-only UI state (sample) ----
   const [poolTab, setPoolTab] = useState('All Leads')
   const [sourceTab, setSourceTab] = useState<'All' | 'Allocated' | 'Uploaded'>('All')
+  const [catTab, setCatTab] = useState('All Categories')
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -184,6 +185,11 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
+
+      // Category tab filter (All / MIPS / RCM / CCM)
+      if (catTab === 'MIPS' && !hasRealMips(p)) return false
+      if (catTab === 'RCM' && !p.rcmFit) return false
+      if (catTab === 'CCM' && !p.ccm) return false
       if (dispositionFilter && p.status !== dispositionFilter) return false
 
       // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
@@ -216,7 +222,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, sourceTab, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, assignedView, prioritySet, hasPriority])
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -301,7 +307,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
-    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setSourceTab('All')
+    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
   return (
@@ -314,6 +320,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
+              <span key={t} style={pill(t === 'All Leads')}>{t}</span>
+            ))}
             <SampleTag />
           </div>
         </div>
@@ -388,6 +397,11 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
               }}>
               {t === 'All' ? 'All Sources' : t}
             </span>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
+            <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
           ))}
         </div>
       </section>

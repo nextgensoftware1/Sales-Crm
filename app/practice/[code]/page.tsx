@@ -85,15 +85,22 @@ export default async function PracticeDetail({
       )
     `)
     .eq('practice_code', code)
-    .single()
+    .maybeSingle()
 
+  // maybeSingle() returns { data: null, error: null } when the code matches
+  // nothing (e.g. it was permanently deleted, or the link is stale/incorrect)
+  // — no exception thrown. It only sets `error` for a genuine problem, such
+  // as more than one row sharing this practice_code (a real data issue).
   if (error || !practice) {
+    const notFoundReason = error
+      ? 'More than one record shares this practice code — this is a data issue, not a missing record. Please contact support.'
+      : 'This practice may have been permanently deleted, or the link is incorrect.'
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers}>
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
-          <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error?.message}</pre>
+          <p className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{notFoundReason}</p>
         </div>
       </AppShell>
     )
