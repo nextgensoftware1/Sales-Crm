@@ -24,20 +24,140 @@ const SCOPE_LABEL: Record<string, string> = {
   mine: "you've made or received",
 }
 
+// The shared expandable transfers table — used both for the flat view
+// (company/mine scope) and for a single company's transfers once Super
+// Admin has picked one from the company list.
+function TransfersTable({ rows, expanded, setExpanded }: {
+  rows: Transfer[]
+  expanded: string | null
+  setExpanded: (id: string | null) => void
+}) {
+  if (rows.length === 0) return <p className="subtle">No transfers here yet.</p>
+  return (
+    <div className="tbl-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th style={{ fontSize: 10 }}>Details</th>
+            <th>Practice</th>
+            <th>State</th>
+            <th>Specialty</th>
+            <th>From</th>
+            <th>To (Closer)</th>
+            <th>Handoff Status</th>
+            <th>Transferred On</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((t) => {
+            const isOpen = expanded === t.id
+            const hasDetails = !!(t.wsCallDetails || t.wsAdditionalPhone || t.wsEmail || t.wsConcernedPerson || t.wsDirectLine)
+            return (
+              <Fragment key={t.id}>
+                <tr
+                  className="leads-row"
+                  onClick={() => setExpanded(isOpen ? null : t.id)}
+                  style={{ cursor: 'pointer' }}
+                  title={isOpen ? 'Click to hide worksheet details' : 'Click to view worksheet details'}
+                >
+                  <td>
+                    <span style={{ display: 'inline-flex', padding: '2px 8px', color: 'var(--muted)' }}>
+                      {isOpen ? '▾' : '▸'}
+                    </span>
+                  </td>
+                  <td>
+                    {t.practiceDeleted ? (
+                      <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
+                    ) : (
+                      <a href={`/practice/${t.practiceCode}`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</a>
+                    )}
+                  </td>
+                  <td>{t.state ?? '—'}</td>
+                  <td>{t.specialty ?? '—'}</td>
+                  <td>{t.fromUserName ?? '—'}</td>
+                  <td>{t.toUserName ?? '—'}</td>
+                  <td>{statusPill(t.handoffStatus)}</td>
+                  <td style={{ fontSize: 12 }}>{fmt(t.createdAt)}</td>
+                </tr>
+                {isOpen && (
+                  <tr key={`${t.id}-details`}>
+                    <td></td>
+                    <td colSpan={7} style={{ background: 'var(--surface-2)', padding: 16 }}>
+                      {t.practiceDeleted ? (
+                        <p className="subtle" style={{ margin: 0 }}>This lead was permanently deleted — no worksheet is available.</p>
+                      ) : !hasDetails ? (
+                        <p className="subtle" style={{ margin: 0 }}>No worksheet has been filled in for this lead yet.</p>
+                      ) : (
+                        <div className="grid-fields-2" style={{ maxWidth: 900 }}>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <label className="lead-field-label">Call Details</label>
+                            <div className="lead-field-value" style={{ whiteSpace: 'pre-wrap', height: 'auto', minHeight: 28 }}>
+                              {t.wsCallDetails || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Additional Phone</label>
+                            <div className="lead-field-value">{t.wsAdditionalPhone || '—'}</div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Email</label>
+                            <div className="lead-field-value">{t.wsEmail || '—'}</div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Concerned Person</label>
+                            <div className="lead-field-value">{t.wsConcernedPerson || '—'}</div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Direct Line</label>
+                            <div className="lead-field-value">{t.wsDirectLine || '—'}</div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Timezone</label>
+                            <div className="lead-field-value">{t.wsTimezone || '—'}</div>
+                          </div>
+                          <div>
+                            <label className="lead-field-label">Disposition</label>
+                            <div className="lead-field-value">{t.wsDisposition || '—'}</div>
+                          </div>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <span className="subtle" style={{ fontSize: 11 }}>Worksheet last updated {fmt(t.wsUpdatedAt)}</span>
+                          </div>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function TransfersClient() {
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [scope, setScope] = useState<'all' | 'company' | 'mine'>('company')
+  const [allCompanies, setAllCompanies] = useState<{ id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [selectedCompany, setSelectedCompany] = useState<string>('')
 
   useEffect(() => {
     (async () => {
       setLoading(true)
       const res = await getTransfers()
       if (res.ok) {
-        setTransfers(res.transfers ?? [])
+        const rows = res.transfers ?? []
+        setTransfers(rows)
         setScope(res.scope ?? 'company')
+        if (res.scope === 'all') {
+          const companies = res.allCompanies ?? []
+          setAllCompanies(companies)
+          if (companies.length > 0) setSelectedCompany(companies[0].name)
+        }
       } else {
         setMsg(res.message ?? 'Could not load transfers.')
       }
@@ -47,6 +167,64 @@ export default function TransfersClient() {
 
   if (loading) return <p className="subtle">Loading…</p>
   if (msg) return <p className="subtle">{msg}</p>
+
+  // Super Admin: company-first drill-down, matching the same list+detail
+  // pattern as Agent Assigned Leads — pick a company, see its transfers.
+  // Every registered company shows up here, even ones with zero transfers
+  // so far, since the list comes from the real company roster, not just
+  // from whichever companies happen to already have a transfer.
+  if (scope === 'all') {
+    if (allCompanies.length === 0) {
+      return (
+        <div className="card">
+          <p className="subtle">No companies are registered yet.</p>
+        </div>
+      )
+    }
+    const byCompany = new Map<string, Transfer[]>()
+    for (const t of transfers) {
+      const key = t.companyName ?? 'Unknown Company'
+      if (!byCompany.has(key)) byCompany.set(key, [])
+      byCompany.get(key)!.push(t)
+    }
+    const currentRows = byCompany.get(selectedCompany) ?? []
+
+    return (
+      <div className="grid-2-sidebar-sm">
+        <div className="card" style={{ padding: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px 10px' }}>
+            Companies
+          </div>
+          {allCompanies.map(({ id, name }) => {
+            const count = byCompany.get(name)?.length ?? 0
+            const isSelected = selectedCompany === name
+            return (
+              <button
+                key={id}
+                onClick={() => { setSelectedCompany(name); setExpanded(null) }}
+                style={{
+                  width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  background: isSelected ? 'var(--surface-2)' : 'transparent',
+                  border: `1px solid ${isSelected ? 'var(--accent)' : 'transparent'}`,
+                  color: 'var(--ink)', borderRadius: 8, padding: '10px 12px', marginBottom: 4, cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: 14, fontWeight: 600 }}>{name}</span>
+                <span className={count > 0 ? 'badge badge-blue' : 'badge badge-grey'}>{count}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="card">
+          <div className="subtle" style={{ marginBottom: 10 }}>
+            {currentRows.length} transfer{currentRows.length === 1 ? '' : 's'} for {selectedCompany}
+          </div>
+          <TransfersTable rows={currentRows} expanded={expanded} setExpanded={setExpanded} />
+        </div>
+      </div>
+    )
+  }
+
   if (transfers.length === 0) {
     return (
       <div className="card">
@@ -55,114 +233,14 @@ export default function TransfersClient() {
     )
   }
 
-  const showCompanyCol = scope !== 'company'
-
+  // Company role or agent/closer: already scoped to one company (or just
+  // themselves) — a flat table is all that's needed, no grouping.
   return (
     <div className="card">
       <div className="subtle" style={{ marginBottom: 10 }}>
         {transfers.length} transfer{transfers.length === 1 ? '' : 's'} {SCOPE_LABEL[scope]}
       </div>
-      <div className="tbl-wrap">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Practice</th>
-              <th>State</th>
-              <th>Specialty</th>
-              {showCompanyCol && <th>Company</th>}
-              <th>From</th>
-              <th>To (Closer)</th>
-              <th>Handoff Status</th>
-              <th>Transferred On</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transfers.map((t) => {
-              const isOpen = expanded === t.id
-              const hasDetails = !!(t.wsCallDetails || t.wsAdditionalPhone || t.wsEmail || t.wsConcernedPerson || t.wsDirectLine)
-              return (
-                <Fragment key={t.id}>
-                  <tr>
-                    <td>
-                      <button
-                        onClick={() => setExpanded(isOpen ? null : t.id)}
-                        className="lead-quickbtn"
-                        title={isOpen ? 'Hide worksheet details' : 'View worksheet details'}
-                        style={{ padding: '2px 8px' }}
-                      >
-                        {isOpen ? '▾' : '▸'}
-                      </button>
-                    </td>
-                    <td>
-                      {t.practiceDeleted ? (
-                        <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
-                      ) : (
-                        <a href={`/practice/${t.practiceCode}`}>{t.practiceName}</a>
-                      )}
-                    </td>
-                    <td>{t.state ?? '—'}</td>
-                    <td>{t.specialty ?? '—'}</td>
-                    {showCompanyCol && <td>{t.companyName ?? '—'}</td>}
-                    <td>{t.fromUserName ?? '—'}</td>
-                    <td>{t.toUserName ?? '—'}</td>
-                    <td>{statusPill(t.handoffStatus)}</td>
-                    <td style={{ fontSize: 12 }}>{fmt(t.createdAt)}</td>
-                  </tr>
-                  {isOpen && (
-                    <tr key={`${t.id}-details`}>
-                      <td></td>
-                      <td colSpan={showCompanyCol ? 8 : 7} style={{ background: 'var(--surface-2)', padding: 16 }}>
-                        {t.practiceDeleted ? (
-                          <p className="subtle" style={{ margin: 0 }}>This lead was permanently deleted — no worksheet is available.</p>
-                        ) : !hasDetails ? (
-                          <p className="subtle" style={{ margin: 0 }}>No worksheet has been filled in for this lead yet.</p>
-                        ) : (
-                          <div className="grid-fields-2" style={{ maxWidth: 900 }}>
-                            <div style={{ gridColumn: '1 / -1' }}>
-                              <label className="lead-field-label">Call Details</label>
-                              <div className="lead-field-value" style={{ whiteSpace: 'pre-wrap', height: 'auto', minHeight: 28 }}>
-                                {t.wsCallDetails || '—'}
-                              </div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Additional Phone</label>
-                              <div className="lead-field-value">{t.wsAdditionalPhone || '—'}</div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Email</label>
-                              <div className="lead-field-value">{t.wsEmail || '—'}</div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Concerned Person</label>
-                              <div className="lead-field-value">{t.wsConcernedPerson || '—'}</div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Direct Line</label>
-                              <div className="lead-field-value">{t.wsDirectLine || '—'}</div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Timezone</label>
-                              <div className="lead-field-value">{t.wsTimezone || '—'}</div>
-                            </div>
-                            <div>
-                              <label className="lead-field-label">Disposition</label>
-                              <div className="lead-field-value">{t.wsDisposition || '—'}</div>
-                            </div>
-                            <div style={{ gridColumn: '1 / -1' }}>
-                              <span className="subtle" style={{ fontSize: 11 }}>Worksheet last updated {fmt(t.wsUpdatedAt)}</span>
-                            </div>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+      <TransfersTable rows={transfers} expanded={expanded} setExpanded={setExpanded} />
     </div>
   )
 }

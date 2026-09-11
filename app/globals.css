@@ -112,7 +112,7 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 .sidebar { width: 260px; background: var(--sidebar); color: var(--sidebar-ink);
   display: flex; flex-direction: column;
   position: fixed; left: 0; top: 0; height: 100vh; height: 100dvh;
-  border-right: 1px solid var(--sidebar-border); z-index: 45; transition: transform .25s ease; }
+  border-right: 1px solid var(--sidebar-border); z-index: 45; transition: transform .25s ease, width .25s ease; }
 .sidebar-brand { height: 72px; padding: 0 20px; font-size: 17px; font-weight: 800; color: var(--sidebar-brand);
   border-bottom: 1px solid var(--sidebar-border); line-height: 1.2; flex-shrink: 0;
   display: flex; align-items: center; gap: 12px; }
@@ -175,6 +175,29 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 .topbar-signout { width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--muted); cursor: pointer; border-radius: 0; transition: background .15s, color .15s; }
 .topbar-signout:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
+
+/* ---- Notification bell ---- */
+.topbar-bell { position: relative; width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--ink); cursor: pointer; border-radius: 0; transition: border-color .15s; }
+.topbar-bell:hover { border-color: var(--accent); }
+.topbar-bell-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+  background: var(--danger); color: #fff; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+  border-radius: 999px; border: 1px solid var(--surface); }
+.topbar-bell-panel { position: absolute; top: calc(100% + 8px); right: 0; width: 320px; max-width: calc(100vw - 32px);
+  background: var(--surface); border: 1px solid var(--border-dim); z-index: 60; max-height: 420px; overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.35); }
+.topbar-bell-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 12px 14px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-strong);
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+.topbar-bell-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; text-decoration: none; color: inherit;
+  border-bottom: 1px solid var(--border); transition: background .15s; }
+.topbar-bell-row:hover { background: var(--surface-2); }
+.topbar-bell-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.topbar-bell-dot.overdue { background: var(--danger); }
+.topbar-bell-viewall { display: block; text-align: center; padding: 10px 14px; font-size: 12.5px; font-weight: 700;
+  color: var(--accent); text-decoration: none; }
+.topbar-bell-viewall:hover { background: var(--surface-2); }
+
 .content { padding: 28px; min-width: 0; max-width: 100%; overflow-x: hidden; }
 .menu-toggle { display: none; background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
   border-radius: 0; width: 36px; height: 36px; flex-shrink: 0; cursor: pointer; font-size: 16px; align-items: center; justify-content: center; }
@@ -182,12 +205,21 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
   border-radius: 0; width: 36px; height: 36px; flex-shrink: 0; cursor: pointer; align-items: center; justify-content: center; }
 .desktop-collapse:hover { border-color: var(--accent); }
 
-/* Desktop sidebar collapse — hides the sidebar entirely and lets content take
-   the full width. Independent of the mobile drawer (menuOpen), which uses its
-   own transform on .sidebar.open below 900px. */
+/* Desktop sidebar collapse — shrinks the sidebar to a compact icon rail
+   (nav icons + brand mark + avatar stay visible; labels hide) rather than
+   sliding the whole sidebar off-screen. Independent of the mobile drawer
+   (menuOpen), which uses its own transform on .sidebar.open below 900px. */
 @media (min-width: 901px) {
-  .app-shell.sidebar-collapsed .sidebar { transform: translateX(-100%); }
-  .app-shell.sidebar-collapsed .main-col { margin-left: 0; }
+  .app-shell.sidebar-collapsed .sidebar { width: 72px; }
+  .app-shell.sidebar-collapsed .main-col { margin-left: 72px; }
+  .app-shell.sidebar-collapsed .sidebar-brand { padding: 0; justify-content: center; }
+  .app-shell.sidebar-collapsed .sidebar-brand-close-row { display: none; }
+  .app-shell.sidebar-collapsed .nav-item { justify-content: center; padding: 0; gap: 0; }
+  .app-shell.sidebar-collapsed .nav-label { display: none; }
+  .app-shell.sidebar-collapsed .sidebar-user { justify-content: center; padding: 16px 0; }
+  .app-shell.sidebar-collapsed .sidebar-user-text { display: none; }
+  .app-shell.sidebar-collapsed .sidebar-signout { justify-content: center; gap: 0; padding: 14px 0; }
+  .app-shell.sidebar-collapsed .sidebar-signout span { display: none; }
 }
 
 /* ---- Responsive: tablet & mobile ---- */

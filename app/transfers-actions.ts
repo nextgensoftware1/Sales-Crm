@@ -39,6 +39,10 @@ export type Transfer = {
 
 export async function getTransfers(): Promise<{
   ok: boolean; message?: string; transfers?: Transfer[]; scope?: 'all' | 'company' | 'mine'
+  // Every registered company, for Super Admin's company-first view — so a
+  // company with zero transfers still shows up (with a 0 count) instead of
+  // silently vanishing from the list.
+  allCompanies?: { id: string; name: string }[]
 }> {
   const supabase = await createSupabaseServer()
 
@@ -59,6 +63,14 @@ export async function getTransfers(): Promise<{
   const myUserId = (me as any)?.id
   const scope: 'all' | 'company' | 'mine' = isSuperAdmin ? 'all' : isAgentOrCloser ? 'mine' : 'company'
 
+  // Super Admin sees the full company roster regardless of whether every
+  // company has a transfer yet — fetched independently of the transfer rows.
+  let allCompanies: { id: string; name: string }[] | undefined
+  if (isSuperAdmin) {
+    const { data: tenants } = await supabase.from('tenants').select('id, name').order('name')
+    allCompanies = (tenants ?? []) as any[]
+  }
+
   // Base transfer rows, scoped per role.
   let transferQ = supabase
     .from('lead_transfers')
@@ -71,7 +83,7 @@ export async function getTransfers(): Promise<{
   }
   const { data: rows, error } = await transferQ
   if (error) return { ok: false, message: error.message }
-  if (!rows || rows.length === 0) return { ok: true, transfers: [], scope }
+  if (!rows || rows.length === 0) return { ok: true, transfers: [], scope, allCompanies }
 
   // Batch-resolve practice (incl. worksheet fields), user, and tenant names —
   // same pattern as getAgentAssignedLeads: separate lookups by collected IDs.
@@ -156,6 +168,6 @@ export async function getTransfers(): Promise<{
       }
     })
 
-  return { ok: true, transfers, scope }
+  return { ok: true, transfers, scope, allCompanies }
 }
 

@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import ThemeToggle from './ThemeToggle'
 import SignOutButton from './SignOutButton'
+import NotificationBell from './NotificationBell'
 
 type NavItem = { href: string; label: string; icon: string }
 const NAV: NavItem[] = [
@@ -44,7 +45,7 @@ export default function AppShell({
     return true
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  const [sidebarVisible, setSidebarVisible] = useState(true)
+  const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const pathname = usePathname()
 
   // Close the mobile drawer whenever the route changes (adjust state during
@@ -65,7 +66,7 @@ export default function AppShell({
   }, [menuOpen])
 
   return (
-    <div className={'app-shell' + (sidebarVisible ? '' : ' sidebar-collapsed')}>
+    <div className={'app-shell' + (sidebarExpanded ? '' : ' sidebar-collapsed')}>
       <div
         className={'sidebar-backdrop' + (menuOpen ? ' open' : '')}
         onClick={() => setMenuOpen(false)}
@@ -73,7 +74,7 @@ export default function AppShell({
       />
       <aside className={'sidebar' + (menuOpen ? ' open' : '')}>
         <div className="sidebar-brand">
-          <div className="sidebar-mark" aria-hidden="true">HB</div>
+          <div className="sidebar-mark" aria-hidden="true" title="Hired Billing Support">HB</div>
           <div className="sidebar-brand-close-row">
             <span className="sidebar-brand-text">Hired Billing Support<small>Practice Revenue CRM</small></span>
             <button
@@ -88,15 +89,15 @@ export default function AppShell({
         </div>
         <nav className="sidebar-nav">
           {items.map((n) => (
-            <Link key={n.href} href={n.href} className={'nav-item' + (active === n.href ? ' active' : '')}>
-              <span className="ico">{n.icon}</span>{n.label}
+            <Link key={n.href} href={n.href} className={'nav-item' + (active === n.href ? ' active' : '')} title={n.label}>
+              <span className="ico">{n.icon}</span><span className="nav-label">{n.label}</span>
             </Link>
           ))}
         </nav>
         <div className="sidebar-foot">
           {currentUser && (
             <div className="sidebar-user">
-              <div className="sidebar-avatar" aria-hidden="true">{initials(currentUser.full_name)}</div>
+              <div className="sidebar-avatar" aria-hidden="true" title={currentUser.full_name}>{initials(currentUser.full_name)}</div>
               <div className="sidebar-user-text">
                 <b>{currentUser.full_name}</b>
                 <span>{currentUser.role}</span>
@@ -119,12 +120,12 @@ export default function AppShell({
             </button>
             <button
               className="desktop-collapse"
-              onClick={() => setSidebarVisible((v) => !v)}
-              aria-label={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-              title={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+              onClick={() => setSidebarExpanded((v) => !v)}
+              aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+              title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
               type="button"
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ transform: sidebarVisible ? 'none' : 'scaleX(-1)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ transform: sidebarExpanded ? 'none' : 'scaleX(-1)' }}>
                 <rect width="18" height="18" x="3" y="3" rx="0" />
                 <path d="M9 3v18" />
               </svg>
@@ -137,6 +138,7 @@ export default function AppShell({
           <div className="topbar-right">
             {headerRight}
             <ThemeToggle />
+            {currentUser && <NotificationBell />}
             {currentUser && (
               <div className="top-user">
                 <div className="who"><b>{currentUser.full_name}</b>{currentUser.role}</div>
