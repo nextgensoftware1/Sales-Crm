@@ -34,6 +34,23 @@ function mipsBucket(reportingOption?: string | null): 'individual' | 'group' | '
   return 'non'
 }
 
+// Pull the 2026 status out of a MIPS_By_Year style string.
+// Example inputs:
+//   "2026 - Individual"                         → "Individual"
+//   "2025 - Group | 2026 - Individual"          → "Individual"
+//   "2026 - Excluded - low volume / No record"  → "Excluded - low volume / No record"
+//   "2024 - Group"                              → "" (no 2026 mention)
+// Returns "" if 2026 not present.
+function mips2026(reportingOption?: string | null): string {
+  if (!reportingOption) return ''
+  const text = reportingOption.toString()
+  if (!text.includes('2026')) return ''
+  // Try common patterns: "2026 - X", "2026: X", "2026 X"
+  const match = text.match(/2026\s*[-:]?\s*([^|;\n]+)/i)
+  if (match && match[1]) return match[1].trim()
+  return 'Yes'
+}
+
 export default async function PracticeDetail({
   params,
 }: {
@@ -50,15 +67,12 @@ export default async function PracticeDetail({
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
   let myTenantId: string | null = null
-  let myUserId: string | null = null
-  let roleKey = ''
-  let showTransfers = false
   try {
     const { data: { user: authUser } } = await supabase.auth.getUser()
     if (authUser) {
       const { data: me } = await supabase
         .from('users')
-        .select('id, full_name, tenant_id, roles(key, label), tenants(name)')
+        .select('full_name, tenant_id, roles(key, label), tenants(name)')
         .eq('auth_id', authUser.id)
         .single()
       if (me) {
@@ -67,11 +81,8 @@ export default async function PracticeDetail({
           role: (me as any).roles?.label ?? 'Unknown',
           company: (me as any).tenants?.name ?? '',
         }
-        roleKey = (me as any).roles?.key ?? ''
-        isSuperAdmin = roleKey === 'super_admin'
+        isSuperAdmin = (me as any).roles?.key === 'super_admin'
         myTenantId = (me as any).tenant_id ?? null
-        myUserId = (me as any).id ?? null
-        showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
       }
     }
   } catch {
@@ -91,7 +102,10 @@ export default async function PracticeDetail({
       ws_updated_at, ws_updated_by,
       practice_providers (
         providers (
-          npi, name, credential, taxonomy_desc, addr1, city, state, postal, phone, org_name,
+          npi, name, org_name, credential, taxonomy_code, taxonomy_desc,
+          addr1, city, state, postal, phone,
+          status, mailing_phone, entity_type, is_anchor,
+          org_pac_id, num_org_members, payment_adj_pct,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
         )
@@ -122,71 +136,18 @@ export default async function PracticeDetail({
     }
   }
 
-  // ---- Authorization: does this signed-in user actually have access to
-  // this lead? Being logged in is not enough — the same rule the main Leads
-  // Engine pool already enforces applies here too, or anyone could open any
-  // lead just by knowing/guessing its URL. Fails CLOSED: unrecognized roles
-  // see nothing. A failed check renders the exact same "not found" card
-  // used for a genuinely missing practice, so this page never reveals
-  // whether a lead exists that the viewer isn't allowed to see.
-  let authorized = false
-  if (practice) {
-    if (isSuperAdmin) {
-      authorized = true
-    } else if (roleKey === 'agent' || roleKey === 'closer') {
-      // Same rule as the main pool: leads directly assigned to me, plus —
-      // for closers — leads a transfer has sent to me.
-      const idSet = new Set<string>()
-      if (myUserId) {
-        const { data: assigns } = await supabase
-          .from('lead_assignments')
-          .select('practice_id')
-          .eq('assigned_to', myUserId)
-          .eq('status', 'active')
-        for (const a of (assigns ?? []) as any[]) if (a.practice_id) idSet.add(a.practice_id)
-
-        if (roleKey === 'closer') {
-          const { data: transfers } = await supabase
-            .from('lead_transfers')
-            .select('practice_id')
-            .eq('to_user_id', myUserId)
-          for (const t of (transfers ?? []) as any[]) if (t.practice_id) idSet.add(t.practice_id)
-        }
-      }
-      authorized = rows.some((r) => idSet.has(r.id))
-    } else if (myTenantId) {
-      // Company roles (company_admin / manager / team_lead): visible if
-      // they own this practice themselves, or their company has it
-      // allocated — matched by practice_code, same as the main pool, since
-      // an allocation points at the Platform copy while the company may be
-      // viewing its own separate copy of the same code.
-      const ownsIt = rows.some((r) => r.owner_tenant_id === myTenantId)
-      let allocatedToMe = false
-      if (!ownsIt) {
-        const { data: allocs } = await supabase
-          .from('lead_allocations')
-          .select('id, master_practices(practice_code)')
-          .eq('tenant_id', myTenantId)
-          .eq('status', 'active')
-        allocatedToMe = (allocs ?? []).some((a: any) => a.master_practices?.practice_code === code)
-      }
-      authorized = ownsIt || allocatedToMe
-    }
-  }
-
-  if (!authorized) practice = null
-
   if (error || !practice) {
     return (
-      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers}>
+      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin}>
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
-          <p className="subtle" style={{ marginTop: 12 }}>
-            {error
-              ? 'Something went wrong looking this practice up. Please try again, or contact support if it persists.'
-              : `No practice with code "${code}" is visible to you. It may not be allocated or assigned to you, may have been permanently deleted, or the link is incorrect.`}
+          <p style={{ marginTop: 12, color: 'var(--muted)' }}>
+            {rows.length === 0
+              ? `No practice with code "${code}" is visible to you.`
+              : `Found ${rows.length} matches but could not choose one.`}
           </p>
+          {error?.message && <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error.message}</pre>}
         </div>
       </AppShell>
     )
@@ -224,24 +185,66 @@ export default async function PracticeDetail({
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
 
-  // Show the organization name at the top when this practice/clinician is
-  // affiliated with one (from NPPES provider data). Falls back to the
-  // practice/clinician's own name for solo practices with no organization.
-  const orgName: string | null = providersList
-    .map((prov) => (prov?.org_name ?? '').toString().trim())
-    .find((n) => n.length > 0) || null
-  const displayTitle = orgName || practice.name
+  // ---- Total Provider count from the org roster ----
+  // The practice_providers link table only has direct links (typically 1 anchor row
+  // per practice from CSV upload). But the full ORGANIZATION roster is stored across
+  // the providers table under the same org_pac_id (added via CMS Doctors & Clinicians
+  // enrichment). So count everyone sharing the same org_pac_id — that's the real roster.
+  let totalProviders = providersList.length   // fallback: at least the direct links
+  if (primaryProvider?.org_pac_id) {
+    const { count: rosterCount } = await supabase
+      .from('providers')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_pac_id', primaryProvider.org_pac_id)
+    if (rosterCount && rosterCount > totalProviders) totalProviders = rosterCount
+  }
+
+  // ---- NPI Type detection ----
+  // Determines whether the provider is Type 1 (individual) or Type 2 (organization).
+  //   1. Primary source: providers.entity_type from NPPES (e.g. "NPI-1" / "NPI-2")
+  //   2. Fallback: providers.is_anchor — auto-detected during upload from the
+  //      presence of BOTH PECOS_ASCT_CNTL_ID and ENRLMT_ID, which indicates a
+  //      billing organization (Type 2). Anything else is treated as Type 1.
+  const entityTypeRaw = (primaryProvider?.entity_type ?? '').toString().trim().toLowerCase()
+  const isAnchor      = !!primaryProvider?.is_anchor
+
+  let isNpiType2 = false
+  let isNpiType1 = false
+  if (entityTypeRaw) {
+    isNpiType2 = entityTypeRaw.includes('2') || entityTypeRaw.includes('org')
+    isNpiType1 = entityTypeRaw.includes('1') || entityTypeRaw.includes('ind')
+  } else if (primaryProvider) {
+    // No entity_type — infer from is_anchor.
+    isNpiType2 = isAnchor
+    isNpiType1 = !isAnchor
+  }
+  const npiType2Value = isNpiType2 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
+  const npiType1Value = isNpiType1 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
+
+  // ---- KPI values for the 4 top tiles ----
+  // MIPS: parse the 2026 status out of the primary provider's reporting_option.
+  const primaryMipsRows: any[] = Array.isArray(primaryProvider?.provider_mips)
+    ? primaryProvider.provider_mips
+    : (primaryProvider?.provider_mips ? [primaryProvider.provider_mips] : [])
+  const primaryReportingOption = primaryMipsRows[0]?.reporting_option
+  const mips2026Value = mips2026(primaryReportingOption) || '—'
+
+  // Penalty: use the primary provider's payment_adj_pct (already text like "1.88%").
+  const penaltyValue = (primaryProvider?.payment_adj_pct ?? '').toString().trim() || '—'
 
   // Aggregate MIPS eligibility + CCM qualification across ALL providers at this practice.
+  // MIPS categorization uses ONLY the 2026 year — older years are ignored so the
+  // buckets reflect current eligibility, not historical status.
   let mipsIndividual = 0, mipsGroup = 0, mipsNonEligible = 0
   let anyCcm = false
   for (const prov of providersList) {
     const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
     const reportingOption = mipsRows[0]?.reporting_option
-    const bucket = mipsBucket(reportingOption)
-    if (bucket === 'individual') mipsIndividual++
-    else if (bucket === 'group') mipsGroup++
-    else mipsNonEligible++
+    // Extract just the 2026 portion so bucketing only reflects 2026 status.
+    const status2026 = mips2026(reportingOption).toLowerCase()
+    if (status2026.includes('individual')) mipsIndividual++
+    else if (status2026.includes('group') || status2026.includes('apm')) mipsGroup++
+    else mipsNonEligible++     // includes '', 'excluded', 'no record', etc.
     if (prov.provider_signals?.ccm) anyCcm = true
   }
 
@@ -281,7 +284,6 @@ export default async function PracticeDetail({
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
-      showTransfers={showTransfers}
     >
       <div className="lead-page">
         {/* ---- Header: back / pager / title+badges / address+phone ---- */}
@@ -306,7 +308,7 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <div className="lead-title-row">
-                  <h2 className="lead-title">{displayTitle}</h2>
+                  <h2 className="lead-title">{primaryProvider?.org_name || '—'}</h2>
                   <span className="lead-code">{practice.practice_code}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
@@ -328,29 +330,61 @@ export default async function PracticeDetail({
             </div>
           </div>
 
-          {/* ---- Contact fields (worksheet-adjacent, read-only summary) ---- */}
+          {/* ---- Contact fields: mapped from NPPES provider data ---- */}
           <div className="lead-fields-panel" style={{ marginTop: 16 }}>
             <div className="lead-fields-grid">
-              <div><span className="lead-field-label">Additional Phone</span><div className="lead-field-value">{worksheetInitial.additionalPhone || '—'}</div></div>
-              <div><span className="lead-field-label">Additional Email</span><div className="lead-field-value">{worksheetInitial.email || '—'}</div></div>
-              <div><span className="lead-field-label">Contact Person</span><div className="lead-field-value">{worksheetInitial.concernedPerson || '—'}</div></div>
-              <div><span className="lead-field-label">Contact Phone</span><div className="lead-field-value">—</div></div>
-              <div><span className="lead-field-label">Direct Line</span><div className="lead-field-value">{worksheetInitial.directLine || '—'}</div></div>
-              <div><span className="lead-field-label">Contact Email</span><div className="lead-field-value">—</div></div>
+              <div>
+                <span className="lead-field-label">Additional Phone</span>
+                <div className="lead-field-value">{primaryProvider?.phone || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_Status</span>
+                <div className="lead-field-value">{primaryProvider?.status || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_PrimaryTaxonomyCode</span>
+                <div className="lead-field-value">{primaryProvider?.taxonomy_code || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">Contact Phone</span>
+                <div className="lead-field-value">{primaryProvider?.mailing_phone || '—'}</div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* ---- Stat row ---- */}
+        {/* ---- Stat row (4 tiles — Patients/Impact/Allowed/CCM Opp hidden until wired up) ---- */}
         <div className="lead-stats-grid">
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">MIPS</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">Penalty</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">Patients</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">Impact</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">{providersList.length}</span><span className="lead-stat-label">Providers</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">Allowed</span></div>
-          <div className="lead-stat"><span className={`lead-stat-value${anyCcm ? ' good' : ''}`}>{anyCcm ? 'Yes' : 'No'}</span><span className="lead-stat-label">CCM</span></div>
-          <div className="lead-stat"><span className="lead-stat-value">—</span><span className="lead-stat-label">CCM Opp</span></div>
+          <div className="lead-stat" title={mips2026Value}>
+            <span
+              className="lead-stat-value"
+              style={{
+                fontSize: mips2026Value.length > 12 ? 11 : undefined,
+                lineHeight: 1.3,
+                whiteSpace: 'normal',
+                overflow: 'visible',
+                textOverflow: 'clip',
+                display: 'block',
+                textAlign: 'center',
+                fontWeight: 700,
+              }}
+            >
+              {mips2026Value}
+            </span>
+            <span className="lead-stat-label">MIPS 2026</span>
+          </div>
+          <div className="lead-stat">
+            <span className="lead-stat-value">{penaltyValue}</span>
+            <span className="lead-stat-label">Penalty</span>
+          </div>
+          <div className="lead-stat">
+            <span className="lead-stat-value">{totalProviders}</span>
+            <span className="lead-stat-label">Providers</span>
+          </div>
+          <div className="lead-stat">
+            <span className={`lead-stat-value${anyCcm ? ' good' : ''}`}>{anyCcm ? 'Yes' : 'No'}</span>
+            <span className="lead-stat-label">CCM</span>
+          </div>
         </div>
 
         {/* ---- Two-column: Practice Profile | Worksheet ---- */}
@@ -364,8 +398,9 @@ export default async function PracticeDetail({
                 </h4>
               </div>
 
-              <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{primaryProvider?.npi ?? 'N/A'}</span></div>
-              <div className="lead-kv"><span>Org PAC ID</span><span className="mono">N/A</span></div>
+              <div className="lead-kv"><span>NPI Type 1</span><span className="mono">{npiType1Value}</span></div>
+              <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{npiType2Value}</span></div>
+              <div className="lead-kv"><span>Org PAC ID</span><span className="mono">{primaryProvider?.org_pac_id || 'N/A'}</span></div>
 
               <div className="lead-divider">
                 <span className="lead-subhead">Authorized Official</span>
@@ -423,7 +458,9 @@ export default async function PracticeDetail({
                 {providersList.map((prov: any) => {
                   const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
                   const reportingOption = mipsRows[0]?.reporting_option
-                  const eligible = hasRealMips(reportingOption)
+                  // Eligibility badge reflects 2026 specifically.
+                  const status2026 = mips2026(reportingOption).toLowerCase()
+                  const eligible = status2026.includes('individual') || status2026.includes('group') || status2026.includes('apm')
                   return (
                     <div key={prov.npi} className="lead-provider-card">
                       <div className="lead-provider-top">
