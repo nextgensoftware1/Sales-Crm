@@ -27,7 +27,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, headerRight = null,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null,
 }: {
   title: string
   subtitle?: string
@@ -36,11 +36,15 @@ export default function AppShell({
   children: React.ReactNode
   showAdmin?: boolean
   showTransfers?: boolean
+  canManageUsers?: boolean
   headerRight?: React.ReactNode
 }) {
-  // Admin and Deleted Leads are Super Admin only; Transfers are visible when enabled.
+  // Deleted Leads is Super Admin only. Admin (user management) is visible to
+  // Super Admin plus anyone who can manage users within their own company
+  // (Company Admin / Manager / Team Lead). Transfers are visible when enabled.
   const items = NAV.filter((n) => {
-    if (n.href === '/admin' || n.href === '/deleted-leads') return showAdmin
+    if (n.href === '/deleted-leads') return showAdmin
+    if (n.href === '/admin') return showAdmin || canManageUsers
     if (n.href === '/transfers') return showTransfers
     return true
   })

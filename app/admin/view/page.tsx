@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../../lib/supabase-server'
+import { roleLabel } from '../../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../../AppShell'
 import RoleViewClient from './RoleViewClient'
@@ -18,7 +19,7 @@ export default async function RoleView() {
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
-        role: (me as any).roles?.label ?? 'Unknown',
+        role: roleLabel((me as any).roles?.key),
         company: (me as any).tenants?.name ?? '',
       }
     : null
@@ -31,6 +32,7 @@ export default async function RoleView() {
       active="/admin"
       showAdmin
       showTransfers
+      canManageUsers
       headerRight={
         <a href="/admin" className="btn" style={{ textDecoration: 'none' }}>← Back to admin</a>
       }

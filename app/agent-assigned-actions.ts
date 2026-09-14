@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
+import { roleLabel } from '../lib/roles'
 
 // Everyone above the agent can view this: admin, manager, team_lead, super_admin.
 const CAN_VIEW = ['company_admin', 'manager', 'team_lead', 'super_admin']
@@ -70,7 +71,7 @@ export async function getAgentAssignedLeads(): Promise<{
     return {
       agentId: a.id,
       agentName: a.full_name,
-      role: a.roles?.label ?? a.roles?.key,
+      role: roleLabel(a.roles?.key),
       leads,
     }
   })

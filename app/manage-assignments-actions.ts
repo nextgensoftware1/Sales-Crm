@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
+import { roleLabel } from '../lib/roles'
 
 // ---------------------------------------------------------------------------
 // Manage the assignments I personally made (assigned_by = me).
@@ -69,7 +70,7 @@ export async function getMyAssignmentSummary(): Promise<{
 
   const { data: rows, error } = await supabase
     .from('lead_assignments')
-    .select('assigned_to, users!lead_assignments_assigned_to_fkey(full_name, roles(label))')
+    .select('assigned_to, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))')
     .eq('assigned_by', me.id)
     .eq('status', 'active')
 
@@ -84,7 +85,7 @@ export async function getMyAssignmentSummary(): Promise<{
     else map.set(id, {
       id,
       full_name: r.users?.full_name ?? 'Unknown',
-      role: r.users?.roles?.label ?? '',
+      role: roleLabel(r.users?.roles?.key),
       count: 1,
     })
   }

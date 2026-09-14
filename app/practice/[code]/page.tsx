@@ -1,6 +1,7 @@
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
 import { createSupabaseServer } from '../../../lib/supabase-server'
+import { roleLabel } from '../../../lib/roles'
 import AppShell from '../../AppShell'
 
 // Simple, deterministic state -> US timezone-zone mapping, used only to label
@@ -67,22 +68,30 @@ export default async function PracticeDetail({
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
   let myTenantId: string | null = null
+  let myUserId: string | null = null
+  let roleKey = ''
+  let showTransfers = false
+  let canManageUsers = false
   try {
     const { data: { user: authUser } } = await supabase.auth.getUser()
     if (authUser) {
       const { data: me } = await supabase
         .from('users')
-        .select('full_name, tenant_id, roles(key, label), tenants(name)')
+        .select('id, full_name, tenant_id, roles(key, label), tenants(name)')
         .eq('auth_id', authUser.id)
         .single()
       if (me) {
         currentUser = {
           full_name: (me as any).full_name,
-          role: (me as any).roles?.label ?? 'Unknown',
+          role: roleLabel((me as any).roles?.key),
           company: (me as any).tenants?.name ?? '',
         }
-        isSuperAdmin = (me as any).roles?.key === 'super_admin'
+        roleKey = (me as any).roles?.key ?? ''
+        isSuperAdmin = roleKey === 'super_admin'
         myTenantId = (me as any).tenant_id ?? null
+        myUserId = (me as any).id ?? null
+        showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+        canManageUsers = isSuperAdmin || ['company_admin', 'manager', 'team_lead'].includes(roleKey)
       }
     }
   } catch {
@@ -136,18 +145,71 @@ export default async function PracticeDetail({
     }
   }
 
+  // ---- Authorization: does this signed-in user actually have access to
+  // this lead? Being logged in is not enough — the same rule the main Leads
+  // Engine pool already enforces applies here too, or anyone could open any
+  // lead just by knowing/guessing its URL. Fails CLOSED: unrecognized roles
+  // see nothing. A failed check renders the exact same "not found" card
+  // used for a genuinely missing practice, so this page never reveals
+  // whether a lead exists that the viewer isn't allowed to see.
+  let authorized = false
+  if (practice) {
+    if (isSuperAdmin) {
+      authorized = true
+    } else if (roleKey === 'agent' || roleKey === 'closer') {
+      // Same rule as the main pool: leads directly assigned to me, plus —
+      // for closers — leads a transfer has sent to me.
+      const idSet = new Set<string>()
+      if (myUserId) {
+        const { data: assigns } = await supabase
+          .from('lead_assignments')
+          .select('practice_id')
+          .eq('assigned_to', myUserId)
+          .eq('status', 'active')
+        for (const a of (assigns ?? []) as any[]) if (a.practice_id) idSet.add(a.practice_id)
+
+        if (roleKey === 'closer') {
+          const { data: transfers } = await supabase
+            .from('lead_transfers')
+            .select('practice_id')
+            .eq('to_user_id', myUserId)
+          for (const t of (transfers ?? []) as any[]) if (t.practice_id) idSet.add(t.practice_id)
+        }
+      }
+      authorized = rows.some((r) => idSet.has(r.id))
+    } else if (myTenantId) {
+      // Company roles (company_admin / manager / team_lead): visible if
+      // they own this practice themselves, or their company has it
+      // allocated — matched by practice_code, same as the main pool, since
+      // an allocation points at the Platform copy while the company may be
+      // viewing its own separate copy of the same code.
+      const ownsIt = rows.some((r) => r.owner_tenant_id === myTenantId)
+      let allocatedToMe = false
+      if (!ownsIt) {
+        const { data: allocs } = await supabase
+          .from('lead_allocations')
+          .select('id, master_practices(practice_code)')
+          .eq('tenant_id', myTenantId)
+          .eq('status', 'active')
+        allocatedToMe = (allocs ?? []).some((a: any) => a.master_practices?.practice_code === code)
+      }
+      authorized = ownsIt || allocatedToMe
+    }
+  }
+
+  if (!authorized) practice = null
+
   if (error || !practice) {
     return (
-      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin}>
+      <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
           <a href="/">← Back to all practices</a>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
-          <p style={{ marginTop: 12, color: 'var(--muted)' }}>
-            {rows.length === 0
-              ? `No practice with code "${code}" is visible to you.`
-              : `Found ${rows.length} matches but could not choose one.`}
+          <p className="subtle" style={{ marginTop: 12 }}>
+            {error
+              ? 'Something went wrong looking this practice up. Please try again, or contact support if it persists.'
+              : `No practice with code "${code}" is visible to you. It may not be allocated or assigned to you, may have been permanently deleted, or the link is incorrect.`}
           </p>
-          {error?.message && <pre className="subtle" style={{ whiteSpace: 'pre-wrap' }}>{error.message}</pre>}
         </div>
       </AppShell>
     )
@@ -184,6 +246,14 @@ export default async function PracticeDetail({
   const providerLinks = (pr.practice_providers ?? []) as any[]
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
+
+  // Show the organization name at the top when this practice/clinician is
+  // affiliated with one (from NPPES provider data). Falls back to the
+  // practice/clinician's own name for solo practices with no organization.
+  const orgName: string | null = providersList
+    .map((prov: any) => (prov?.org_name ?? '').toString().trim())
+    .find((n: string) => n.length > 0) || null
+  const displayTitle = orgName || practice.name
 
   // ---- Total Provider count from the org roster ----
   // The practice_providers link table only has direct links (typically 1 anchor row
@@ -284,6 +354,8 @@ export default async function PracticeDetail({
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
+      canManageUsers={canManageUsers}
     >
       <div className="lead-page">
         {/* ---- Header: back / pager / title+badges / address+phone ---- */}
@@ -308,7 +380,7 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <div className="lead-title-row">
-                  <h2 className="lead-title">{primaryProvider?.org_name || '—'}</h2>
+                  <h2 className="lead-title">{displayTitle}</h2>
                   <span className="lead-code">{practice.practice_code}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}

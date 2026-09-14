@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
+import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import TransfersClient from './TransfersClient'
@@ -17,10 +18,11 @@ export default async function TransfersPage() {
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
+  const canManageUsers = isSuperAdmin || ['company_admin', 'manager', 'team_lead'].includes(roleKey)
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
-        role: (me as any).roles?.label ?? 'Unknown',
+        role: roleLabel((me as any).roles?.key),
         company: (me as any).tenants?.name ?? '',
       }
     : null
@@ -33,6 +35,7 @@ export default async function TransfersPage() {
       active="/transfers"
       showAdmin={isSuperAdmin}
       showTransfers
+      canManageUsers={canManageUsers}
     >
       <TransfersClient />
     </AppShell>

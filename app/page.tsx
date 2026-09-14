@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../lib/supabase-server'
+import { roleLabel } from '../lib/roles'
 import PracticesTable from './PracticesTable'
 import UploadLeadsButton from './UploadLeadsButton'
 import { redirect } from 'next/navigation'
@@ -22,6 +23,7 @@ export default async function Home() {
   const canUpload = ['company_admin', 'manager', 'super_admin'].includes(roleKey)
   const canAssign = ['company_admin', 'manager', 'team_lead'].includes(roleKey)
   const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+  const canManageUsers = isSuperAdmin || canAssign
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
@@ -40,7 +42,7 @@ export default async function Home() {
         .in('id', reportIds)
         .order('full_name')
       myAgents = (agentRows ?? [])
-        .map((u: any) => ({ id: u.id, full_name: u.full_name, role: u.roles?.label ?? u.roles?.key }))
+        .map((u: any) => ({ id: u.id, full_name: u.full_name, role: roleLabel(u.roles?.key) }))
     }
   }
 
@@ -58,7 +60,7 @@ export default async function Home() {
   const currentUser = me
     ? {
         full_name: me.full_name,
-        role: (me as any).roles?.label ?? 'Unknown',
+        role: roleLabel((me as any).roles?.key),
         company: (me as any).tenants?.name ?? 'Unknown',
       }
     : null
@@ -392,6 +394,7 @@ export default async function Home() {
       active="/"
       showAdmin={isSuperAdmin}
       showTransfers={showTransfers}
+      canManageUsers={canManageUsers}
       headerRight={canUpload ? <UploadLeadsButton /> : null}
     >
       <PracticesTable

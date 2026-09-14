@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
+import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import RemindersClient from './RemindersClient'
@@ -21,7 +22,7 @@ export default async function RemindersPage() {
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
-        role: (me as any).roles?.label ?? 'Unknown',
+        role: roleLabel((me as any).roles?.key),
         company: (me as any).tenants?.name ?? '',
       }
     : null
@@ -40,6 +41,7 @@ export default async function RemindersPage() {
       active="/reminders"
       showAdmin={isSuperAdmin}
       showTransfers
+      canManageUsers={isSuperAdmin || isCompanyRole}
     >
       <RemindersClient />
     </AppShell>

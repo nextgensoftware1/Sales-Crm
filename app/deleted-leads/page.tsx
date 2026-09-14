@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
+import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import DeletedLeadsTable from './DeletedLeadsTable'
@@ -22,7 +23,7 @@ export default async function DeletedLeads() {
   const currentUser = me
     ? {
         full_name: (me as any).full_name,
-        role: (me as any).roles?.label ?? 'Super Admin',
+        role: roleLabel((me as any).roles?.key),
         company: (me as any).tenants?.name ?? '',
       }
     : null
@@ -39,7 +40,7 @@ export default async function DeletedLeads() {
 
   if (error) {
     return (
-      <AppShell title="Deleted Leads" subtitle="Super Admin only" currentUser={currentUser} active="/deleted-leads" showAdmin showTransfers>
+      <AppShell title="Deleted Leads" subtitle="Super Admin only" currentUser={currentUser} active="/deleted-leads" showAdmin showTransfers canManageUsers>
         <div style={{ padding: 24, color: '#f66' }}>Error: {error.message}</div>
       </AppShell>
     )
@@ -101,6 +102,7 @@ export default async function DeletedLeads() {
       active="/deleted-leads"
       showAdmin
       showTransfers
+      canManageUsers
     >
       <DeletedLeadsTable rows={rows} />
     </AppShell>

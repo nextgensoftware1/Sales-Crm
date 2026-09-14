@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
+import { roleLabel as canonicalRoleLabel } from '../lib/roles'
 
 // ---------------------------------------------------------------------------
 // Super Admin "view as role" — returns the leads a given role/user would see,
@@ -49,7 +50,7 @@ export async function getLeadsForUser(userId: string): Promise<
   if (!u) return { ok: false, message: 'User not found.' }
 
   const roleKey = (u as any).roles?.key ?? ''
-  const roleLabel = (u as any).roles?.label ?? roleKey
+  const roleLabel = canonicalRoleLabel(roleKey)
   const tenantId = (u as any).tenant_id
 
   let ids: string[] = []

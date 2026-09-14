@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../lib/supabase-server'
+import { roleLabel as canonicalRoleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import DashboardView from './DashboardView'
 
@@ -79,7 +80,7 @@ export default async function DashboardPage() {
     ? 'Platform'
     : ((me as any)?.tenants?.name ?? 'Company')
 
-  const roleLabel = (me as any)?.roles?.label ?? roleKey
+  const roleLabel = canonicalRoleLabel(roleKey)
 
   // Everything real is passed down; placeholder metrics are flagged in the view.
   return (
