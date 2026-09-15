@@ -5,14 +5,10 @@ import { createSupabaseServer } from '../lib/supabase-server'
 // ---------------------------------------------------------------------------
 // uploadLeadsCsv(rows) — BATCHED version for large files (1000s of rows).
 //
-// Instead of 5 DB calls per row, this does a handful of bulk inserts:
-//   1. bulk-insert providers          (tagged owner_tenant_id)
-//   2. bulk-insert master_practices   (tagged owner_tenant_id)
-//   3. bulk-insert practice_providers links
-//   4. bulk-insert provider_signals
-//   5. bulk-insert provider_mips
-// Everything is chunked at CHUNK rows per call. Duplicates (by practice_code
-// within this company) are skipped up front. Only Company Admin + Manager.
+// Idempotent behaviour:
+//   • De-dupes within the file (same NPI twice → first wins)
+//   • Skips NPIs already owned by this tenant → inserts only NEW leads
+//   • Never errors out on "existing" — just skips and reports clearly
 // ---------------------------------------------------------------------------
 
 type CsvRow = Record<string, string>
@@ -44,12 +40,11 @@ export async function uploadLeadsCsv(
   const roleKey = (me as any)?.roles?.key ?? ''
   let tenantId = (me as any)?.tenant_id
 
-  // Who may upload: company_admin, manager, OR super_admin.
   if (!['company_admin', 'manager', 'super_admin'].includes(roleKey)) {
     return { ok: false, message: 'Only a Company Admin, Manager, or Super Admin can upload leads.' }
   }
 
-  // Super Admin's uploads are owned by the PLATFORM tenant (not their own).
+  // Super Admin uploads → Platform tenant.
   if (roleKey === 'super_admin') {
     const { data: platform } = await supabase
       .from('tenants')
@@ -75,56 +70,67 @@ export async function uploadLeadsCsv(
   const npiKey = keyMap.get('npi')
   if (!npiKey) return { ok: false, message: 'CSV has no NPI column.' }
 
-  // --- de-dupe within the file, and against what this company already owns ---
+  // ---- De-dupe within the file (first NPI wins) ----
   const byCode = new Map<string, CsvRow>()
+  const byNpi  = new Map<string, CsvRow>()
   for (const row of rows) {
     const npi = clean(row[npiKey])
     if (!npi) continue
     const code = `PR-${npi}`
-    if (!byCode.has(code)) byCode.set(code, row) // first wins
+    if (!byCode.has(code)) byCode.set(code, row)
+    if (!byNpi.has(npi))   byNpi.set(npi, row)
   }
+  const csvFileCount = byNpi.size
+
+  // ---- Look up existing rows FOR THIS TENANT ONLY ----
+  const allNpis  = Array.from(byNpi.keys())
   const allCodes = Array.from(byCode.keys())
 
-  const existingCodes = new Set<string>()
-  for (const codes of chunk(allCodes, 800)) {
-    const { data: existing } = await supabase
+  const existingNpisForTenant = new Set<string>()
+  for (const part of chunk(allNpis, 300)) {
+    const { data: existProv, error: eErr } = await supabase
+      .from('providers')
+      .select('npi')
+      .eq('owner_tenant_id', tenantId)
+      .in('npi', part)
+    if (eErr) return { ok: false, message: `Existing-check failed: ${eErr.message}` }
+    for (const p of (existProv ?? []) as any[]) existingNpisForTenant.add(p.npi)
+  }
+
+  const existingCodesForTenant = new Set<string>()
+  for (const codesChunk of chunk(allCodes, 800)) {
+    const { data: existPract } = await supabase
       .from('master_practices')
       .select('practice_code')
       .eq('owner_tenant_id', tenantId)
-      .in('practice_code', codes)
-    for (const e of (existing ?? []) as any[]) existingCodes.add(e.practice_code)
+      .in('practice_code', codesChunk)
+    for (const e of (existPract ?? []) as any[]) existingCodesForTenant.add(e.practice_code)
   }
 
-  const toInsertByCode = allCodes.filter((c) => !existingCodes.has(c))
-
-  // Per-company NPI dedup: the same NPI may exist for DIFFERENT companies, but
-  // not twice for THIS company. So check only NPIs already owned by this tenant.
-  const npiByCode = new Map<string, string>()
-  for (const code of toInsertByCode) {
+  // ---- Determine what actually needs inserting ----
+  const toInsert = allCodes.filter((code) => {
     const npi = clean(byCode.get(code)![npiKey])
-    if (npi) npiByCode.set(code, npi)
-  }
-  const incomingNpis = Array.from(new Set(npiByCode.values()))
-  const existingNpis = new Set<string>()
-  for (const part of chunk(incomingNpis, 300)) {
-    const { data: existProv } = await supabase
-      .from('providers')
-      .select('npi')
-      .eq('owner_tenant_id', tenantId)   // ← only THIS company's providers
-      .in('npi', part)
-    for (const p of (existProv ?? []) as any[]) existingNpis.add(p.npi)
-  }
-
-  const toInsert = toInsertByCode.filter((c) => {
-    const npi = npiByCode.get(c)
-    return npi ? !existingNpis.has(npi) : true
+    if (existingCodesForTenant.has(code)) return false
+    if (existingNpisForTenant.has(npi))   return false
+    return true
   })
-  const skipped = allCodes.length - toInsert.length
+
+  const skippedExisting = allCodes.length - toInsert.length
+
   if (toInsert.length === 0) {
-    return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
+    return {
+      ok: true,
+      message:
+        `No new leads to add. ` +
+        `Your CSV has ${csvFileCount} unique NPI(s), all ${skippedExisting} already exist for your company.`,
+      inserted: 0,
+      skipped: skippedExisting,
+    }
   }
 
-  // 1) PROVIDERS ---------------------------------------------------------------
+  // ============================================================================
+  // 1) PROVIDERS
+  // ============================================================================
   const providerRows = toInsert.map((code) => {
     const row = byCode.get(code)!
     const npi = clean(row[npiKey])
@@ -148,13 +154,14 @@ export async function uploadLeadsCsv(
       nppes_last_updated: col(row, 'NPPES_LastUpdated') || null,
       payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || null,
       at_risk: col(row, 'At_Risk') || null,
-      // Anchor = a parent lead: has BOTH PECOS and ENRLMT ids.
+      status:        col(row, 'NPPES_Status') || null,
+      taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || null,
+      mailing_phone: col(row, 'NPPES_MailingPhone') || null,
       is_anchor: !!(pecos && enrlmt),
       owner_tenant_id: tenantId,
     }
   })
 
-  // code -> provider id (filled as we insert)
   const providerIdByCode = new Map<string, string>()
   for (const part of chunk(providerRows, CHUNK)) {
     const { data, error } = await supabase.from('providers').insert(part).select('id, npi')
@@ -162,14 +169,15 @@ export async function uploadLeadsCsv(
     for (const p of (data ?? []) as any[]) providerIdByCode.set(`PR-${p.npi}`, p.id)
   }
 
-  // Helper: is this row an anchor (parent lead)? Has BOTH PECOS + ENRLMT ids.
+  // ============================================================================
+  // 2) MASTER PRACTICES — only for ANCHORS
+  // ============================================================================
   const isAnchorRow = (code: string) => {
     const row = byCode.get(code)!
     return !!(col(row, 'PECOS_ASCT_CNTL_ID') && col(row, 'ENRLMT_ID'))
   }
   const anchorCodes = toInsert.filter(isAnchorRow)
 
-  // 2) MASTER PRACTICES — only for ANCHORS (roster members are providers only).
   const practiceRows = anchorCodes.map((code) => {
     const row = byCode.get(code)!
     return {
@@ -191,7 +199,9 @@ export async function uploadLeadsCsv(
     for (const m of (data ?? []) as any[]) practiceIdByCode.set(m.practice_code, m.id)
   }
 
-  // 3) LINKS — link only anchors (they're the only ones with a practice).
+  // ============================================================================
+  // 3) LINKS
+  // ============================================================================
   const linkRows: any[] = []
   for (const code of anchorCodes) {
     const pid = providerIdByCode.get(code)
@@ -203,7 +213,9 @@ export async function uploadLeadsCsv(
     if (error) return { ok: false, message: `Link insert failed: ${error.message}` }
   }
 
-  // 4) SIGNALS -----------------------------------------------------------------
+  // ============================================================================
+  // 4) SIGNALS
+  // ============================================================================
   const signalRows: any[] = []
   for (const code of toInsert) {
     const pid = providerIdByCode.get(code)
@@ -226,7 +238,9 @@ export async function uploadLeadsCsv(
     if (error) return { ok: false, message: `Signals insert failed: ${error.message}` }
   }
 
-  // 5) MIPS --------------------------------------------------------------------
+  // ============================================================================
+  // 5) MIPS
+  // ============================================================================
   const mipsRows: any[] = []
   for (const code of toInsert) {
     const pid = providerIdByCode.get(code)
@@ -247,12 +261,16 @@ export async function uploadLeadsCsv(
   }
 
   const rosterCount = toInsert.length - anchorCodes.length
+  const parts: string[] = []
+  parts.push(`Uploaded ${anchorCodes.length} new lead${anchorCodes.length === 1 ? '' : 's'}`)
+  if (rosterCount)     parts.push(`+ ${rosterCount} roster member${rosterCount === 1 ? '' : 's'}`)
+  if (skippedExisting) parts.push(`skipped ${skippedExisting} that already existed`)
+  parts.push(`(${csvFileCount} unique NPIs in file)`)
+
   return {
     ok: true,
-    message: `Uploaded ${anchorCodes.length} lead(s)` +
-      (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
-      (skipped ? `, skipped ${skipped} duplicate(s)` : '') + '.',
+    message: parts.join(', ') + '.',
     inserted: anchorCodes.length,
-    skipped,
+    skipped: skippedExisting,
   }
 }
