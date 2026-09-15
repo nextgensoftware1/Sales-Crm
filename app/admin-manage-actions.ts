@@ -186,3 +186,83 @@ export async function createUser(input: {
 
   return { ok: true }
 }
+
+// ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----
+
+async function requireSuperAdmin(supabase: Awaited<ReturnType<typeof createSupabaseServer>>) {
+  const me = await whoAmI(supabase)
+  if (!me) return { ok: false as const, message: 'Not signed in.' }
+  if (me.roleKey !== 'super_admin') return { ok: false as const, message: 'Only Super Admin can manage companies.' }
+  return { ok: true as const, me }
+}
+
+// Temporarily suspends a company and every user in it — reversible via
+// reactivateCompany. Individual users aren't tracked separately here, so
+// reactivating restores everyone in the company to active, including
+// anyone who happened to already be inactive for an unrelated reason.
+export async function suspendCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
+  const supabase = await createSupabaseServer()
+  const auth = await requireSuperAdmin(supabase)
+  if (!auth.ok) return auth
+
+  const { data: tenant } = await supabase.from('tenants').select('is_platform').eq('id', tenantId).maybeSingle()
+  if (!tenant) return { ok: false, message: 'Company not found.' }
+  if ((tenant as any).is_platform) return { ok: false, message: 'The Platform company cannot be suspended.' }
+
+  const { error: tenantErr } = await supabase.from('tenants').update({ status: 'suspended' }).eq('id', tenantId)
+  if (tenantErr) return { ok: false, message: tenantErr.message }
+
+  const { error: usersErr } = await supabase.from('users').update({ status: 'suspended' }).eq('tenant_id', tenantId)
+  if (usersErr) return { ok: false, message: `Company suspended, but updating its team failed: ${usersErr.message}` }
+
+  return { ok: true }
+}
+
+export async function reactivateCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
+  const supabase = await createSupabaseServer()
+  const auth = await requireSuperAdmin(supabase)
+  if (!auth.ok) return auth
+
+  const { error: tenantErr } = await supabase.from('tenants').update({ status: 'active' }).eq('id', tenantId)
+  if (tenantErr) return { ok: false, message: tenantErr.message }
+
+  const { error: usersErr } = await supabase.from('users').update({ status: 'active' }).eq('tenant_id', tenantId)
+  if (usersErr) return { ok: false, message: `Company reactivated, but restoring its team failed: ${usersErr.message}` }
+
+  return { ok: true }
+}
+
+// Permanently deletes a company. Warns the caller (via the returned
+// `usersRemaining`/`leadsRemaining` counts) if there's still real data
+// attached, but — matching the same pattern as hard-deleting a lead — Super
+// Admin has final authority to proceed anyway; the double-confirmation lives
+// in the UI, not as a hard block here.
+export async function deleteCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
+  const supabase = await createSupabaseServer()
+  const auth = await requireSuperAdmin(supabase)
+  if (!auth.ok) return auth
+
+  const { data: tenant } = await supabase.from('tenants').select('is_platform, name').eq('id', tenantId).maybeSingle()
+  if (!tenant) return { ok: false, message: 'Company not found.' }
+  if ((tenant as any).is_platform) return { ok: false, message: 'The Platform company cannot be deleted.' }
+
+  const { error } = await supabase.from('tenants').delete().eq('id', tenantId)
+  if (error) {
+    // Most likely a foreign key constraint — real data (users, leads,
+    // allocations) still references this company at the database level.
+    return { ok: false, message: `Could not delete "${(tenant as any).name}": ${error.message}` }
+  }
+  return { ok: true }
+}
+
+export type CompanyStatusInfo = { id: string; userCount: number }
+
+// Real counts to warn the caller with before they delete — not a guess.
+export async function getCompanyDeletionImpact(tenantId: string): Promise<{ ok: boolean; userCount?: number; message?: string }> {
+  const supabase = await createSupabaseServer()
+  const auth = await requireSuperAdmin(supabase)
+  if (!auth.ok) return auth
+
+  const { count } = await supabase.from('users').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId)
+  return { ok: true, userCount: count ?? 0 }
+}

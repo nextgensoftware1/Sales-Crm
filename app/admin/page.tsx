@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AdminManageClient from './AdminManageClient'
 import AdminUsersByCompanyClient from './AdminUsersByCompanyClient'
+import CompaniesTable from './CompaniesTable'
 
 export default async function AdminPage() {
   const supabase = await createSupabaseServer()
@@ -104,7 +105,7 @@ export default async function AdminPage() {
 
   const { data: tenants } = await supabase
     .from('tenants')
-    .select('name, is_platform, status')
+    .select('id, name, is_platform, status')
     .order('name')
     // Allocation history — who got allocated what, and when
   const { data: allocations } = await supabase
@@ -144,11 +145,13 @@ export default async function AdminPage() {
     }))
   }
 
-  const statusBadge = (status: string) => {
-    const s = (status || '').toLowerCase()
-    const cls = s === 'active' ? 'badge-green' : s === 'inactive' ? 'badge-grey' : 'badge-amber'
-    return <span className={`badge ${cls}`}>{status}</span>
-  }
+  const companiesForTable = (tenants ?? []).map((t: any) => ({
+    id: t.id,
+    name: t.name,
+    isPlatform: t.is_platform,
+    status: t.status,
+    userCount: byCompany[t.name]?.length ?? 0,
+  }))
 
   return (
     <AppShell
@@ -169,32 +172,8 @@ export default async function AdminPage() {
         <AdminManageClient isSuperAdmin={true} />
         <div className="card">
           <h2 className="h-section">Companies ({tenants?.length ?? 0})</h2>
-          <p className="subtle" style={{ marginTop: -8, marginBottom: 14 }}>Click a company to filter users &amp; allocations below</p>
-          <div className="tbl-wrap">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Company</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Users</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tenants?.map((t: any, i) => (
-                  <tr key={i}>
-                    <td>
-                      {t.name}{' '}
-                      {t.is_platform && <span className="badge badge-blue" style={{ marginLeft: 6 }}>platform</span>}
-                    </td>
-                    <td>{t.is_platform ? 'Platform' : 'Company'}</td>
-                    <td>{statusBadge(t.status)}</td>
-                    <td>{byCompany[t.name]?.length ?? 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <p className="subtle" style={{ marginTop: -8, marginBottom: 14 }}>Suspend, reactivate, or permanently delete a company</p>
+          <CompaniesTable companies={companiesForTable} />
         </div>
 
         <div className="card">

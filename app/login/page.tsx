@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createSupabaseBrowser } from '../../lib/supabase-browser'
+import { checkAccountStatus } from '../auth-actions'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -24,13 +25,31 @@ export default function LoginPage() {
       email: email.trim(),
       password,
     })
-    setLoading(false)
     if (error) {
+      setLoading(false)
       setError(error.message)
-    } else {
-      router.push('/')
-      router.refresh()
+      return
     }
+
+    // Auth succeeded, but that only proves the credentials are right — it
+    // says nothing about whether this account (or its company) has since
+    // been suspended, or whether the profile still exists at all. Check
+    // before letting the person any further in.
+    const status = await checkAccountStatus()
+    if (!status.ok) {
+      await supabase.auth.signOut()
+      setLoading(false)
+      if (status.reason === 'suspended') {
+        setError('Your account has been suspended. Please contact your admin to have this fixed.')
+      } else {
+        setError('Invalid email or password.')
+      }
+      return
+    }
+
+    setLoading(false)
+    router.push('/')
+    router.refresh()
   }
 
   return (
