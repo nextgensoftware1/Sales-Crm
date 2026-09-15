@@ -10,8 +10,9 @@ const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 
 type Initial = Partial<WorksheetData> & { updatedByName?: string | null; updatedAt?: string | null }
+type ExistingTransfer = { closerName: string; handoffStatus: string | null; transferredAt: string } | null
 
-export default function Worksheet({ practiceCode, initial }: { practiceCode: string; initial?: Initial }) {
+export default function Worksheet({ practiceCode, initial, existingTransfer }: { practiceCode: string; initial?: Initial; existingTransfer?: ExistingTransfer }) {
   const router = useRouter()
 
   // Worksheet fields
@@ -148,21 +149,35 @@ export default function Worksheet({ practiceCode, initial }: { practiceCode: str
       {/* Transfer to Closer */}
       <div className="lead-divider" style={{ marginTop: 18 }}>
         <span className="lead-subhead" style={{ fontSize: 11, borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12, display: 'block' }}>Qualified Lead Transfer</span>
-        <div className="grid-fields-2">
-          <select value={closerId} onChange={(e) => setCloserId(e.target.value)} className="lead-select">
-            <option value="">-- Choose Closer --</option>
-            {closers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
-          </select>
-          <select value={handoffStatus} onChange={(e) => setHandoffStatus(e.target.value)} className="lead-select">
-            <option value="">Handoff status…</option>
-            {HANDOFF_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <button onClick={doTransfer} className="lead-transfer-btn" style={{ marginTop: 10 }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-          Transfer
-        </button>
-        {transferMsg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{transferMsg}</p>}
+        {existingTransfer ? (
+          <div className="lead-field-value" style={{ height: 'auto', padding: '12px 14px' }}>
+            <div style={{ fontWeight: 700, color: 'var(--ink-strong)' }}>
+              Already transferred to {existingTransfer.closerName}
+              {existingTransfer.handoffStatus && <span style={{ color: 'var(--muted)', fontWeight: 500 }}> · {existingTransfer.handoffStatus}</span>}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+              {new Date(existingTransfer.transferredAt).toLocaleString()} — a lead can only be transferred once from this form.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="grid-fields-2">
+              <select value={closerId} onChange={(e) => setCloserId(e.target.value)} className="lead-select">
+                <option value="">-- Choose Closer --</option>
+                {closers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
+              </select>
+              <select value={handoffStatus} onChange={(e) => setHandoffStatus(e.target.value)} className="lead-select">
+                <option value="">Handoff status…</option>
+                {HANDOFF_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <button onClick={doTransfer} className="lead-transfer-btn" style={{ marginTop: 10 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+              Transfer
+            </button>
+            {transferMsg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{transferMsg}</p>}
+          </>
+        )}
       </div>
 
       {/* Close the sale */}

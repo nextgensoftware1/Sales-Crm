@@ -194,6 +194,20 @@ export async function transferToCloser(
     .maybeSingle()
   if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
+  // A lead can only be transferred once. Real enforcement lives here, not
+  // just in the UI hiding the form — if a transfer already exists for this
+  // practice, reject a second one outright rather than silently overwriting
+  // or duplicating it.
+  const { data: existing } = await supabase
+    .from('lead_transfers')
+    .select('id')
+    .eq('practice_id', practice.id)
+    .limit(1)
+    .maybeSingle()
+  if (existing) {
+    return { ok: false, message: 'This lead has already been transferred once and cannot be transferred again.' }
+  }
+
   const { error: tErr } = await supabase.from('lead_transfers').insert({
     practice_id: practice.id,
     tenant_id: (me as any).tenant_id,

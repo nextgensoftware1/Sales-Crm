@@ -328,6 +328,33 @@ export default async function PracticeDetail({
       .from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
     updatedByName = (editor as any)?.full_name ?? null
   }
+
+  // Has this lead already been transferred once? If so, the Worksheet's
+  // transfer section is locked read-only — a transfer is a one-time action,
+  // not something to redo or silently overwrite from the same form.
+  let existingTransfer: { closerName: string; handoffStatus: string | null; transferredAt: string } | null = null
+  {
+    const { data: transferRow } = await supabase
+      .from('lead_transfers')
+      .select('to_user_id, note, created_at')
+      .eq('practice_id', practice.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (transferRow) {
+      let closerName = 'Unknown'
+      if ((transferRow as any).to_user_id) {
+        const { data: closer } = await supabase
+          .from('users').select('full_name').eq('id', (transferRow as any).to_user_id).maybeSingle()
+        closerName = (closer as any)?.full_name ?? 'Unknown'
+      }
+      existingTransfer = {
+        closerName,
+        handoffStatus: (transferRow as any).note ?? null,
+        transferredAt: (transferRow as any).created_at,
+      }
+    }
+  }
   const toLocalInput = (iso: string | null) => {
     if (!iso) return ''
     const d = new Date(iso)
@@ -573,7 +600,7 @@ export default async function PracticeDetail({
 
           {/* Right column — shared Worksheet */}
           <div className="sticky-col" style={{ position: 'sticky', top: 24, minWidth: 0 }}>
-            <Worksheet practiceCode={code} initial={worksheetInitial} />
+            <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} />
           </div>
         </div>
       </div>

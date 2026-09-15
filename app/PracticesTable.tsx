@@ -28,6 +28,7 @@ type Practice = {
   risk?: string | null
   paymentAdj?: string | null
   lastDialed?: string | null
+  assignedAwayTo?: { name: string; role: string } | null
 }
 
 type Company = { slug: string; name: string }
@@ -536,7 +537,13 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
               <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
                 {(isSuperAdmin || canAssign) && (
                   <td style={td}>
-                    <input type="checkbox" checked={selected.has(p.practiceCode)} onChange={() => toggleSelect(p.practiceCode)} />
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p.practiceCode)}
+                      onChange={() => toggleSelect(p.practiceCode)}
+                      disabled={!!p.assignedAwayTo}
+                      title={p.assignedAwayTo ? `Already assigned to ${p.assignedAwayTo.name} — can't be re-assigned from here` : undefined}
+                    />
                   </td>
                 )}
                 <td style={{ ...tdLeft, minWidth: 240 }}>
@@ -545,6 +552,11 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                   )}
                   <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</a>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
+                  {p.assignedAwayTo && (
+                    <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
+                      → {p.assignedAwayTo.name} <span style={{ color: C.dim, fontWeight: 500 }}>({p.assignedAwayTo.role})</span>
+                    </div>
+                  )}
                 </td>
                 <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>

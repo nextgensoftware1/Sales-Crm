@@ -13,7 +13,7 @@ export default async function Home() {
 
   const { data: me } = await supabase
     .from('users')
-    .select('id, full_name, tenant_id, roles(key, label), tenants(name)')
+    .select('id, full_name, tenant_id, roles(key, label, level), tenants(name)')
     .eq('auth_id', user.id)
     .single()
 
@@ -27,23 +27,23 @@ export default async function Home() {
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
-  // Direct reports the caller may assign to (cascade model).
+  // Everyone assignable BELOW the caller's own role level, company-wide —
+  // not just literal direct reports. Matches the same rule already used
+  // for who can be granted which role when creating a user:
+  //   Company Admin → Manager, Team Lead, Agent, Closer (all of them)
+  //   Manager       → Team Lead, Agent, Closer
+  //   Team Lead     → Agent, Closer
   let myAgents: { id: string; full_name: string; role: string }[] = []
   if (canAssign) {
-    const { data: edges } = await supabase
-      .from('user_hierarchy')
-      .select('user_id')
-      .eq('manages_user_id', myUserId)
-    const reportIds = (edges ?? []).map((e: any) => e.user_id)
-    if (reportIds.length) {
-      const { data: agentRows } = await supabase
-        .from('users')
-        .select('id, full_name, roles(key, label)')
-        .in('id', reportIds)
-        .order('full_name')
-      myAgents = (agentRows ?? [])
-        .map((u: any) => ({ id: u.id, full_name: u.full_name, role: roleLabel(u.roles?.key) }))
-    }
+    const myLevel = (me as any)?.roles?.level ?? 999
+    const { data: agentRows } = await supabase
+      .from('users')
+      .select('id, full_name, roles(key, label, level)')
+      .eq('tenant_id', myTenantId)
+      .order('full_name')
+    myAgents = (agentRows ?? [])
+      .filter((u: any) => (u.roles?.level ?? 0) > myLevel)
+      .map((u: any) => ({ id: u.id, full_name: u.full_name, role: roleLabel(u.roles?.key) }))
   }
 
   // Companies for the allocation UI (non-platform).
@@ -71,7 +71,7 @@ export default async function Home() {
   const allocatedOn: Record<string, string> = {}
   const leadStatus: Record<string, string> = {}
   let assignedIds: string[] | null = null
-  if (roleKey === 'agent' || roleKey === 'closer') {
+  if (roleKey === 'agent' || roleKey === 'closer' || roleKey === 'manager' || roleKey === 'team_lead') {
     const idSet = new Set<string>()
 
     // Leads directly assigned to me.
@@ -108,7 +108,9 @@ export default async function Home() {
 
   // Priority (assigned to me) + handed-away (assigned by me) for upper roles.
   let myAssignedCodes: string[] = []
-  let assignedAwayIds: string[] = []
+  // Who each handed-away lead actually went to — shown as a "→ Name (Role)"
+  // indicator instead of the lead just vanishing from the giver's view.
+  const assignedAwayTo: Record<string, { name: string; role: string }> = {}
   if (canAssign) {
     const { data: mine } = await supabase
       .from('lead_assignments')
@@ -121,10 +123,17 @@ export default async function Home() {
 
     const { data: away } = await supabase
       .from('lead_assignments')
-      .select('practice_id')
+      .select('practice_id, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))')
       .eq('assigned_by', myUserId)
       .eq('status', 'active')
-    assignedAwayIds = (away ?? []).map((r: any) => r.practice_id)
+    for (const r of (away ?? []) as any[]) {
+      if (r.practice_id && r.users) {
+        assignedAwayTo[r.practice_id] = {
+          name: r.users.full_name,
+          role: roleLabel(r.users.roles?.key),
+        }
+      }
+    }
   }
 
   // ------------------------------------------------------------------
@@ -134,9 +143,16 @@ export default async function Home() {
   //   • Agent/Closer: only assigned to them (soft-deleted still visible
   //     to them if they're still assigned — Super Admin's soft-delete
   //     doesn't yank the lead out from under active work).
-  //   • Company roles: leads they OWN (upload) OR that are ALLOCATED to
-  //     them, minus leads engaged to another company. Soft-deleted leads
-  //     stay visible here too until Super Admin hard-deletes them.
+  //   • Manager/Team Lead: same rule as Agent/Closer — only leads
+  //     explicitly assigned TO them (via lead_assignments), not the whole
+  //     company pool. This is the cascade: Company Admin distributes from
+  //     the full company pool down to a Manager, who distributes further
+  //     down to a Team Lead, who distributes to an Agent/Closer — each
+  //     tier only sees what was actually handed to them, not everything
+  //     above it.
+  //   • Company Admin only: leads they OWN (upload) OR that are ALLOCATED
+  //     to them, minus leads engaged to another company — the full company
+  //     pool, since they're the entry point Super Admin allocates to.
   // ------------------------------------------------------------------
   // Leads allocated to my company (Super Admin gave them to us).
   let myAllocatedIds: string[] = []
@@ -238,10 +254,13 @@ export default async function Home() {
           .is('deleted_at', null)
           .order('name')
       )
-    } else if (roleKey === 'agent' || roleKey === 'closer') {
+    } else if (roleKey === 'agent' || roleKey === 'closer' || roleKey === 'manager' || roleKey === 'team_lead') {
+      // Manager/Team Lead get the exact same assignment-based visibility as
+      // Agent/Closer — only leads explicitly handed to them, not the whole
+      // company pool. Only Company Admin gets that broader view, below.
       data = await fetchByIds(assignedIds ?? [])
     } else {
-      // company roles: OWNED + ALLOCATED — run both in parallel.
+      // Company Admin only: OWNED + ALLOCATED — run both in parallel.
       const [owned, allocated] = await Promise.all([
         fetchAllPaged(() =>
           supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).order('name')
@@ -268,16 +287,17 @@ export default async function Home() {
     )
   }
 
-  // Post-filters (JS side). These apply ONLY to company-level roles browsing
-  // the pool — never to an agent/closer (who see their assigned leads), and
-  // never to the Company Admin (who oversees everything in the company).
+  // Post-filter (JS side) — Manager/Team Lead only. "Engaged elsewhere"
+  // means another company's agent/closer is actively working this exact
+  // lead, which genuinely shouldn't show here. A lead THIS person has handed
+  // further down is deliberately NOT filtered out anymore — it stays
+  // visible with a "→ Name (Role)" indicator (see practices.map below) and
+  // its checkbox disabled, instead of vanishing from view.
+  // Never applies to Agent/Closer (already just their own assigned leads)
+  // or Company Admin (who oversees the whole company pool by design).
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
   const isCompanyAdmin = roleKey === 'company_admin'
   if (!isSuperAdmin && !isAgentOrCloser && !isCompanyAdmin) {
-    if (assignedAwayIds.length) {
-      const awaySet = new Set(assignedAwayIds)
-      data = data.filter((p: any) => !awaySet.has(p.id))
-    }
     if (engagedElsewhere.size) {
       data = data.filter((p: any) => !engagedElsewhere.has(p.id))
     }
@@ -364,6 +384,7 @@ export default async function Home() {
       practiceCode: p.practice_code,
       allocatedOn: allocatedOn[p.id] ?? null,
       status: leadStatus[p.id] ?? null,
+      assignedAwayTo: assignedAwayTo[p.id] ?? null,
       source: allocatedCodeSet.has(p.practice_code) ? 'Allocated' : 'Uploaded',
       allocatedTo: allocatedCompanyByCode[p.practice_code] ?? null,
       name: p.name,
