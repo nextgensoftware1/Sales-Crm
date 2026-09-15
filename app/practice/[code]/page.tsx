@@ -330,9 +330,12 @@ export default async function PracticeDetail({
   }
 
   // Has this lead already been transferred once? If so, the Worksheet's
-  // transfer section is locked read-only — a transfer is a one-time action,
-  // not something to redo or silently overwrite from the same form.
-  let existingTransfer: { closerName: string; handoffStatus: string | null; transferredAt: string } | null = null
+  // transfer section shows that history. But whether it's actually LOCKED
+  // for the person looking at it right now depends on who they are: the
+  // closer it was transferred TO still owns this lead and must be able to
+  // keep working it. It's everyone else — most importantly the original
+  // agent who gave it away — who gets the read-only view.
+  let existingTransfer: { closerName: string; handoffStatus: string | null; transferredAt: string; toUserId: string | null } | null = null
   {
     const { data: transferRow } = await supabase
       .from('lead_transfers')
@@ -352,9 +355,14 @@ export default async function PracticeDetail({
         closerName,
         handoffStatus: (transferRow as any).note ?? null,
         transferredAt: (transferRow as any).created_at,
+        toUserId: (transferRow as any).to_user_id ?? null,
       }
     }
   }
+  // Only lock the worksheet for viewers who AREN'T the closer it now
+  // belongs to. Super Admin can also still edit — matches their oversight
+  // access everywhere else in the app.
+  const worksheetLocked = !!existingTransfer && existingTransfer.toUserId !== myUserId && !isSuperAdmin
   const toLocalInput = (iso: string | null) => {
     if (!iso) return ''
     const d = new Date(iso)
@@ -600,7 +608,7 @@ export default async function PracticeDetail({
 
           {/* Right column — shared Worksheet */}
           <div className="sticky-col" style={{ position: 'sticky', top: 24, minWidth: 0 }}>
-            <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} />
+            <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
           </div>
         </div>
       </div>

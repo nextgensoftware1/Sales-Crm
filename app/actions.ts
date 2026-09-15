@@ -274,6 +274,18 @@ export async function markAsSold(
     .maybeSingle()
   if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
+  // Once transferred, the whole worksheet (including marking it sold) is
+  // frozen from this form — matches the UI, enforced here too.
+  const { data: alreadyTransferred } = await supabase
+    .from('lead_transfers')
+    .select('id')
+    .eq('practice_id', practice.id)
+    .limit(1)
+    .maybeSingle()
+  if (alreadyTransferred) {
+    return { ok: false, message: 'This lead has already been transferred — the worksheet is locked and can no longer be edited.' }
+  }
+
   const { data: sale, error: sErr } = await supabase
     .from('sales')
     .insert({

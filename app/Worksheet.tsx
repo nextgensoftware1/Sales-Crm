@@ -12,7 +12,16 @@ const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 type Initial = Partial<WorksheetData> & { updatedByName?: string | null; updatedAt?: string | null }
 type ExistingTransfer = { closerName: string; handoffStatus: string | null; transferredAt: string } | null
 
-export default function Worksheet({ practiceCode, initial, existingTransfer }: { practiceCode: string; initial?: Initial; existingTransfer?: ExistingTransfer }) {
+export default function Worksheet({ practiceCode, initial, existingTransfer, locked: lockedProp }: {
+  practiceCode: string
+  initial?: Initial
+  existingTransfer?: ExistingTransfer
+  // Whether THIS viewer is locked out. Not the same as "has this lead been
+  // transferred" — the closer it was transferred TO still needs to edit it.
+  // Defaults to locking whenever a transfer exists, for any caller that
+  // doesn't pass this explicitly.
+  locked?: boolean
+}) {
   const router = useRouter()
 
   // Worksheet fields
@@ -41,6 +50,12 @@ export default function Worksheet({ practiceCode, initial, existingTransfer }: {
   const [saleMsg, setSaleMsg] = useState('')
 
   useEffect(() => { getClosers().then(setClosers) }, [])
+
+  // Once this lead has been transferred, the worksheet freezes for whoever
+  // no longer owns it — but the closer it went to must still be able to
+  // work it. The parent page decides that per-viewer; this just falls back
+  // to "locked whenever a transfer exists" if the caller doesn't specify.
+  const locked = lockedProp ?? !!existingTransfer
 
   const setQuick = (mins: number) => {
     const d = new Date(Date.now() + mins * 60000)
@@ -89,6 +104,12 @@ export default function Worksheet({ practiceCode, initial, existingTransfer }: {
         Worksheet
       </h4>
 
+      {locked && (
+        <p style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 0, padding: '10px 12px', marginBottom: 16 }}>
+          This lead has already been transferred to {existingTransfer!.closerName} — the worksheet is locked and can no longer be edited from here.
+        </p>
+      )}
+
       <label className="lead-field-label" style={{ display: 'block', marginBottom: 6 }}>
         Call Details <span style={{ color: 'var(--danger)' }}>*</span>
       </label>
@@ -97,30 +118,31 @@ export default function Worksheet({ practiceCode, initial, existingTransfer }: {
         placeholder="Type call details, gating factors, next steps…"
         rows={3}
         className="lead-textarea"
+        disabled={locked}
         style={{ marginBottom: 16, borderColor: !callDetails.trim() && msg ? 'var(--danger)' : undefined }}
       />
 
       <div className="grid-fields-2" style={{ marginBottom: 16 }}>
         <div><label className="lead-field-label">Additional Phone</label>
-          <input value={additionalPhone} onChange={(e) => setAdditionalPhone(e.target.value)} placeholder="Secondary / Mobile Phone" className="lead-input" /></div>
+          <input value={additionalPhone} onChange={(e) => setAdditionalPhone(e.target.value)} placeholder="Secondary / Mobile Phone" className="lead-input" disabled={locked} /></div>
         <div><label className="lead-field-label">Email Address</label>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="billing@practice.com" className="lead-input" /></div>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="billing@practice.com" className="lead-input" disabled={locked} /></div>
         <div><label className="lead-field-label">Concerned Person</label>
-          <input value={concernedPerson} onChange={(e) => setConcernedPerson(e.target.value)} placeholder="e.g. Practice Administrator" className="lead-input" /></div>
+          <input value={concernedPerson} onChange={(e) => setConcernedPerson(e.target.value)} placeholder="e.g. Practice Administrator" className="lead-input" disabled={locked} /></div>
         <div><label className="lead-field-label">Direct Line</label>
-          <input value={directLine} onChange={(e) => setDirectLine(e.target.value)} placeholder="Direct Phone / Extension" className="lead-input" /></div>
+          <input value={directLine} onChange={(e) => setDirectLine(e.target.value)} placeholder="Direct Phone / Extension" className="lead-input" disabled={locked} /></div>
       </div>
 
       <label className="lead-field-label">Follow-up / Callback</label>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-        <input type="datetime-local" value={callbackAt} onChange={(e) => setCallbackAt(e.target.value)} className="lead-input" style={{ flex: 1, minWidth: 190 }} />
-        <select value={timezone} onChange={(e) => setTimezone(e.target.value)} className="lead-select" style={{ width: 120 }}>
+        <input type="datetime-local" value={callbackAt} onChange={(e) => setCallbackAt(e.target.value)} className="lead-input" style={{ flex: 1, minWidth: 190 }} disabled={locked} />
+        <select value={timezone} onChange={(e) => setTimezone(e.target.value)} className="lead-select" style={{ width: 120 }} disabled={locked}>
           {TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
         {[['Today +1h', 60], ['Tomorrow 9:00', 60 * 24], ['Tomorrow 11:00', 60 * 26], ['Tomorrow 14:00', 60 * 29], ['Next Monday 10:00', 60 * 24 * 3]].map(([label, mins]) => (
-          <button key={label as string} type="button" onClick={() => setQuick(mins as number)} className="lead-quickbtn">
+          <button key={label as string} type="button" onClick={() => setQuick(mins as number)} className="lead-quickbtn" disabled={locked}>
             {label}
           </button>
         ))}
@@ -130,13 +152,13 @@ export default function Worksheet({ practiceCode, initial, existingTransfer }: {
       <div className="grid-fields-2" style={{ marginBottom: 16 }}>
         <div>
           <label className="lead-field-label">Call Disposition</label>
-          <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="lead-select">
+          <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="lead-select" disabled={locked}>
             {DISPOSITIONS.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
       </div>
 
-      <button onClick={save} disabled={saving} className="lead-save-btn">
+      <button onClick={save} disabled={saving || locked} className="lead-save-btn">
         {saving ? 'Saving…' : 'Save Worksheet Details'}
       </button>
       {msg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>{msg}</p>}
@@ -184,12 +206,12 @@ export default function Worksheet({ practiceCode, initial, existingTransfer }: {
       <div className="lead-divider" style={{ marginTop: 18, borderTop: '2px solid var(--ok)' }}>
         <span className="lead-subhead" style={{ fontSize: 11, color: 'var(--ok)', marginBottom: 10, display: 'block' }}>Close the sale</span>
         <div className="grid-fields-2">
-          <input value={service} onChange={(e) => setService(e.target.value)} placeholder="Service sold (e.g. RCM)" className="lead-input" />
-          <input type="number" value={contractValue} onChange={(e) => setContractValue(e.target.value)} placeholder="Contract value" className="lead-input" />
-          <input type="number" value={mrr} onChange={(e) => setMrr(e.target.value)} placeholder="MRR" className="lead-input" />
-          <input value={saleNote} onChange={(e) => setSaleNote(e.target.value)} placeholder="Note (optional)" className="lead-input" />
+          <input value={service} onChange={(e) => setService(e.target.value)} placeholder="Service sold (e.g. RCM)" className="lead-input" disabled={locked} />
+          <input type="number" value={contractValue} onChange={(e) => setContractValue(e.target.value)} placeholder="Contract value" className="lead-input" disabled={locked} />
+          <input type="number" value={mrr} onChange={(e) => setMrr(e.target.value)} placeholder="MRR" className="lead-input" disabled={locked} />
+          <input value={saleNote} onChange={(e) => setSaleNote(e.target.value)} placeholder="Note (optional)" className="lead-input" disabled={locked} />
         </div>
-        <button onClick={doSale} className="lead-sold-btn" style={{ marginTop: 10 }}>
+        <button onClick={doSale} className="lead-sold-btn" style={{ marginTop: 10 }} disabled={locked}>
           Mark as SOLD
         </button>
         {saleMsg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{saleMsg}</p>}
