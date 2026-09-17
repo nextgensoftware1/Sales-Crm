@@ -7,8 +7,11 @@ import { createSupabaseServer } from '../lib/supabase-server'
 //
 // Who may assign: company_admin, manager, team_lead.
 // Guardrails:
-//   • The chosen agent must be a DIRECT report of the caller (one level down
-//     in user_hierarchy: caller = manages_user_id, agent = user_id).
+//   • The target must be a more junior role than the caller, in the SAME
+//     company — checked by role level, company-wide. Not limited to a
+//     literal direct report: Company Admin can hand a lead straight to any
+//     Manager, Team Lead, Agent, or Closer in the company; Manager to Team
+//     Lead, Agent, or Closer; Team Lead to Agent or Closer.
 //   • Every practice must be OWNED by the caller's company.
 // Writes/updates rows in lead_assignments (practice ↔ person pointer).
 // ---------------------------------------------------------------------------
@@ -24,11 +27,12 @@ export async function assignLeadsToAgent(
 
   const { data: me } = await supabase
     .from('users')
-    .select('id, tenant_id, roles(key)')
+    .select('id, tenant_id, roles(key, level)')
     .eq('auth_id', user.id)
     .single()
 
   const roleKey = (me as any)?.roles?.key ?? ''
+  const myLevel = (me as any)?.roles?.level ?? 999
   const myId = (me as any)?.id
   const myTenantId = (me as any)?.tenant_id
 
@@ -40,16 +44,22 @@ export async function assignLeadsToAgent(
     return { ok: false, message: 'Select at least one lead.' }
   }
 
-  // 1) Verify the agent is a DIRECT report of the caller.
-  const { data: edge } = await supabase
-    .from('user_hierarchy')
-    .select('id')
-    .eq('manages_user_id', myId)
-    .eq('user_id', agentUserId)
+  // 1) Verify the target is a more junior role than the caller, in the same
+  // company — company-wide by role level, not limited to a literal direct
+  // report: Company Admin can hand a lead straight to any Manager, Team
+  // Lead, Agent, or Closer in the company; Manager can hand to Team Lead,
+  // Agent, or Closer; Team Lead to Agent or Closer.
+  const { data: target } = await supabase
+    .from('users')
+    .select('tenant_id, roles(level)')
+    .eq('id', agentUserId)
     .maybeSingle()
 
-  if (!edge) {
-    return { ok: false, message: 'That agent does not report directly to you.' }
+  if (!target || (target as any).tenant_id !== myTenantId) {
+    return { ok: false, message: 'That person is not on your team.' }
+  }
+  if (((target as any).roles?.level ?? 0) <= myLevel) {
+    return { ok: false, message: 'You can only assign to a more junior role than your own.' }
   }
 
   // 2) Resolve practice_codes → practice ids. A company may assign leads it

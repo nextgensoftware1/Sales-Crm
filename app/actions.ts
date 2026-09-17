@@ -151,10 +151,12 @@ export async function getClosers() {
     .eq('tenant_id', (me as any).tenant_id)
     .eq('status', 'active')
 
+  // All closers in the company.
   const closers = (people ?? [])
     .filter((c: any) => c.roles?.key === 'closer')
     .map((c: any) => ({ id: c.id, name: c.full_name, email: c.email }))
 
+  // Add the current user themselves at the top (unless already a closer).
   const meId = (me as any).id
   const alreadyIncluded = closers.some((c) => c.id === meId)
   if (!alreadyIncluded) {
@@ -192,9 +194,19 @@ export async function transferToCloser(
     .maybeSingle()
   if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
-  // Keep only ONE transfer row per practice — remove any prior transfers for
-  // this practice, then insert the current one. Prevents duplicate rows.
-  await supabase.from('lead_transfers').delete().eq('practice_id', practice.id)
+  // A lead can only be transferred once. Real enforcement lives here, not
+  // just in the UI hiding the form — if a transfer already exists for this
+  // practice, reject a second one outright rather than silently overwriting
+  // or duplicating it.
+  const { data: existing } = await supabase
+    .from('lead_transfers')
+    .select('id')
+    .eq('practice_id', practice.id)
+    .limit(1)
+    .maybeSingle()
+  if (existing) {
+    return { ok: false, message: 'This lead has already been transferred once and cannot be transferred again.' }
+  }
 
   const { error: tErr } = await supabase.from('lead_transfers').insert({
     practice_id: practice.id,
@@ -262,6 +274,18 @@ export async function markAsSold(
     .maybeSingle()
   if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
+  // Once transferred, the whole worksheet (including marking it sold) is
+  // frozen from this form — matches the UI, enforced here too.
+  const { data: alreadyTransferred } = await supabase
+    .from('lead_transfers')
+    .select('id')
+    .eq('practice_id', practice.id)
+    .limit(1)
+    .maybeSingle()
+  if (alreadyTransferred) {
+    return { ok: false, message: 'This lead has already been transferred — the worksheet is locked and can no longer be edited.' }
+  }
+
   const { data: sale, error: sErr } = await supabase
     .from('sales')
     .insert({
@@ -307,8 +331,19 @@ export async function markAsSold(
 
 // ============================================================================
 // SOFT-DELETE / RESTORE / HARD-DELETE  (Super Admin only)
+// Two-stage delete workflow:
+//   Stage 1 (softDeleteLeads): sets deleted_at → hidden from Super Admin main
+//           pool, moved to /deleted-leads page. Company admins with the lead
+//           allocated/assigned still see it in their pool.
+//   Stage 2 (hardDeleteLeads): DELETE FROM database — gone for everyone.
+//   Restore (restoreLeads): undo Stage 1, lead reappears in main pool.
 // ============================================================================
 
+/**
+ * STAGE 1 — Soft delete. Marks selected practice_codes as deleted (hidden
+ * from Super Admin main pool). Company admins/agents with the lead still
+ * allocated/assigned continue to see it in their pool until Stage 2 fires.
+ */
 export async function softDeleteLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 
@@ -335,7 +370,7 @@ export async function softDeleteLeads(codes: string[]) {
       { count: 'exact' }
     )
     .in('practice_code', codes)
-    .is('deleted_at', null)
+    .is('deleted_at', null)   // don't touch rows already soft-deleted
 
   if (error) return { ok: false, message: error.message }
   revalidatePath('/')
@@ -343,6 +378,9 @@ export async function softDeleteLeads(codes: string[]) {
   return { ok: true, message: `Moved ${count ?? codes.length} lead(s) to Deleted Leads.` }
 }
 
+/**
+ * Restore soft-deleted leads back to the main pool.
+ */
 export async function restoreLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 
@@ -373,6 +411,11 @@ export async function restoreLeads(codes: string[]) {
   return { ok: true, message: `Restored ${count ?? codes.length} lead(s) to the pool.` }
 }
 
+/**
+ * STAGE 2 — Hard delete. Permanently removes rows from the database.
+ * Related rows (allocations, assignments, etc.) are removed via ON DELETE
+ * CASCADE / ON DELETE SET NULL — verify your FK constraints match intent.
+ */
 export async function hardDeleteLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 

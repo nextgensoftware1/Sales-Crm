@@ -324,6 +324,41 @@ export default async function PracticeDetail({
       .from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
     updatedByName = (editor as any)?.full_name ?? null
   }
+
+  // Has this lead already been transferred once? If so, the Worksheet's
+  // transfer section shows that history. But whether it's actually LOCKED
+  // for the person looking at it right now depends on who they are: the
+  // closer it was transferred TO still owns this lead and must be able to
+  // keep working it. It's everyone else — most importantly the original
+  // agent who gave it away — who gets the read-only view.
+  let existingTransfer: { closerName: string; handoffStatus: string | null; transferredAt: string; toUserId: string | null } | null = null
+  {
+    const { data: transferRow } = await supabase
+      .from('lead_transfers')
+      .select('to_user_id, note, created_at')
+      .eq('practice_id', practice.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (transferRow) {
+      let closerName = 'Unknown'
+      if ((transferRow as any).to_user_id) {
+        const { data: closer } = await supabase
+          .from('users').select('full_name').eq('id', (transferRow as any).to_user_id).maybeSingle()
+        closerName = (closer as any)?.full_name ?? 'Unknown'
+      }
+      existingTransfer = {
+        closerName,
+        handoffStatus: (transferRow as any).note ?? null,
+        transferredAt: (transferRow as any).created_at,
+        toUserId: (transferRow as any).to_user_id ?? null,
+      }
+    }
+  }
+  // Only lock the worksheet for viewers who AREN'T the closer it now
+  // belongs to. Super Admin can also still edit — matches their oversight
+  // access everywhere else in the app.
+  const worksheetLocked = !!existingTransfer && existingTransfer.toUserId !== myUserId && !isSuperAdmin
   const toLocalInput = (iso: string | null) => {
     if (!iso) return ''
     const d = new Date(iso)
@@ -560,7 +595,7 @@ export default async function PracticeDetail({
           </div>
 
           <div className="sticky-col" style={{ position: 'sticky', top: 24, minWidth: 0 }}>
-            <Worksheet practiceCode={code} initial={worksheetInitial} />
+            <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
           </div>
         </div>
       </div>
