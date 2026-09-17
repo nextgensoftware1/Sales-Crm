@@ -19,15 +19,13 @@ export default async function Home() {
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
-  // Super Admin can now upload too (leads owned by Platform).
   const canUpload = ['company_admin', 'manager', 'super_admin'].includes(roleKey)
   const canAssign = ['company_admin', 'manager', 'team_lead'].includes(roleKey)
-  const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+  const showTransfers = true
   const canManageUsers = isSuperAdmin || canAssign
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
-  // Direct reports the caller may assign to (cascade model).
   let myAgents: { id: string; full_name: string; role: string }[] = []
   if (canAssign) {
     const { data: edges } = await supabase
@@ -46,7 +44,6 @@ export default async function Home() {
     }
   }
 
-  // Companies for the allocation UI (non-platform).
   let companies: { slug: string; name: string }[] = []
   if (isSuperAdmin) {
     const { data: tenantRows } = await supabase
@@ -65,16 +62,12 @@ export default async function Home() {
       }
     : null
 
-  // ------------------------------------------------------------------
-  // Per-agent assignment context (unchanged).
-  // ------------------------------------------------------------------
   const allocatedOn: Record<string, string> = {}
   const leadStatus: Record<string, string> = {}
   let assignedIds: string[] | null = null
   if (roleKey === 'agent' || roleKey === 'closer') {
     const idSet = new Set<string>()
 
-    // Leads directly assigned to me.
     const { data: assigns } = await supabase
       .from('lead_assignments')
       .select('practice_id, assigned_at, current_status')
@@ -88,7 +81,6 @@ export default async function Home() {
       }
     }
 
-    // Closers also receive leads via TRANSFER (agent → closer).
     if (roleKey === 'closer') {
       const { data: transfers } = await supabase
         .from('lead_transfers')
@@ -106,7 +98,6 @@ export default async function Home() {
     assignedIds = Array.from(idSet)
   }
 
-  // Priority (assigned to me) + handed-away (assigned by me) for upper roles.
   let myAssignedCodes: string[] = []
   let assignedAwayIds: string[] = []
   if (canAssign) {
@@ -127,18 +118,6 @@ export default async function Home() {
     assignedAwayIds = (away ?? []).map((r: any) => r.practice_id)
   }
 
-  // ------------------------------------------------------------------
-  // VISIBILITY — which practice IDs may this person see?
-  //   • Super Admin: everything EXCEPT soft-deleted leads
-  //     (soft-deleted moved to /deleted-leads page).
-  //   • Agent/Closer: only assigned to them (soft-deleted still visible
-  //     to them if they're still assigned — Super Admin's soft-delete
-  //     doesn't yank the lead out from under active work).
-  //   • Company roles: leads they OWN (upload) OR that are ALLOCATED to
-  //     them, minus leads engaged to another company. Soft-deleted leads
-  //     stay visible here too until Super Admin hard-deletes them.
-  // ------------------------------------------------------------------
-  // Leads allocated to my company (Super Admin gave them to us).
   let myAllocatedIds: string[] = []
   if (!isSuperAdmin && myTenantId) {
     const { data: allocs } = await supabase
@@ -151,11 +130,8 @@ export default async function Home() {
       .filter((id: any) => typeof id === 'string' && id.length > 0)
   }
 
-  // ALLOCATED tagging is done by practice_code (which embeds the NPI), NOT by row
-  // id — because a company sees its OWN copy of a practice, while the allocation
-  // points to the Platform copy. Same NPI = same practice_code, so we match on that.
   const allocatedCodeSet = new Set<string>()
-  const allocatedCompanyByCode: Record<string, string> = {} // code -> company name (Super Admin only)
+  const allocatedCompanyByCode: Record<string, string> = {}
   {
     let aq = supabase
       .from('lead_allocations')
@@ -172,7 +148,6 @@ export default async function Home() {
     }
   }
 
-  // "Engaged" lock: practices assigned to an agent/closer under ANOTHER company.
   let engagedElsewhere = new Set<string>()
   if (!isSuperAdmin && myTenantId) {
     const { data: engaged } = await supabase
@@ -195,9 +170,8 @@ export default async function Home() {
     )
   `
   const PAGE = 1000
-  const CHUNK_IDS = 300  // keep .in() lists small to avoid Bad Request (URL length)
+  const CHUNK_IDS = 300
 
-  // Fetch all rows for a query builder factory, paging through 1000s.
   const fetchAllPaged = async (makeQuery: () => any) => {
     const out: any[] = []
     let from = 0
@@ -212,7 +186,6 @@ export default async function Home() {
     return out
   }
 
-  // Fetch rows whose id is in a (possibly large) list, chunked — chunks run in parallel.
   const fetchByIds = async (idsIn: string[]) => {
     const ids = (idsIn ?? []).filter((id) => typeof id === 'string' && id.length > 0)
     if (ids.length === 0) return []
@@ -232,19 +205,20 @@ export default async function Home() {
   let error: any = null
   try {
     if (isSuperAdmin) {
-      // All practices EXCEPT soft-deleted — those live on /deleted-leads.  ← CHANGED
+      // All ANCHOR practices, EXCEPT soft-deleted (roster members hidden).
       data = await fetchAllPaged(() =>
         supabase.from('master_practices').select(SELECT)
           .is('deleted_at', null)
+          .eq('is_roster', false)
           .order('name')
       )
     } else if (roleKey === 'agent' || roleKey === 'closer') {
       data = await fetchByIds(assignedIds ?? [])
     } else {
-      // company roles: OWNED + ALLOCATED — run both in parallel.
+      // company roles: OWNED + ALLOCATED — anchors only, roster hidden.
       const [owned, allocated] = await Promise.all([
         fetchAllPaged(() =>
-          supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).order('name')
+          supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).eq('is_roster', false).order('name')
         ),
         fetchByIds(myAllocatedIds),
       ])
@@ -268,9 +242,6 @@ export default async function Home() {
     )
   }
 
-  // Post-filters (JS side). These apply ONLY to company-level roles browsing
-  // the pool — never to an agent/closer (who see their assigned leads), and
-  // never to the Company Admin (who oversees everything in the company).
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
   const isCompanyAdmin = roleKey === 'company_admin'
   if (!isSuperAdmin && !isAgentOrCloser && !isCompanyAdmin) {
@@ -283,7 +254,6 @@ export default async function Home() {
     }
   }
 
-  // Dedup by practice_code — keep the first occurrence.
   const seen = new Set<string>()
   data = data.filter((p: any) => {
     if (seen.has(p.practice_code)) return false
@@ -291,8 +261,6 @@ export default async function Home() {
     return true
   })
 
-  // Last Dialed = latest activity date per practice (live from lead_activity).
-  // We also capture which practices have ANY activity — those are "Worked Leads".
   const lastDialed: Record<string, string> = {}
   const workedPracticeIds = new Set<string>()
   {
@@ -307,16 +275,12 @@ export default async function Home() {
       for (const a of (acts ?? []) as any[]) {
         if (a.practice_id) {
           workedPracticeIds.add(a.practice_id)
-          // first seen per practice_id is the latest (ordered desc)
           if (!lastDialed[a.practice_id]) lastDialed[a.practice_id] = a.created_at
         }
       }
     }
   }
 
-  // "New Leads" = rows from the most recent upload batch — i.e. practices
-  // whose created_at is within 5 minutes of the latest created_at in the
-  // visible set. Handles bulk uploads that stamp thousands of rows at once.
   const newLeadCodes = new Set<string>()
   const workedLeadCodes = new Set<string>()
   {
@@ -326,7 +290,7 @@ export default async function Home() {
       .map((s: string) => new Date(s).getTime())
     if (timestamps.length) {
       const maxT = Math.max(...timestamps)
-      const windowMs = 5 * 60 * 1000  // 5-minute batch window
+      const windowMs = 5 * 60 * 1000
       for (const p of data) {
         if (p.created_at) {
           const t = new Date(p.created_at).getTime()
@@ -335,7 +299,6 @@ export default async function Home() {
         if (workedPracticeIds.has(p.id)) workedLeadCodes.add(p.practice_code)
       }
     } else {
-      // No timestamps at all — no way to compute "new". Still fill worked set.
       for (const p of data) {
         if (workedPracticeIds.has(p.id)) workedLeadCodes.add(p.practice_code)
       }

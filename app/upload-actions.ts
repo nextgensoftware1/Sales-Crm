@@ -1,295 +1,6 @@
-// 'use server'
-
-// import { createSupabaseServer } from '../lib/supabase-server'
-
-// // ---------------------------------------------------------------------------
-// // uploadLeadsCsv(rows) — BATCHED version for large files (1000s of rows).
-// //
-// // Idempotent behaviour:
-// //   • De-dupes within the file (same NPI twice → first wins)
-// //   • Skips NPIs already owned by this tenant → inserts only NEW leads
-// //   • Never errors out on "existing" — just skips and reports clearly
-// // ---------------------------------------------------------------------------
-
-// type CsvRow = Record<string, string>
-
-// const CHUNK = 500
-// const clean = (v: string | undefined) => (v ?? '').trim()
-// const yes = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'yes'
-
-// function chunk<T>(arr: T[], size: number): T[][] {
-//   const out: T[][] = []
-//   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
-//   return out
-// }
-
-// export async function uploadLeadsCsv(
-//   rows: CsvRow[]
-// ): Promise<{ ok: boolean; message: string; inserted?: number; skipped?: number }> {
-//   const supabase = await createSupabaseServer()
-
-//   const { data: { user } } = await supabase.auth.getUser()
-//   if (!user) return { ok: false, message: 'Not signed in.' }
-
-//   const { data: me } = await supabase
-//     .from('users')
-//     .select('id, tenant_id, roles(key)')
-//     .eq('auth_id', user.id)
-//     .single()
-
-//   const roleKey = (me as any)?.roles?.key ?? ''
-//   let tenantId = (me as any)?.tenant_id
-
-//   if (!['company_admin', 'manager', 'super_admin'].includes(roleKey)) {
-//     return { ok: false, message: 'Only a Company Admin, Manager, or Super Admin can upload leads.' }
-//   }
-
-//   // Super Admin uploads → Platform tenant.
-//   if (roleKey === 'super_admin') {
-//     const { data: platform } = await supabase
-//       .from('tenants')
-//       .select('id')
-//       .eq('is_platform', true)
-//       .maybeSingle()
-//     if (!platform) return { ok: false, message: 'No Platform tenant found. Run migration 014.' }
-//     tenantId = (platform as any).id
-//   }
-
-//   if (!tenantId) return { ok: false, message: 'No company linked to your account.' }
-//   if (!Array.isArray(rows) || rows.length === 0) {
-//     return { ok: false, message: 'No rows found in the file.' }
-//   }
-
-//   // tolerant column reader
-//   const keyMap = new Map<string, string>()
-//   for (const k of Object.keys(rows[0])) keyMap.set(k.trim().toLowerCase(), k)
-//   const col = (row: CsvRow, name: string) => {
-//     const realKey = keyMap.get(name.toLowerCase())
-//     return realKey ? clean(row[realKey]) : ''
-//   }
-//   const npiKey = keyMap.get('npi')
-//   if (!npiKey) return { ok: false, message: 'CSV has no NPI column.' }
-
-//   // ---- De-dupe within the file (first NPI wins) ----
-//   const byCode = new Map<string, CsvRow>()
-//   const byNpi  = new Map<string, CsvRow>()
-//   for (const row of rows) {
-//     const npi = clean(row[npiKey])
-//     if (!npi) continue
-//     const code = `PR-${npi}`
-//     if (!byCode.has(code)) byCode.set(code, row)
-//     if (!byNpi.has(npi))   byNpi.set(npi, row)
-//   }
-//   const csvFileCount = byNpi.size
-
-//   // ---- Look up existing rows FOR THIS TENANT ONLY ----
-//   const allNpis  = Array.from(byNpi.keys())
-//   const allCodes = Array.from(byCode.keys())
-
-//   const existingNpisForTenant = new Set<string>()
-//   for (const part of chunk(allNpis, 300)) {
-//     const { data: existProv, error: eErr } = await supabase
-//       .from('providers')
-//       .select('npi')
-//       .eq('owner_tenant_id', tenantId)
-//       .in('npi', part)
-//     if (eErr) return { ok: false, message: `Existing-check failed: ${eErr.message}` }
-//     for (const p of (existProv ?? []) as any[]) existingNpisForTenant.add(p.npi)
-//   }
-
-//   const existingCodesForTenant = new Set<string>()
-//   for (const codesChunk of chunk(allCodes, 800)) {
-//     const { data: existPract } = await supabase
-//       .from('master_practices')
-//       .select('practice_code')
-//       .eq('owner_tenant_id', tenantId)
-//       .in('practice_code', codesChunk)
-//     for (const e of (existPract ?? []) as any[]) existingCodesForTenant.add(e.practice_code)
-//   }
-
-//   // ---- Determine what actually needs inserting ----
-//   const toInsert = allCodes.filter((code) => {
-//     const npi = clean(byCode.get(code)![npiKey])
-//     if (existingCodesForTenant.has(code)) return false
-//     if (existingNpisForTenant.has(npi))   return false
-//     return true
-//   })
-
-//   const skippedExisting = allCodes.length - toInsert.length
-
-//   if (toInsert.length === 0) {
-//     return {
-//       ok: true,
-//       message:
-//         `No new leads to add. ` +
-//         `Your CSV has ${csvFileCount} unique NPI(s), all ${skippedExisting} already exist for your company.`,
-//       inserted: 0,
-//       skipped: skippedExisting,
-//     }
-//   }
-
-//   // ============================================================================
-//   // 1) PROVIDERS
-//   // ============================================================================
-//   const providerRows = toInsert.map((code) => {
-//     const row = byCode.get(code)!
-//     const npi = clean(row[npiKey])
-//     const numMembers = col(row, 'Num_Org_Members')
-//     const pecos = col(row, 'PECOS_ASCT_CNTL_ID') || null
-//     const enrlmt = col(row, 'ENRLMT_ID') || null
-//     return {
-//       npi,
-//       name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (NPI ${npi})`,
-//       state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
-//       city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
-//       postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
-//       taxonomy_desc: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || null,
-//       phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
-//       org_pac_id: col(row, 'Org_PAC_ID') || null,
-//       org_name: col(row, 'Org_Name') || null,
-//       num_org_members: numMembers ? parseInt(numMembers, 10) || null : null,
-//       pecos_asct_cntl_id: pecos,
-//       enrlmt_id: enrlmt,
-//       nppes_sex: col(row, 'NPPES_Sex') || null,
-//       nppes_last_updated: col(row, 'NPPES_LastUpdated') || null,
-//       payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || null,
-//       at_risk: col(row, 'At_Risk') || null,
-//       status:        col(row, 'NPPES_Status') || null,
-//       taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || null,
-//       mailing_phone: col(row, 'NPPES_MailingPhone') || null,
-//       is_anchor: !!(pecos && enrlmt),
-//       owner_tenant_id: tenantId,
-//     }
-//   })
-
-//   const providerIdByCode = new Map<string, string>()
-//   for (const part of chunk(providerRows, CHUNK)) {
-//     const { data, error } = await supabase.from('providers').insert(part).select('id, npi')
-//     if (error) return { ok: false, message: `Provider insert failed: ${error.message}` }
-//     for (const p of (data ?? []) as any[]) providerIdByCode.set(`PR-${p.npi}`, p.id)
-//   }
-
-//   // ============================================================================
-//   // 2) MASTER PRACTICES — only for ANCHORS
-//   // ============================================================================
-//   const isAnchorRow = (code: string) => {
-//     const row = byCode.get(code)!
-//     return !!(col(row, 'PECOS_ASCT_CNTL_ID') && col(row, 'ENRLMT_ID'))
-//   }
-//   const anchorCodes = toInsert.filter(isAnchorRow)
-
-//   const practiceRows = anchorCodes.map((code) => {
-//     const row = byCode.get(code)!
-//     return {
-//       practice_code: code,
-//       name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (${code})`,
-//       state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
-//       city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
-//       postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
-//       specialty: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || null,
-//       phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
-//       owner_tenant_id: tenantId,
-//     }
-//   })
-
-//   const practiceIdByCode = new Map<string, string>()
-//   for (const part of chunk(practiceRows, CHUNK)) {
-//     const { data, error } = await supabase.from('master_practices').insert(part).select('id, practice_code')
-//     if (error) return { ok: false, message: `Practice insert failed: ${error.message}` }
-//     for (const m of (data ?? []) as any[]) practiceIdByCode.set(m.practice_code, m.id)
-//   }
-
-//   // ============================================================================
-//   // 3) LINKS
-//   // ============================================================================
-//   const linkRows: any[] = []
-//   for (const code of anchorCodes) {
-//     const pid = providerIdByCode.get(code)
-//     const mid = practiceIdByCode.get(code)
-//     if (pid && mid) linkRows.push({ practice_id: mid, provider_id: pid, is_primary: true })
-//   }
-//   for (const part of chunk(linkRows, CHUNK)) {
-//     const { error } = await supabase.from('practice_providers').insert(part)
-//     if (error) return { ok: false, message: `Link insert failed: ${error.message}` }
-//   }
-
-//   // ============================================================================
-//   // 4) SIGNALS
-//   // ============================================================================
-//   const signalRows: any[] = []
-//   for (const code of toInsert) {
-//     const pid = providerIdByCode.get(code)
-//     if (!pid) continue
-//     const row = byCode.get(code)!
-//     signalRows.push({
-//       provider_id: pid,
-//       ccm: yes(col(row, 'CMS_CCM')),
-//       pcm: yes(col(row, 'CMS_PCM')),
-//       awv: yes(col(row, 'CMS_AWV')),
-//       tcm: yes(col(row, 'CMS_TCM')),
-//       bhi: yes(col(row, 'CMS_BHI')),
-//       rpm: yes(col(row, 'CMS_RPM')),
-//       rcm_fit: yes(col(row, 'CMS_RCM')),
-//       cms_category: col(row, 'CMS_Category') || null,
-//     })
-//   }
-//   for (const part of chunk(signalRows, CHUNK)) {
-//     const { error } = await supabase.from('provider_signals').insert(part)
-//     if (error) return { ok: false, message: `Signals insert failed: ${error.message}` }
-//   }
-
-//   // ============================================================================
-//   // 5) MIPS
-//   // ============================================================================
-//   const mipsRows: any[] = []
-//   for (const code of toInsert) {
-//     const pid = providerIdByCode.get(code)
-//     if (!pid) continue
-//     const row = byCode.get(code)!
-//     const mipsText = col(row, 'MIPS_By_Year')
-//     if (mipsText) {
-//       mipsRows.push({
-//         provider_id: pid,
-//         reporting_option: mipsText,
-//         source: 'Company CSV upload (MIPS_By_Year text)',
-//       })
-//     }
-//   }
-//   for (const part of chunk(mipsRows, CHUNK)) {
-//     const { error } = await supabase.from('provider_mips').insert(part)
-//     if (error) return { ok: false, message: `MIPS insert failed: ${error.message}` }
-//   }
-
-//   const rosterCount = toInsert.length - anchorCodes.length
-//   const parts: string[] = []
-//   parts.push(`Uploaded ${anchorCodes.length} new lead${anchorCodes.length === 1 ? '' : 's'}`)
-//   if (rosterCount)     parts.push(`+ ${rosterCount} roster member${rosterCount === 1 ? '' : 's'}`)
-//   if (skippedExisting) parts.push(`skipped ${skippedExisting} that already existed`)
-//   parts.push(`(${csvFileCount} unique NPIs in file)`)
-
-//   return {
-//     ok: true,
-//     message: parts.join(', ') + '.',
-//     inserted: anchorCodes.length,
-//     skipped: skippedExisting,
-//   }
-// }
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
-
-// ---------------------------------------------------------------------------
-// uploadLeadsCsv(rows) — BATCHED version for large files (1000s of rows).
-//
-// Instead of 5 DB calls per row, this does a handful of bulk inserts:
-//   1. bulk-insert providers          (tagged owner_tenant_id)
-//   2. bulk-insert master_practices   (tagged owner_tenant_id)
-//   3. bulk-insert practice_providers links
-//   4. bulk-insert provider_signals
-//   5. bulk-insert provider_mips
-// Everything is chunked at CHUNK rows per call. Duplicates (by practice_code
-// within this company) are skipped up front. Only Company Admin + Manager.
-// ---------------------------------------------------------------------------
 
 type CsvRow = Record<string, string>
 
@@ -320,12 +31,10 @@ export async function uploadLeadsCsv(
   const roleKey = (me as any)?.roles?.key ?? ''
   let tenantId = (me as any)?.tenant_id
 
-  // Who may upload: company_admin, manager, OR super_admin.
   if (!['company_admin', 'manager', 'super_admin'].includes(roleKey)) {
     return { ok: false, message: 'Only a Company Admin, Manager, or Super Admin can upload leads.' }
   }
 
-  // Super Admin's uploads are owned by the PLATFORM tenant (not their own).
   if (roleKey === 'super_admin') {
     const { data: platform } = await supabase
       .from('tenants')
@@ -341,7 +50,6 @@ export async function uploadLeadsCsv(
     return { ok: false, message: 'No rows found in the file.' }
   }
 
-  // tolerant column reader
   const keyMap = new Map<string, string>()
   for (const k of Object.keys(rows[0])) keyMap.set(k.trim().toLowerCase(), k)
   const col = (row: CsvRow, name: string) => {
@@ -351,13 +59,12 @@ export async function uploadLeadsCsv(
   const npiKey = keyMap.get('npi')
   if (!npiKey) return { ok: false, message: 'CSV has no NPI column.' }
 
-  // --- de-dupe within the file, and against what this company already owns ---
   const byCode = new Map<string, CsvRow>()
   for (const row of rows) {
     const npi = clean(row[npiKey])
     if (!npi) continue
     const code = `PR-${npi}`
-    if (!byCode.has(code)) byCode.set(code, row) // first wins
+    if (!byCode.has(code)) byCode.set(code, row)
   }
   const allCodes = Array.from(byCode.keys())
 
@@ -373,8 +80,6 @@ export async function uploadLeadsCsv(
 
   const toInsertByCode = allCodes.filter((c) => !existingCodes.has(c))
 
-  // Per-company NPI dedup: the same NPI may exist for DIFFERENT companies, but
-  // not twice for THIS company. So check only NPIs already owned by this tenant.
   const npiByCode = new Map<string, string>()
   for (const code of toInsertByCode) {
     const npi = clean(byCode.get(code)![npiKey])
@@ -386,7 +91,7 @@ export async function uploadLeadsCsv(
     const { data: existProv } = await supabase
       .from('providers')
       .select('npi')
-      .eq('owner_tenant_id', tenantId)   // ← only THIS company's providers
+      .eq('owner_tenant_id', tenantId)
       .in('npi', part)
     for (const p of (existProv ?? []) as any[]) existingNpis.add(p.npi)
   }
@@ -400,10 +105,7 @@ export async function uploadLeadsCsv(
     return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
   }
 
-  // 1) PROVIDERS ---------------------------------------------------------------
-  // An "anchor" (parent lead) is identified by EITHER signal, to support both
-  // CSV formats: (a) Source column = 'uploaded' (roster rows are 'roster:*'),
-  // or (b) the older format with both PECOS_ASCT_CNTL_ID and ENRLMT_ID present.
+  // Anchor detection: Source='uploaded' OR (PECOS + ENRLMT present).
   const isAnchorRow = (code: string) => {
     const row = byCode.get(code)!
     const source = col(row, 'Source').toLowerCase()
@@ -433,14 +135,14 @@ export async function uploadLeadsCsv(
       enrlmt_id: enrlmt,
       nppes_sex: col(row, 'NPPES_Sex') || null,
       nppes_last_updated: col(row, 'NPPES_LastUpdated') || null,
-      payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || null,
+      payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || col(row, 'Payment Adjustment Percentage') || null,
       at_risk: col(row, 'At_Risk') || null,
+      penalty: col(row, 'Panelty') || col(row, 'Penalty') || null,
       is_anchor: isAnchorRow(code),
       owner_tenant_id: tenantId,
     }
   })
 
-  // code -> provider id (filled as we insert)
   const providerIdByCode = new Map<string, string>()
   for (const part of chunk(providerRows, CHUNK)) {
     const { data, error } = await supabase.from('providers').insert(part).select('id, npi')
@@ -450,8 +152,9 @@ export async function uploadLeadsCsv(
 
   const anchorCodes = toInsert.filter(isAnchorRow)
 
-  // 2) MASTER PRACTICES — only for ANCHORS (roster members are providers only).
-  const practiceRows = anchorCodes.map((code) => {
+  // Practices for EVERY provider (anchors + roster). Roster rows flagged
+  // is_roster=true so the main Lead Pool hides them; still openable via roster.
+  const practiceRows = toInsert.map((code) => {
     const row = byCode.get(code)!
     return {
       practice_code: code,
@@ -461,6 +164,7 @@ export async function uploadLeadsCsv(
       postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
       specialty: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || null,
       phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
+      is_roster: !isAnchorRow(code),
       owner_tenant_id: tenantId,
     }
   })
@@ -472,9 +176,8 @@ export async function uploadLeadsCsv(
     for (const m of (data ?? []) as any[]) practiceIdByCode.set(m.practice_code, m.id)
   }
 
-  // 3) LINKS — link only anchors (they're the only ones with a practice).
   const linkRows: any[] = []
-  for (const code of anchorCodes) {
+  for (const code of toInsert) {
     const pid = providerIdByCode.get(code)
     const mid = practiceIdByCode.get(code)
     if (pid && mid) linkRows.push({ practice_id: mid, provider_id: pid, is_primary: true })
@@ -484,7 +187,6 @@ export async function uploadLeadsCsv(
     if (error) return { ok: false, message: `Link insert failed: ${error.message}` }
   }
 
-  // 4) SIGNALS -----------------------------------------------------------------
   const signalRows: any[] = []
   for (const code of toInsert) {
     const pid = providerIdByCode.get(code)
@@ -507,7 +209,6 @@ export async function uploadLeadsCsv(
     if (error) return { ok: false, message: `Signals insert failed: ${error.message}` }
   }
 
-  // 5) MIPS --------------------------------------------------------------------
   const mipsRows: any[] = []
   for (const code of toInsert) {
     const pid = providerIdByCode.get(code)

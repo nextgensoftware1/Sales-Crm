@@ -4,9 +4,6 @@ import { createSupabaseServer } from '../../../lib/supabase-server'
 import { roleLabel } from '../../../lib/roles'
 import AppShell from '../../AppShell'
 
-// Simple, deterministic state -> US timezone-zone mapping, used only to label
-// the practice's zone badge from data we already have (its state). Purely a
-// computed display label — no data is invented.
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
   NJ: 'EST', NY: 'EST', NC: 'EST', OH: 'EST', PA: 'EST', RI: 'EST', SC: 'EST', VT: 'EST',
@@ -18,8 +15,6 @@ const ZONE_BY_STATE: Record<string, string> = {
   AK: 'Other', HI: 'Other',
 }
 
-// Same "does this MIPS text mean real participation" rule used on the bulk
-// Leads Engine table, applied per-provider here.
 function hasRealMips(reportingOption?: string | null): boolean {
   const v = (reportingOption ?? '').toString().trim().toLowerCase()
   if (!v) return false
@@ -35,18 +30,10 @@ function mipsBucket(reportingOption?: string | null): 'individual' | 'group' | '
   return 'non'
 }
 
-// Pull the 2026 status out of a MIPS_By_Year style string.
-// Example inputs:
-//   "2026 - Individual"                         → "Individual"
-//   "2025 - Group | 2026 - Individual"          → "Individual"
-//   "2026 - Excluded - low volume / No record"  → "Excluded - low volume / No record"
-//   "2024 - Group"                              → "" (no 2026 mention)
-// Returns "" if 2026 not present.
 function mips2026(reportingOption?: string | null): string {
   if (!reportingOption) return ''
   const text = reportingOption.toString()
   if (!text.includes('2026')) return ''
-  // Try common patterns: "2026 - X", "2026: X", "2026 X"
   const match = text.match(/2026\s*[-:]?\s*([^|;\n]+)/i)
   if (match && match[1]) return match[1].trim()
   return 'Yes'
@@ -59,12 +46,8 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
 
-  // One Supabase client — handles auth AND data (matches the pattern in app/page.tsx).
   const supabase = await createSupabaseServer()
 
-  // Current user, for the shared app chrome (sidebar / topbar) AND for
-  // picking the right copy of a practice when the same practice_code
-  // exists for multiple tenants.
   let currentUser: { full_name: string; role: string; company: string } | null = null
   let isSuperAdmin = false
   let myTenantId: string | null = null
@@ -90,17 +73,13 @@ export default async function PracticeDetail({
         isSuperAdmin = roleKey === 'super_admin'
         myTenantId = (me as any).tenant_id ?? null
         myUserId = (me as any).id ?? null
-        showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
+        showTransfers = true
         canManageUsers = isSuperAdmin || ['company_admin', 'manager', 'team_lead'].includes(roleKey)
       }
     }
   } catch {
-    // Chrome is cosmetic here — if this lookup fails, the page still renders.
   }
 
-  // Fetch ALL rows matching this practice_code — same code may exist in multiple
-  // tenants (Platform copy + each company's copy). We pick ONE row based on who's
-  // viewing. Using .single() here would crash with "Cannot coerce" when >1 exists.
   let query = supabase
     .from('master_practices')
     .select(`
@@ -114,7 +93,7 @@ export default async function PracticeDetail({
           npi, name, org_name, credential, taxonomy_code, taxonomy_desc,
           addr1, city, state, postal, phone,
           status, mailing_phone, entity_type, is_anchor,
-          org_pac_id, num_org_members, payment_adj_pct,
+          org_pac_id, num_org_members, payment_adj_pct, penalty,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
         )
@@ -122,9 +101,6 @@ export default async function PracticeDetail({
     `)
     .eq('practice_code', code)
 
-  // Super Admin: hide soft-deleted from the detail page too (they belong in
-  // /deleted-leads). Company users still see soft-deleted leads if they had
-  // them allocated — matches the visibility rule in the Lead Pool.
   if (isSuperAdmin) {
     query = query.is('deleted_at', null)
   }
@@ -132,10 +108,6 @@ export default async function PracticeDetail({
   const { data: candidates, error } = await query
   const rows = (candidates ?? []) as any[]
 
-  // Pick the best row for this viewer:
-  //   1. Company users → their own tenant's copy first
-  //   2. Otherwise    → the Platform copy (owner_tenant_id typically NULL)
-  //   3. Fallback     → first row available
   let practice: any = null
   if (rows.length > 0) {
     if (myTenantId && !isSuperAdmin) {
@@ -145,20 +117,11 @@ export default async function PracticeDetail({
     }
   }
 
-  // ---- Authorization: does this signed-in user actually have access to
-  // this lead? Being logged in is not enough — the same rule the main Leads
-  // Engine pool already enforces applies here too, or anyone could open any
-  // lead just by knowing/guessing its URL. Fails CLOSED: unrecognized roles
-  // see nothing. A failed check renders the exact same "not found" card
-  // used for a genuinely missing practice, so this page never reveals
-  // whether a lead exists that the viewer isn't allowed to see.
   let authorized = false
   if (practice) {
     if (isSuperAdmin) {
       authorized = true
     } else if (roleKey === 'agent' || roleKey === 'closer') {
-      // Same rule as the main pool: leads directly assigned to me, plus —
-      // for closers — leads a transfer has sent to me.
       const idSet = new Set<string>()
       if (myUserId) {
         const { data: assigns } = await supabase
@@ -177,12 +140,33 @@ export default async function PracticeDetail({
         }
       }
       authorized = rows.some((r) => idSet.has(r.id))
+
+      // Roster access: if this practice is a roster member, the agent/closer may
+      // open it when they're assigned/transferred the ANCHOR that shares its
+      // org_pac_id (same organization). So they can work an anchor's roster too.
+      if (!authorized && idSet.size > 0) {
+        const viewedOrgPac = rows
+          .map((r: any) => r.practice_providers?.[0]?.providers?.org_pac_id)
+          .find((o: any) => o)
+        if (viewedOrgPac) {
+          // Which anchor practices share this org_pac_id?
+          const { data: sameOrg } = await supabase
+            .from('providers')
+            .select('id, practice_providers(practice_id)')
+            .eq('org_pac_id', viewedOrgPac)
+          const orgPracticeIds = new Set<string>()
+          for (const pr of (sameOrg ?? []) as any[]) {
+            for (const link of (pr.practice_providers ?? [])) {
+              if (link.practice_id) orgPracticeIds.add(link.practice_id)
+            }
+          }
+          // Authorized if any of MY assigned practices is in this org.
+          for (const assignedId of idSet) {
+            if (orgPracticeIds.has(assignedId)) { authorized = true; break }
+          }
+        }
+      }
     } else if (myTenantId) {
-      // Company roles (company_admin / manager / team_lead): visible if
-      // they own this practice themselves, or their company has it
-      // allocated — matched by practice_code, same as the main pool, since
-      // an allocation points at the Platform copy while the company may be
-      // viewing its own separate copy of the same code.
       const ownsIt = rows.some((r) => r.owner_tenant_id === myTenantId)
       let allocatedToMe = false
       if (!ownsIt) {
@@ -194,6 +178,42 @@ export default async function PracticeDetail({
         allocatedToMe = (allocs ?? []).some((a: any) => a.master_practices?.practice_code === code)
       }
       authorized = ownsIt || allocatedToMe
+
+      // Roster access for company roles: if this is a roster member, allow it
+      // when the company owns OR is allocated an ANCHOR in the same organization
+      // (same org_pac_id). So managers/TL/admin can review roster leads their
+      // agents/closers are working.
+      if (!authorized) {
+        const viewedOrgPac = rows
+          .map((r: any) => r.practice_providers?.[0]?.providers?.org_pac_id)
+          .find((o: any) => o)
+        if (viewedOrgPac) {
+          // All practice_codes in this org.
+          const { data: sameOrg } = await supabase
+            .from('providers')
+            .select('practice_providers(master_practices(practice_code, owner_tenant_id))')
+            .eq('org_pac_id', viewedOrgPac)
+          const orgCodes: { code: string; owner: string | null }[] = []
+          for (const pr of (sameOrg ?? []) as any[]) {
+            for (const link of (pr.practice_providers ?? [])) {
+              const mp = link.master_practices
+              if (mp?.practice_code) orgCodes.push({ code: mp.practice_code, owner: mp.owner_tenant_id ?? null })
+            }
+          }
+          // Owns any anchor in this org?
+          if (orgCodes.some((c) => c.owner === myTenantId)) authorized = true
+          // Or is allocated any anchor in this org?
+          if (!authorized && orgCodes.length) {
+            const { data: allocs2 } = await supabase
+              .from('lead_allocations')
+              .select('master_practices(practice_code)')
+              .eq('tenant_id', myTenantId)
+              .eq('status', 'active')
+            const allocatedCodes = new Set((allocs2 ?? []).map((a: any) => a.master_practices?.practice_code).filter(Boolean))
+            if (orgCodes.some((c) => allocatedCodes.has(c.code))) authorized = true
+          }
+        }
+      }
     }
   }
 
@@ -215,8 +235,6 @@ export default async function PracticeDetail({
     )
   }
 
-  // Prev/Next pagination — ordered by name, deduped by practice_code so we
-  // don't count the same code multiple times when it exists per-tenant.
   const { data: allCodesRows } = await supabase
     .from('master_practices')
     .select('practice_code')
@@ -234,7 +252,6 @@ export default async function PracticeDetail({
   const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
   const nextCode = currentIndex >= 0 && currentIndex < codesList.length - 1 ? codesList[currentIndex + 1] : null
 
-  // Fetch past activity for this practice (dispositions + notes)
   const { data: activity } = await supabase
     .from('lead_activity')
     .select('disposition, note, created_at, users(full_name)')
@@ -247,20 +264,12 @@ export default async function PracticeDetail({
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
 
-  // Show the organization name at the top when this practice/clinician is
-  // affiliated with one (from NPPES provider data). Falls back to the
-  // practice/clinician's own name for solo practices with no organization.
   const orgName: string | null = providersList
     .map((prov: any) => (prov?.org_name ?? '').toString().trim())
     .find((n: string) => n.length > 0) || null
   const displayTitle = orgName || practice.name
 
-  // ---- Total Provider count from the org roster ----
-  // The practice_providers link table only has direct links (typically 1 anchor row
-  // per practice from CSV upload). But the full ORGANIZATION roster is stored across
-  // the providers table under the same org_pac_id (added via CMS Doctors & Clinicians
-  // enrichment). So count everyone sharing the same org_pac_id — that's the real roster.
-  let totalProviders = providersList.length   // fallback: at least the direct links
+  let totalProviders = providersList.length
   if (primaryProvider?.org_pac_id) {
     const { count: rosterCount } = await supabase
       .from('providers')
@@ -269,12 +278,6 @@ export default async function PracticeDetail({
     if (rosterCount && rosterCount > totalProviders) totalProviders = rosterCount
   }
 
-  // ---- NPI Type detection ----
-  // Determines whether the provider is Type 1 (individual) or Type 2 (organization).
-  //   1. Primary source: providers.entity_type from NPPES (e.g. "NPI-1" / "NPI-2")
-  //   2. Fallback: providers.is_anchor — auto-detected during upload from the
-  //      presence of BOTH PECOS_ASCT_CNTL_ID and ENRLMT_ID, which indicates a
-  //      billing organization (Type 2). Anything else is treated as Type 1.
   const entityTypeRaw = (primaryProvider?.entity_type ?? '').toString().trim().toLowerCase()
   const isAnchor      = !!primaryProvider?.is_anchor
 
@@ -284,44 +287,37 @@ export default async function PracticeDetail({
     isNpiType2 = entityTypeRaw.includes('2') || entityTypeRaw.includes('org')
     isNpiType1 = entityTypeRaw.includes('1') || entityTypeRaw.includes('ind')
   } else if (primaryProvider) {
-    // No entity_type — infer from is_anchor.
     isNpiType2 = isAnchor
     isNpiType1 = !isAnchor
   }
   const npiType2Value = isNpiType2 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
   const npiType1Value = isNpiType1 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
 
-  // ---- KPI values for the 4 top tiles ----
-  // MIPS: parse the 2026 status out of the primary provider's reporting_option.
   const primaryMipsRows: any[] = Array.isArray(primaryProvider?.provider_mips)
     ? primaryProvider.provider_mips
     : (primaryProvider?.provider_mips ? [primaryProvider.provider_mips] : [])
   const primaryReportingOption = primaryMipsRows[0]?.reporting_option
   const mips2026Value = mips2026(primaryReportingOption) || '—'
 
-  // Penalty: use the primary provider's payment_adj_pct (already text like "1.88%").
-  const penaltyValue = (primaryProvider?.payment_adj_pct ?? '').toString().trim() || '—'
+  // Penalty: the CSV "Panelty" value for this lead, shown with a $ sign.
+  const penaltyRaw = (primaryProvider?.penalty ?? '').toString().trim()
+  const penaltyValue = penaltyRaw ? `$${Number(penaltyRaw).toLocaleString()}` : '—'
 
-  // Aggregate MIPS eligibility + CCM qualification across ALL providers at this practice.
-  // MIPS categorization uses ONLY the 2026 year — older years are ignored so the
-  // buckets reflect current eligibility, not historical status.
   let mipsIndividual = 0, mipsGroup = 0, mipsNonEligible = 0
   let anyCcm = false
   for (const prov of providersList) {
     const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
     const reportingOption = mipsRows[0]?.reporting_option
-    // Extract just the 2026 portion so bucketing only reflects 2026 status.
     const status2026 = mips2026(reportingOption).toLowerCase()
     if (status2026.includes('individual')) mipsIndividual++
     else if (status2026.includes('group') || status2026.includes('apm')) mipsGroup++
-    else mipsNonEligible++     // includes '', 'excluded', 'no record', etc.
+    else mipsNonEligible++
     if (prov.provider_signals?.ccm) anyCcm = true
   }
 
   const zone = practice.state ? (ZONE_BY_STATE[practice.state] ?? 'Other') : null
   const statusLabel = pr.ws_disposition || 'New'
 
-  // Worksheet: prefill from saved fields; look up who last edited it.
   let updatedByName: string | null = null
   if (pr.ws_updated_by) {
     const { data: editor } = await supabase
@@ -358,7 +354,6 @@ export default async function PracticeDetail({
       canManageUsers={canManageUsers}
     >
       <div className="lead-page">
-        {/* ---- Header: back / pager / title+badges / address+phone ---- */}
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
@@ -402,7 +397,6 @@ export default async function PracticeDetail({
             </div>
           </div>
 
-          {/* ---- Contact fields: mapped from NPPES provider data ---- */}
           <div className="lead-fields-panel" style={{ marginTop: 16 }}>
             <div className="lead-fields-grid">
               <div>
@@ -425,7 +419,6 @@ export default async function PracticeDetail({
           </div>
         </div>
 
-        {/* ---- Stat row (4 tiles — Patients/Impact/Allowed/CCM Opp hidden until wired up) ---- */}
         <div className="lead-stats-grid">
           <div className="lead-stat" title={mips2026Value}>
             <span
@@ -459,7 +452,6 @@ export default async function PracticeDetail({
           </div>
         </div>
 
-        {/* ---- Two-column: Practice Profile | Worksheet ---- */}
         <div className="lead-2col">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
             <div className="lead-card">
@@ -524,13 +516,11 @@ export default async function PracticeDetail({
               </div>
             </div>
 
-            {/* Provider mini-cards */}
             {providersList.length > 0 && (
               <div className="lead-providers-grid">
                 {providersList.map((prov: any) => {
                   const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
                   const reportingOption = mipsRows[0]?.reporting_option
-                  // Eligibility badge reflects 2026 specifically.
                   const status2026 = mips2026(reportingOption).toLowerCase()
                   const eligible = status2026.includes('individual') || status2026.includes('group') || status2026.includes('apm')
                   return (
@@ -549,10 +539,8 @@ export default async function PracticeDetail({
               </div>
             )}
 
-            {/* Organization roster — everyone sharing this provider's Org_PAC_ID */}
             {primaryProvider?.npi && <OrgRoster npi={primaryProvider.npi} />}
 
-            {/* Activity history */}
             <div className="lead-card">
               <h4>Activity History &amp; Call Logs</h4>
               {(!activity || activity.length === 0) ? (
@@ -571,7 +559,6 @@ export default async function PracticeDetail({
             </div>
           </div>
 
-          {/* Right column — shared Worksheet */}
           <div className="sticky-col" style={{ position: 'sticky', top: 24, minWidth: 0 }}>
             <Worksheet practiceCode={code} initial={worksheetInitial} />
           </div>
