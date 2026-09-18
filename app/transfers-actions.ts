@@ -2,10 +2,6 @@
 
 import { createSupabaseServer } from '../lib/supabase-server'
 
-// Everyone signed in can view transfers now — scope differs by role:
-//   super_admin: every company's transfers
-//   company_admin / manager / team_lead: their own company's transfers
-//   agent / closer: only transfers they made or received themselves
 const CAN_VIEW = ['company_admin', 'manager', 'team_lead', 'super_admin', 'agent', 'closer']
 
 export type Transfer = {
@@ -14,19 +10,14 @@ export type Transfer = {
   practiceName: string
   state: string | null
   specialty: string | null
+  isRoster: boolean
+  orgName: string | null
   fromUserName: string | null
   toUserName: string | null
   companyName: string | null
   handoffStatus: string | null
   createdAt: string | null
-  // True when the underlying lead has since been permanently deleted — the
-  // transfer record itself is kept for audit history, but there's no live
-  // practice to link to or worksheet to show.
   practiceDeleted: boolean
-  // Worksheet snapshot — the full call record for this lead, so whoever is
-  // reviewing the transfer can see exactly what was filled in, not just the
-  // handoff status. This is the practice's current worksheet (the same
-  // fields shown on the practice detail page), not a separate history log.
   wsCallDetails: string | null
   wsAdditionalPhone: string | null
   wsEmail: string | null
@@ -39,9 +30,6 @@ export type Transfer = {
 
 export async function getTransfers(): Promise<{
   ok: boolean; message?: string; transfers?: Transfer[]; scope?: 'all' | 'company' | 'mine'
-  // Every registered company, for Super Admin's company-first view — so a
-  // company with zero transfers still shows up (with a 0 count) instead of
-  // silently vanishing from the list.
   allCompanies?: { id: string; name: string }[]
 }> {
   const supabase = await createSupabaseServer()
@@ -63,15 +51,12 @@ export async function getTransfers(): Promise<{
   const myUserId = (me as any)?.id
   const scope: 'all' | 'company' | 'mine' = isSuperAdmin ? 'all' : isAgentOrCloser ? 'mine' : 'company'
 
-  // Super Admin sees the full company roster regardless of whether every
-  // company has a transfer yet — fetched independently of the transfer rows.
   let allCompanies: { id: string; name: string }[] | undefined
   if (isSuperAdmin) {
     const { data: tenants } = await supabase.from('tenants').select('id, name').order('name')
     allCompanies = (tenants ?? []) as any[]
   }
 
-  // Base transfer rows, scoped per role.
   let transferQ = supabase
     .from('lead_transfers')
     .select('id, practice_id, tenant_id, from_user_id, to_user_id, note, created_at')
@@ -85,8 +70,6 @@ export async function getTransfers(): Promise<{
   if (error) return { ok: false, message: error.message }
   if (!rows || rows.length === 0) return { ok: true, transfers: [], scope, allCompanies }
 
-  // Batch-resolve practice (incl. worksheet fields), user, and tenant names —
-  // same pattern as getAgentAssignedLeads: separate lookups by collected IDs.
   const practiceIds = Array.from(new Set(rows.map((r: any) => r.practice_id).filter(Boolean)))
   const userIds = Array.from(new Set([
     ...rows.map((r: any) => r.from_user_id),
@@ -99,9 +82,10 @@ export async function getTransfers(): Promise<{
     const { data: practices } = await supabase
       .from('master_practices')
       .select(`
-        id, practice_code, name, state, specialty,
+        id, practice_code, name, state, specialty, is_roster,
         ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
-        ws_direct_line, ws_timezone, ws_disposition, ws_updated_at
+        ws_direct_line, ws_timezone, ws_disposition, ws_updated_at,
+        practice_providers ( providers ( org_name ) )
       `)
       .in('id', practiceIds)
     for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
@@ -122,9 +106,6 @@ export async function getTransfers(): Promise<{
   const transfers: Transfer[] = rows
     .map((r: any) => {
       const p = practiceById[r.practice_id]
-      // Keep the transfer record even if the underlying lead has since been
-      // permanently deleted — it's still real history of who handed off
-      // what to whom, it just has nothing live to link to or show anymore.
       if (!p) {
         return {
           id: r.id,
@@ -132,6 +113,8 @@ export async function getTransfers(): Promise<{
           practiceName: '(deleted lead)',
           state: null,
           specialty: null,
+          isRoster: false,
+          orgName: null,
           fromUserName: r.from_user_id ? (nameByUserId[r.from_user_id] ?? null) : null,
           toUserName: r.to_user_id ? (nameByUserId[r.to_user_id] ?? null) : null,
           companyName: (isSuperAdmin || isAgentOrCloser) ? (nameByTenantId[r.tenant_id] ?? null) : null,
@@ -148,11 +131,10 @@ export async function getTransfers(): Promise<{
         practiceName: p.name,
         state: p.state,
         specialty: p.specialty,
+        isRoster: !!p.is_roster,
+        orgName: p.practice_providers?.[0]?.providers?.org_name ?? null,
         fromUserName: r.from_user_id ? (nameByUserId[r.from_user_id] ?? null) : null,
         toUserName: r.to_user_id ? (nameByUserId[r.to_user_id] ?? null) : null,
-        // Company name is useful whenever the view spans more than one
-        // company — Super Admin always, and agent/closer since a closer may
-        // receive transfers that originated at a different company.
         companyName: (isSuperAdmin || isAgentOrCloser) ? (nameByTenantId[r.tenant_id] ?? null) : null,
         handoffStatus: r.note ?? null,
         createdAt: r.created_at ?? null,
@@ -170,4 +152,3 @@ export async function getTransfers(): Promise<{
 
   return { ok: true, transfers, scope, allCompanies }
 }
-

@@ -9,13 +9,17 @@ const fmt = (iso: string | null) => {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
-// Handoff status pill — reuses the same three values the Worksheet's
-// "Handoff status" dropdown writes (Pending / Sent / Signed).
 function statusPill(status: string | null) {
   if (!status) return <span className="subtle">—</span>
   const key = status.toLowerCase()
   const cls = key === 'signed' ? 'badge-green' : key === 'sent' ? 'badge-blue' : 'badge-amber'
   return <span className={`badge ${cls}`}>{status}</span>
+}
+
+// Source pill — Roster member vs Uploaded (anchor) NPI.
+function sourcePill(isRoster: boolean | null | undefined) {
+  if (isRoster) return <span className="badge badge-violet">Roster</span>
+  return <span className="badge badge-blue">Uploaded</span>
 }
 
 const SCOPE_LABEL: Record<string, string> = {
@@ -24,9 +28,6 @@ const SCOPE_LABEL: Record<string, string> = {
   mine: "you've made or received",
 }
 
-// The shared expandable transfers table — used both for the flat view
-// (company/mine scope) and for a single company's transfers once Super
-// Admin has picked one from the company list.
 function TransfersTable({ rows, expanded, setExpanded }: {
   rows: Transfer[]
   expanded: string | null
@@ -40,6 +41,8 @@ function TransfersTable({ rows, expanded, setExpanded }: {
           <tr>
             <th style={{ fontSize: 10 }}>Details</th>
             <th>Practice</th>
+            <th>Source</th>
+            <th>Organization</th>
             <th>State</th>
             <th>Specialty</th>
             <th>From</th>
@@ -72,6 +75,8 @@ function TransfersTable({ rows, expanded, setExpanded }: {
                       <a href={`/practice/${t.practiceCode}`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</a>
                     )}
                   </td>
+                  <td>{sourcePill((t as any).isRoster)}</td>
+                  <td style={{ fontSize: 12 }}>{(t as any).orgName ?? '—'}</td>
                   <td>{t.state ?? '—'}</td>
                   <td>{t.specialty ?? '—'}</td>
                   <td>{t.fromUserName ?? '—'}</td>
@@ -82,7 +87,7 @@ function TransfersTable({ rows, expanded, setExpanded }: {
                 {isOpen && (
                   <tr key={`${t.id}-details`}>
                     <td></td>
-                    <td colSpan={7} style={{ background: 'var(--surface-2)', padding: 16 }}>
+                    <td colSpan={9} style={{ background: 'var(--surface-2)', padding: 16 }}>
                       {t.practiceDeleted ? (
                         <p className="subtle" style={{ margin: 0 }}>This lead was permanently deleted — no worksheet is available.</p>
                       ) : !hasDetails ? (
@@ -168,11 +173,6 @@ export default function TransfersClient() {
   if (loading) return <p className="subtle">Loading…</p>
   if (msg) return <p className="subtle">{msg}</p>
 
-  // Super Admin: company-first drill-down, matching the same list+detail
-  // pattern as Agent Assigned Leads — pick a company, see its transfers.
-  // Every registered company shows up here, even ones with zero transfers
-  // so far, since the list comes from the real company roster, not just
-  // from whichever companies happen to already have a transfer.
   if (scope === 'all') {
     if (allCompanies.length === 0) {
       return (
@@ -233,8 +233,6 @@ export default function TransfersClient() {
     )
   }
 
-  // Company role or agent/closer: already scoped to one company (or just
-  // themselves) — a flat table is all that's needed, no grouping.
   return (
     <div className="card">
       <div className="subtle" style={{ marginBottom: 10 }}>
