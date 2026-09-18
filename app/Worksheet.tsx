@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
 import { logActivity, setReminder, getClosers, transferToCloser, markAsSold } from './actions'
@@ -48,8 +48,14 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   const [mrr, setMrr] = useState('')
   const [saleNote, setSaleNote] = useState('')
   const [saleMsg, setSaleMsg] = useState('')
+  const closersRequestRef = useRef<ReturnType<typeof getClosers> | null>(null)
 
-  useEffect(() => { getClosers().then(setClosers) }, [])
+  const loadClosers = () => {
+    if (!closersRequestRef.current) {
+      closersRequestRef.current = getClosers()
+      closersRequestRef.current.then(setClosers)
+    }
+  }
 
   // Once this lead has been transferred, the worksheet freezes for whoever
   // no longer owns it — but the closer it went to must still be able to
@@ -184,7 +190,7 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
         ) : (
           <>
             <div className="grid-fields-2">
-              <select value={closerId} onChange={(e) => setCloserId(e.target.value)} className="lead-select">
+              <select value={closerId} onFocus={loadClosers} onChange={(e) => setCloserId(e.target.value)} className="lead-select">
                 <option value="">-- Choose Closer --</option>
                 {closers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
               </select>

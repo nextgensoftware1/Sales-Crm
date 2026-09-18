@@ -3,6 +3,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import TransfersClient from './TransfersClient'
+import { getTransfers } from '../transfers-actions'
 
 export default async function TransfersPage() {
   const supabase = await createSupabaseServer()
@@ -15,6 +16,7 @@ export default async function TransfersPage() {
     .select('full_name, roles(key, label), tenants(name)')
     .eq('auth_id', user.id)
     .single()
+  const transferResult = await getTransfers()
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
@@ -37,7 +39,11 @@ export default async function TransfersPage() {
       showTransfers
       canManageUsers={canManageUsers}
     >
-      <TransfersClient />
+      <TransfersClient initialData={transferResult.ok ? {
+        transfers: transferResult.transfers ?? [],
+        scope: transferResult.scope ?? 'company',
+        allCompanies: transferResult.allCompanies ?? [],
+      } : undefined} initialMessage={transferResult.ok ? undefined : transferResult.message} />
     </AppShell>
   )
 }

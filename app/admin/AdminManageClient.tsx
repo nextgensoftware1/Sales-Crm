@@ -7,6 +7,40 @@ import {
   type AssignableRole, type CompanyOption,
 } from '../admin-manage-actions'
 
+const ADMIN_OPTIONS_CACHE_MS = 30_000
+let rolesCache: { value: AssignableRole[]; expiresAt: number } | null = null
+let companiesCache: { value: CompanyOption[]; expiresAt: number } | null = null
+let rolesRequest: Promise<AssignableRole[]> | null = null
+let companiesRequest: Promise<CompanyOption[]> | null = null
+
+function loadAssignableRoles() {
+  if (rolesCache && rolesCache.expiresAt > Date.now()) return Promise.resolve(rolesCache.value)
+  if (!rolesRequest) {
+    rolesRequest = getAssignableRoles()
+      .then((res) => res.ok ? res.roles ?? [] : [])
+      .then((value) => {
+        rolesCache = { value, expiresAt: Date.now() + ADMIN_OPTIONS_CACHE_MS }
+        return value
+      })
+      .finally(() => { rolesRequest = null })
+  }
+  return rolesRequest
+}
+
+function loadCompanies() {
+  if (companiesCache && companiesCache.expiresAt > Date.now()) return Promise.resolve(companiesCache.value)
+  if (!companiesRequest) {
+    companiesRequest = getCompaniesForUserCreation()
+      .then((res) => res.ok ? res.companies ?? [] : [])
+      .then((value) => {
+        companiesCache = { value, expiresAt: Date.now() + ADMIN_OPTIONS_CACHE_MS }
+        return value
+      })
+      .finally(() => { companiesRequest = null })
+  }
+  return companiesRequest
+}
+
 function genTempPassword() {
   // Readable-ish random temporary password — the user resets it on first login.
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
@@ -66,18 +100,14 @@ function AddUserForm({ isSuperAdmin }: { isSuperAdmin: boolean }) {
 
   useEffect(() => {
     (async () => {
-      const rolesRes = await getAssignableRoles()
-      if (rolesRes.ok) {
-        setRoles(rolesRes.roles ?? [])
-        if (rolesRes.roles?.length) setRoleKey(rolesRes.roles[0].key)
-      }
-      if (isSuperAdmin) {
-        const companiesRes = await getCompaniesForUserCreation()
-        if (companiesRes.ok) {
-          setCompanies(companiesRes.companies ?? [])
-          if (companiesRes.companies?.length) setTenantId(companiesRes.companies[0].id)
-        }
-      }
+      const [roles, companies] = await Promise.all([
+        loadAssignableRoles(),
+        isSuperAdmin ? loadCompanies() : Promise.resolve([] as CompanyOption[]),
+      ])
+      setRoles(roles)
+      if (roles.length) setRoleKey(roles[0].key)
+      setCompanies(companies)
+      if (companies.length) setTenantId(companies[0].id)
     })()
   }, [isSuperAdmin])
 

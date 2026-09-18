@@ -3,7 +3,20 @@ import { roleLabel as canonicalRoleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import DashboardView from './DashboardView'
 
-export default async function DashboardPage() {
+// First/last day of the current month, as YYYY-MM-DD — the picker's
+// default range when no ?from=&to= is in the URL yet.
+function currentMonthRange(): { from: string; to: string } {
+  const now = new Date()
+  const first = new Date(now.getFullYear(), now.getMonth(), 1)
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  return { from: first.toISOString().slice(0, 10), to: last.toISOString().slice(0, 10) }
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; to?: string }>
+}) {
   const supabase = await createSupabaseServer()
 
   const { data: { user } } = await supabase.auth.getUser()
@@ -22,6 +35,13 @@ export default async function DashboardPage() {
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
+  const sp = await searchParams
+  const defaults = currentMonthRange()
+  const fromDate = sp.from || defaults.from
+  const toDate = sp.to || defaults.to
+  const fromISO = `${fromDate}T00:00:00.000Z`
+  const toISO = `${toDate}T23:59:59.999Z`
+
   // Helper: apply the right scope to a query on a table that has tenant_id + agent_id
   const scope = (q: any, agentCol = 'agent_id') => {
     if (isSuperAdmin) return q
@@ -30,10 +50,18 @@ export default async function DashboardPage() {
   }
 
   // --- Build all four queries, then run them IN PARALLEL (one latency hit) ---
+  // lead_activity and lead_transfers are confirmed to have created_at (both
+  // are selected directly elsewhere in this app), so the date range picker
+  // can safely filter them here. sales and client_ownership are NOT
+  // filtered by date yet — their schema wasn't confirmed to have a
+  // comparable date column. DashboardView flags which metrics are
+  // date-scoped vs. all-time so nothing is silently inconsistent.
   let actQ = supabase.from('lead_activity').select('disposition', { count: 'exact' })
+    .gte('created_at', fromISO).lte('created_at', toISO)
   actQ = scope(actQ)
 
   let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
+    .gte('created_at', fromISO).lte('created_at', toISO)
   if (isSuperAdmin) { /* all */ }
   else if (isAgentOrCloser) transQ = transQ.eq('from_user_id', myUserId)
   else transQ = transQ.eq('tenant_id', myTenantId)
@@ -100,6 +128,8 @@ export default async function DashboardPage() {
       dispoCounts={dispoCounts}
       canManageAssignments={canManageAssignments}
       isSuperAdmin={isSuperAdmin}
+      fromDate={fromDate}
+      toDate={toDate}
     />
   )
 }

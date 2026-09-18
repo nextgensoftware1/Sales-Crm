@@ -54,50 +54,47 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      <div className="login-bg" aria-hidden="true" />
-
       <div className="login-brand">
-        <div className="login-brand-rule" />
-        <div className="login-brand-name"><span className="accent">Hired</span> Billing Support</div>
-        <div className="login-brand-sub">Practice Revenue CRM for Medical Billing</div>
+        <div className="login-logo-mark">
+          <span className="accent">+</span>hbs
+        </div>
+        <div className="login-brand-copy">
+          <h2>More Practices.<br />More Revenue.</h2>
+          <p>We help medical practices grow with expert billing support. Our team handles the revenue cycle, so you can focus on patient care.</p>
+        </div>
+        <svg className="login-waves" viewBox="0 0 480 340" fill="none" aria-hidden="true">
+          {Array.from({ length: 15 }, (_, i) => <path key={i} d={`M-50 ${260 + i * 9} C90 ${310 + i * 5}, 125 ${20 + i * 9}, 270 ${40 + i * 11} S420 ${220 + i * 6}, 470 390`} stroke="#00C896" strokeWidth="1" opacity={0.36 - i * 0.015} />)}
+        </svg>
       </div>
-
+      <div className="login-form-area">
       <div className="login-card">
-        <div className="login-card-blob" aria-hidden="true" />
-
         <div className="login-head">
-          <div className="login-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            <div className="login-icon-ping" aria-hidden="true" />
-          </div>
-          <h1>Welcome Back</h1>
-          <p className="login-sub">Sign in to access your CRM dashboard</p>
+          <h1>Welcome back</h1>
+          <p className="login-sub">Sign in to your HBS CRM account</p>
         </div>
 
         <div className="login-form">
           <div className="login-field">
-            <label className="login-label">
+            <label className="login-label" htmlFor="login-email">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
                 <circle cx="12" cy="7" r="4" />
               </svg>
-              <span>Email Address</span>
+              <span>Email address</span>
             </label>
             <input
+              id="login-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="login-input"
-              placeholder="Enter your email"
+              placeholder="you@company.com"
               autoComplete="email"
             />
           </div>
 
           <div className="login-field">
-            <label className="login-label">
+            <label className="login-label" htmlFor="login-password">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -106,12 +103,13 @@ export default function LoginPage() {
             </label>
             <div className="login-pw-wrap">
               <input
+                id="login-password"
                 type={showPw ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleLogin() }}
                 className="login-input"
-                placeholder="Enter password"
+                placeholder="Enter your password"
                 autoComplete="current-password"
               />
               <button type="button" className="login-pw-toggle" onClick={() => setShowPw((v) => !v)} tabIndex={-1} aria-label={showPw ? 'Hide password' : 'Show password'}>
@@ -132,6 +130,16 @@ export default function LoginPage() {
             </div>
           </div>
 
+          {/* Purely a UI convenience — Supabase's client already persists the
+              session regardless of this checkbox's state. */}
+          <div className="login-remember-row">
+            <label className="login-remember">
+              <input type="checkbox" defaultChecked />
+              <span>Remember me</span>
+            </label>
+            <button type="button" className="login-forgot">Forgot password?</button>
+          </div>
+
           {error && <p className="login-error">{error}</p>}
 
           <button onClick={handleLogin} disabled={loading} className="login-submit">
@@ -140,22 +148,11 @@ export default function LoginPage() {
               <path d="M15 12H3" />
               <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
             </svg>
-            <span>{loading ? 'Signing in…' : 'Sign In'}</span>
+            <span>{loading ? 'Signing in…' : 'Sign in'}</span>
           </button>
-
-          <button type="button" className="login-forgot">Forgot your password?</button>
         </div>
       </div>
-
-      <div className="login-status">
-        <span className="login-status-dot" />
-        <span>System Online</span>
-        <div className="login-status-divider" />
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-          <path d="m9 12 2 2 4-4" />
-        </svg>
-        <span className="login-status-encrypted">Encrypted</span>
+      <p className="login-copyright">© {new Date().getFullYear()} Hired Billing Support. All rights reserved.</p>
       </div>
     </div>
   )

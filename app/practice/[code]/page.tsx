@@ -3,6 +3,7 @@ import Worksheet from '../../Worksheet'
 import { createSupabaseServer } from '../../../lib/supabase-server'
 import { roleLabel } from '../../../lib/roles'
 import AppShell from '../../AppShell'
+import SectionTabs from '../../SectionTabs'
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -41,10 +42,15 @@ function mips2026(reportingOption?: string | null): string {
 
 export default async function PracticeDetail({
   params,
+  searchParams,
 }: {
   params: Promise<{ code: string }>
+  searchParams: Promise<{ from?: string }>
 }) {
   const { code } = await params
+  const { from } = await searchParams
+  const returnPath = from === 'transfers' ? '/transfers' : '/'
+  const returnQuery = from === 'transfers' ? '?from=transfers' : ''
 
   const supabase = await createSupabaseServer()
 
@@ -235,10 +241,29 @@ export default async function PracticeDetail({
     )
   }
 
-  const { data: allCodesRows } = await supabase
-    .from('master_practices')
-    .select('practice_code')
-    .order('name', { ascending: true })
+  const pr = practice as any
+  const providerLinks = (pr.practice_providers ?? []) as any[]
+  const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
+  const primaryProvider = providersList[0]
+
+  const [{ data: allCodesRows }, { data: activity }, { count: rosterCount }] = await Promise.all([
+    supabase
+      .from('master_practices')
+      .select('practice_code')
+      .order('name', { ascending: true }),
+    supabase
+      .from('lead_activity')
+      .select('disposition, note, created_at, users(full_name)')
+      .eq('practice_id', practice.id)
+      .order('created_at', { ascending: false })
+      .limit(20),
+    primaryProvider?.org_pac_id
+      ? supabase
+          .from('providers')
+          .select('id', { count: 'exact', head: true })
+          .eq('org_pac_id', primaryProvider.org_pac_id)
+      : Promise.resolve({ count: null }),
+  ])
   const seenCodes = new Set<string>()
   const codesList: string[] = []
   for (const r of (allCodesRows ?? []) as any[]) {
@@ -252,31 +277,13 @@ export default async function PracticeDetail({
   const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
   const nextCode = currentIndex >= 0 && currentIndex < codesList.length - 1 ? codesList[currentIndex + 1] : null
 
-  const { data: activity } = await supabase
-    .from('lead_activity')
-    .select('disposition, note, created_at, users(full_name)')
-    .eq('practice_id', practice.id)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  const pr = practice as any
-  const providerLinks = (pr.practice_providers ?? []) as any[]
-  const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
-  const primaryProvider = providersList[0]
-
   const orgName: string | null = providersList
     .map((prov: any) => (prov?.org_name ?? '').toString().trim())
     .find((n: string) => n.length > 0) || null
   const displayTitle = orgName || practice.name
 
   let totalProviders = providersList.length
-  if (primaryProvider?.org_pac_id) {
-    const { count: rosterCount } = await supabase
-      .from('providers')
-      .select('id', { count: 'exact', head: true })
-      .eq('org_pac_id', primaryProvider.org_pac_id)
-    if (rosterCount && rosterCount > totalProviders) totalProviders = rosterCount
-  }
+  if (rosterCount && rosterCount > totalProviders) totalProviders = rosterCount
 
   const entityTypeRaw = (primaryProvider?.entity_type ?? '').toString().trim().toLowerCase()
   const isAnchor      = !!primaryProvider?.is_anchor
@@ -380,8 +387,8 @@ export default async function PracticeDetail({
 
   return (
     <AppShell
-      title="Leads Management Engine"
-      subtitle="Import, deduplicate, and assign practice-first leads to employees"
+      title="Practice Detail"
+      subtitle={displayTitle}
       currentUser={currentUser}
       active="/"
       showAdmin={isSuperAdmin}
@@ -392,18 +399,18 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <a href="/" className="lead-back-btn" title="Back to list">
+              <a href={returnPath} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : 'Back to list'}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </a>
               <div className="lead-pager">
                 {prevCode ? (
-                  <a href={`/practice/${prevCode}`} title="Previous Lead">
+                  <a href={`/practice/${prevCode}${returnQuery}`} title="Previous Lead">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
                   </a>
                 ) : <span className="lead-pager-disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
                 <span className="lead-pager-count">{currentIndex >= 0 ? currentIndex + 1 : '?'} / {totalCount}</span>
                 {nextCode ? (
-                  <a href={`/practice/${nextCode}`} title="Next Lead">
+                  <a href={`/practice/${nextCode}${returnQuery}`} title="Next Lead">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
                   </a>
                 ) : <span className="lead-pager-disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}
@@ -487,95 +494,103 @@ export default async function PracticeDetail({
           </div>
         </div>
 
-        <div className="lead-2col">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
-            <div className="lead-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
-                <h4 style={{ margin: 0, border: 'none', padding: 0 }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" /></svg>
-                  Practice Profile
-                </h4>
+        <SectionTabs label="Lead details" sections={[
+          { label: 'Call Notes & Worksheet', content: (
+            <div className="lead-2col">
+              <div style={{ minWidth: 0 }}>
+                <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
               </div>
-
-              <div className="lead-kv"><span>NPI Type 1</span><span className="mono">{npiType1Value}</span></div>
-              <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{npiType2Value}</span></div>
-              <div className="lead-kv"><span>Org PAC ID</span><span className="mono">{primaryProvider?.org_pac_id || 'N/A'}</span></div>
-
-              <div className="lead-divider">
-                <span className="lead-subhead">Authorized Official</span>
-                <div className="lead-kv"><span>Name</span><span>{primaryProvider?.name ?? '—'}</span></div>
-                <div className="lead-kv"><span>Phone</span><span className="mono">{primaryProvider?.phone ?? practice.phone ?? '—'}</span></div>
-              </div>
-
-              <div className="lead-divider">
-                <span className="lead-subhead">CCM Details</span>
-                <div className="lead-kv">
-                  <span>Qualified</span>
-                  <span className={`lead-pill-sm ${anyCcm ? 'lead-pill-good' : 'lead-pill-neutral'}`}>
-                    {anyCcm ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div className="lead-kv"><span>CCM Opportunity</span><span style={{ color: 'var(--ok)' }}>—</span></div>
-              </div>
-
-              <div className="lead-divider">
-                <span className="lead-subhead">Locations</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14} style={{ color: 'var(--accent)', flexShrink: 0 }}><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
-                  <span style={{ fontWeight: 700, color: 'var(--ink-strong)' }}>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || '—'}</span>
-                  <span className="lead-pill-sm lead-pill-neutral" style={{ fontSize: 9 }}>Primary</span>
-                </div>
-              </div>
-
-              <div className="lead-divider">
-                <span className="lead-subhead">MIPS History</span>
-                <p style={{ color: 'var(--muted)', fontSize: 11, fontStyle: 'italic', margin: 0 }}>No MIPS history — enrich via CMS APIs to pull QPP data.</p>
-              </div>
-
-              <div className="lead-divider">
-                <span className="lead-subhead">MIPS Eligibility ({providersList.length} Clinicians)</span>
-                <div className="lead-mips-grid">
-                  <div className="lead-mips-cell good">
-                    <span className="n">{mipsIndividual}</span>
-                    <span className="l">Individual</span>
+              <aside style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+                <div className="lead-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
+                    <h4 style={{ margin: 0, border: 'none', padding: 0 }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" /></svg>
+                      Practice Profile
+                    </h4>
                   </div>
-                  <div className="lead-mips-cell warn">
-                    <span className="n">{mipsGroup}</span>
-                    <span className="l">Group/Opt-in</span>
-                  </div>
-                  <div className="lead-mips-cell bad">
-                    <span className="n">{mipsNonEligible}</span>
-                    <span className="l">Non Eligible</span>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            {providersList.length > 0 && (
-              <div className="lead-providers-grid">
-                {providersList.map((prov: any) => {
-                  const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
-                  const reportingOption = mipsRows[0]?.reporting_option
-                  const status2026 = mips2026(reportingOption).toLowerCase()
-                  const eligible = status2026.includes('individual') || status2026.includes('group') || status2026.includes('apm')
-                  return (
-                    <div key={prov.npi} className="lead-provider-card">
-                      <div className="lead-provider-top">
-                        <span className="lead-provider-name">{prov.name}</span>
-                        <span className={`lead-pill-sm ${eligible ? 'lead-pill-good' : 'lead-pill-bad'}`} style={{ fontSize: 8 }}>
-                          {eligible ? 'Eligible' : 'Non Eligible'}
-                        </span>
-                      </div>
-                      <div className="lead-provider-sub">{prov.taxonomy_desc || '—'} | 0 pts | Score: —</div>
-                      <div className="lead-provider-npi">{prov.npi}</div>
+                  <div className="lead-kv"><span>NPI Type 1</span><span className="mono">{npiType1Value}</span></div>
+                  <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{npiType2Value}</span></div>
+                  <div className="lead-kv"><span>Org PAC ID</span><span className="mono">{primaryProvider?.org_pac_id || 'N/A'}</span></div>
+
+                  <div className="lead-divider">
+                    <span className="lead-subhead">Authorized Official</span>
+                    <div className="lead-kv"><span>Name</span><span>{primaryProvider?.name ?? '—'}</span></div>
+                    <div className="lead-kv"><span>Phone</span><span className="mono">{primaryProvider?.phone ?? practice.phone ?? '—'}</span></div>
+                  </div>
+
+                  <div className="lead-divider">
+                    <span className="lead-subhead">CCM Details</span>
+                    <div className="lead-kv">
+                      <span>Qualified</span>
+                      <span className={`lead-pill-sm ${anyCcm ? 'lead-pill-good' : 'lead-pill-neutral'}`}>
+                        {anyCcm ? 'Yes' : 'No'}
+                      </span>
                     </div>
-                  )
-                })}
-              </div>
-            )}
+                    <div className="lead-kv"><span>CCM Opportunity</span><span style={{ color: 'var(--ok)' }}>—</span></div>
+                  </div>
 
-            {primaryProvider?.npi && <OrgRoster npi={primaryProvider.npi} />}
+                  <div className="lead-divider">
+                    <span className="lead-subhead">Locations</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14} style={{ color: 'var(--accent)', flexShrink: 0 }}><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+                      <span style={{ fontWeight: 700, color: 'var(--ink-strong)' }}>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || '—'}</span>
+                      <span className="lead-pill-sm lead-pill-neutral" style={{ fontSize: 9 }}>Primary</span>
+                    </div>
+                  </div>
 
+                  <div className="lead-divider">
+                    <span className="lead-subhead">MIPS History</span>
+                    <p style={{ color: 'var(--muted)', fontSize: 11, fontStyle: 'italic', margin: 0 }}>No MIPS history — enrich via CMS APIs to pull QPP data.</p>
+                  </div>
+
+                  <div className="lead-divider">
+                    <span className="lead-subhead">MIPS Eligibility ({providersList.length} Clinicians)</span>
+                    <div className="lead-mips-grid">
+                      <div className="lead-mips-cell good">
+                        <span className="n">{mipsIndividual}</span>
+                        <span className="l">Individual</span>
+                      </div>
+                      <div className="lead-mips-cell warn">
+                        <span className="n">{mipsGroup}</span>
+                        <span className="l">Group/Opt-in</span>
+                      </div>
+                      <div className="lead-mips-cell bad">
+                        <span className="n">{mipsNonEligible}</span>
+                        <span className="l">Non Eligible</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {providersList.length > 0 && (
+                  <div className="lead-providers-grid">
+                    {providersList.map((prov: any) => {
+                      const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
+                      const reportingOption = mipsRows[0]?.reporting_option
+                      const status2026 = mips2026(reportingOption).toLowerCase()
+                      const eligible = status2026.includes('individual') || status2026.includes('group') || status2026.includes('apm')
+                      return (
+                        <div key={prov.npi} className="lead-provider-card">
+                          <div className="lead-provider-top">
+                            <span className="lead-provider-name">{prov.name}</span>
+                            <span className={`lead-pill-sm ${eligible ? 'lead-pill-good' : 'lead-pill-bad'}`} style={{ fontSize: 8 }}>
+                              {eligible ? 'Eligible' : 'Non Eligible'}
+                            </span>
+                          </div>
+                          <div className="lead-provider-sub">{prov.taxonomy_desc || '—'} | 0 pts | Score: —</div>
+                          <div className="lead-provider-npi">{prov.npi}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {primaryProvider?.npi && <OrgRoster npi={primaryProvider.npi} />}
+              </aside>
+            </div>
+          ) },
+          { label: 'Activity History & Call Logs', content: (
             <div className="lead-card">
               <h4>Activity History &amp; Call Logs</h4>
               {(!activity || activity.length === 0) ? (
@@ -592,12 +607,8 @@ export default async function PracticeDetail({
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="sticky-col" style={{ position: 'sticky', top: 24, minWidth: 0 }}>
-            <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
-          </div>
-        </div>
+          ) },
+        ]} />
       </div>
     </AppShell>
   )

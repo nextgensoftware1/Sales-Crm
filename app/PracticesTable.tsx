@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
@@ -234,6 +234,31 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
     }
     return rows
   }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority])
+
+  // Real client-side pagination over the already-fetched/filtered array —
+  // no new queries, same `filtered` rows, just windowed into pages instead
+  // of rendering the entire result set at once.
+  const PAGE_SIZE = 8
+  const [page, setPage] = useState(1)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pageStart = (safePage - 1) * PAGE_SIZE
+  const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE)
+  // Any change to the filtered set (search, a filter, a tab) should land
+  // back on page 1 rather than leaving the user stranded past the end.
+  useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView])
+
+  function getPageNumbers(current: number, total: number): (number | '…')[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+    let end = Math.min(total, Math.max(current + 2, 5))
+    const start = Math.max(1, end - 4)
+    end = Math.min(total, start + 4)
+    const pages: (number | '…')[] = []
+    for (let i = start; i <= end; i++) pages.push(i)
+    if (end < total - 1) pages.push('…')
+    if (end < total) pages.push(total)
+    return pages
+  }
 
   const toggleSelect = (code: string) => {
     setSelected((prev) => {
@@ -533,7 +558,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             </tr>
           </thead>
           <tbody>
-            {filtered.map((p) => (
+            {pageRows.map((p) => (
               <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
                 {(isSuperAdmin || canAssign) && (
                   <td style={td}>
@@ -577,11 +602,45 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         </table>
       </section>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim }}>
-        <span>Showing {filtered.length} of {practices.length} practices</span>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button disabled style={{ ...btnGhost, opacity: 0.5 }}>Previous</button>
-          <button disabled style={{ ...btnGhost, opacity: 0.5 }}>Next</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
+        <span>
+          {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length} leads`}
+        </span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1}
+            style={{ ...btnGhost, opacity: safePage <= 1 ? 0.5 : 1 }}
+          >
+            Previous
+          </button>
+          {getPageNumbers(safePage, totalPages).map((n, i) =>
+            n === '…' ? (
+              <span key={`ellipsis-${i}`} style={{ padding: '0 4px', color: C.faint }}>…</span>
+            ) : (
+              <button
+                key={n}
+                onClick={() => setPage(n)}
+                style={{
+                  ...btnGhost,
+                  minWidth: 32,
+                  padding: '6px 0',
+                  ...(n === safePage
+                    ? { background: C.green, color: '#fff', borderColor: C.green, fontWeight: 700 }
+                    : {}),
+                }}
+              >
+                {n}
+              </button>
+            )
+          )}
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages}
+            style={{ ...btnGhost, opacity: safePage >= totalPages ? 0.5 : 1 }}
+          >
+            Next
+          </button>
         </div>
       </div>
     </div>

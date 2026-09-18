@@ -62,24 +62,26 @@ export async function getReminders(): Promise<{
   const agentIds = Array.from(new Set(rows.map((r: any) => r.agent_id).filter(Boolean)))
   const tenantIds = Array.from(new Set(rows.map((r: any) => r.tenant_id).filter(Boolean)))
 
+  const [{ data: practices }, { data: agents }, { data: tenants }] = await Promise.all([
+    practiceIds.length
+      ? supabase.from('master_practices').select('id, practice_code, name').in('id', practiceIds)
+      : Promise.resolve({ data: [] }),
+    scope !== 'mine' && agentIds.length
+      ? supabase.from('users').select('id, full_name').in('id', agentIds)
+      : Promise.resolve({ data: [] }),
+    isSuperAdmin && tenantIds.length
+      ? supabase.from('tenants').select('id, name').in('id', tenantIds)
+      : Promise.resolve({ data: [] }),
+  ])
+
   const practiceById: Record<string, { practice_code: string; name: string }> = {}
-  if (practiceIds.length) {
-    const { data: practices } = await supabase
-      .from('master_practices').select('id, practice_code, name').in('id', practiceIds)
-    for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
-  }
+  for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
 
   const nameByAgentId: Record<string, string> = {}
-  if (scope !== 'mine' && agentIds.length) {
-    const { data: agents } = await supabase.from('users').select('id, full_name').in('id', agentIds)
-    for (const a of (agents ?? []) as any[]) nameByAgentId[a.id] = a.full_name
-  }
+  for (const a of (agents ?? []) as any[]) nameByAgentId[a.id] = a.full_name
 
   const nameByTenantId: Record<string, string> = {}
-  if (isSuperAdmin && tenantIds.length) {
-    const { data: tenants } = await supabase.from('tenants').select('id, name').in('id', tenantIds)
-    for (const t of (tenants ?? []) as any[]) nameByTenantId[t.id] = t.name
-  }
+  for (const t of (tenants ?? []) as any[]) nameByTenantId[t.id] = t.name
 
   const reminders: Reminder[] = rows.map((r: any) => {
     const p = practiceById[r.practice_id]

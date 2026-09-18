@@ -3,6 +3,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import RemindersClient from './RemindersClient'
+import { getReminders } from '../reminders-actions'
 
 export default async function RemindersPage() {
   const supabase = await createSupabaseServer()
@@ -15,6 +16,7 @@ export default async function RemindersPage() {
     .select('full_name, roles(key, label), tenants(name)')
     .eq('auth_id', user.id)
     .single()
+  const reminderResult = await getReminders()
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
@@ -42,8 +44,12 @@ export default async function RemindersPage() {
       showAdmin={isSuperAdmin}
       showTransfers
       canManageUsers={isSuperAdmin || isCompanyRole}
+      initialReminders={reminderResult.ok ? reminderResult.reminders ?? [] : undefined}
     >
-      <RemindersClient />
+      <RemindersClient initialData={reminderResult.ok ? {
+        reminders: reminderResult.reminders ?? [],
+        scope: reminderResult.scope ?? 'mine',
+      } : undefined} initialMessage={reminderResult.ok ? undefined : reminderResult.message} />
     </AppShell>
   )
 }

@@ -72,7 +72,7 @@ function TransfersTable({ rows, expanded, setExpanded }: {
                     {t.practiceDeleted ? (
                       <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
                     ) : (
-                      <a href={`/practice/${t.practiceCode}`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</a>
+                      <a href={`/practice/${t.practiceCode}?from=transfers`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</a>
                     )}
                   </td>
                   <td>{sourcePill((t as any).isRoster)}</td>
@@ -141,16 +141,24 @@ function TransfersTable({ rows, expanded, setExpanded }: {
   )
 }
 
-export default function TransfersClient() {
-  const [transfers, setTransfers] = useState<Transfer[]>([])
-  const [scope, setScope] = useState<'all' | 'company' | 'mine'>('company')
-  const [allCompanies, setAllCompanies] = useState<{ id: string; name: string }[]>([])
-  const [loading, setLoading] = useState(true)
-  const [msg, setMsg] = useState('')
+export default function TransfersClient({ initialData, initialMessage }: {
+  initialData?: {
+    transfers: Transfer[]
+    scope: 'all' | 'company' | 'mine'
+    allCompanies: { id: string; name: string }[]
+  }
+  initialMessage?: string
+}) {
+  const [transfers, setTransfers] = useState<Transfer[]>(initialData?.transfers ?? [])
+  const [scope, setScope] = useState<'all' | 'company' | 'mine'>(initialData?.scope ?? 'company')
+  const [allCompanies, setAllCompanies] = useState<{ id: string; name: string }[]>(initialData?.allCompanies ?? [])
+  const [loading, setLoading] = useState(!initialData && !initialMessage)
+  const [msg, setMsg] = useState(initialMessage ?? '')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [selectedCompany, setSelectedCompany] = useState<string>('')
 
   useEffect(() => {
+    if (initialData || initialMessage) return
     (async () => {
       setLoading(true)
       const res = await getTransfers()
@@ -168,7 +176,7 @@ export default function TransfersClient() {
       }
       setLoading(false)
     })()
-  }, [])
+  }, [initialData, initialMessage])
 
   if (loading) return <p className="subtle">Loading…</p>
   if (msg) return <p className="subtle">{msg}</p>
