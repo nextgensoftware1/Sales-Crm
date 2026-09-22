@@ -24,6 +24,7 @@ type Practice = {
   status?: string | null
   source?: string | null
   allocatedTo?: string | null
+  allocatedCompanies?: { id: string; name: string }[]
   sex?: string | null
   orgName?: string | null
   risk?: string | null
@@ -146,6 +147,15 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const [stateFilter, setStateFilter] = useState('')
   const [specialtyFilter, setSpecialtyFilter] = useState('')
   const [dispositionFilter, setDispositionFilter] = useState('')
+  const [allocationFilter, setAllocationFilter] = useState('')
+  const [companyFilter, setCompanyFilter] = useState('')
+  const allocatedCompanies = useMemo(() => {
+    const companies = new Map<string, string>()
+    for (const practice of practices) {
+      for (const company of practice.allocatedCompanies ?? []) companies.set(company.id, company.name)
+    }
+    return Array.from(companies, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [practices])
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
@@ -216,6 +226,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
   const filtered = useMemo(() => {
     const rows = practices.filter((p) => {
+      if (isSuperAdmin) {
+        const allocated = p.source === 'Allocated'
+        if (allocationFilter === 'assigned' && !allocated) return false
+        if (allocationFilter === 'unassigned' && allocated) return false
+        if (companyFilter && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
+      }
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
@@ -260,7 +276,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, allocationFilter, companyFilter])
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -273,7 +289,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView])
+  useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, allocationFilter, companyFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -373,6 +389,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   }
 
   const resetFilters = () => {
+    setAllocationFilter(''); setCompanyFilter('')
     setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
@@ -433,7 +450,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Lead Pool <span style={{ color: C.dim, fontWeight: 400 }}>({filtered.length} leads)</span></h2>
-          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage unassigned master records</div>
+          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {(['All Leads', 'New Leads', 'Worked Leads'] as const).map((t) => {
@@ -485,6 +502,27 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       <section style={{ ...panel, marginBottom: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, minWidth: 220 }} />
+          {isSuperAdmin && <>
+            <label style={{ fontSize: 12, color: C.dim }}>Company assignment{' '}
+              <select aria-label="Company assignment status" value={allocationFilter} style={input} onChange={e => {
+                setAllocationFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
+                if (e.target.value === 'unassigned') setCompanyFilter('')
+              }}>
+                <option value="">All leads</option>
+                <option value="assigned">Assigned to a company</option>
+                <option value="unassigned">Not assigned to a company</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: C.dim }}>Assigned company{' '}
+              <select aria-label="Filter by assigned company" value={companyFilter} style={input} onChange={e => {
+                setCompanyFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
+                if (e.target.value) setAllocationFilter('assigned')
+              }}>
+                <option value="">All companies</option>
+                {allocatedCompanies.map(company => <option key={company.id} value={company.id}>{company.name}</option>)}
+              </select>
+            </label>
+          </>}
           <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}

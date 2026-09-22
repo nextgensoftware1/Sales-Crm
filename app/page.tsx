@@ -103,13 +103,23 @@ export default async function Home() {
         )
         return { data: results.flatMap(result => result.data ?? []) }
       }) : Promise.resolve(empty)
-  let allocationsQuery = supabase.from('lead_allocations')
-    .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)')
-    .eq('status', 'active')
-  if (!isSuperAdmin && myTenantId) allocationsQuery = allocationsQuery.eq('tenant_id', myTenantId)
+  const readAllocations = async () => {
+    const rows = []
+    for (let offset = 0; ; offset += PAGE) {
+      let query = supabase.from('lead_allocations')
+        .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)')
+        .eq('status', 'active')
+      if (!isSuperAdmin && myTenantId) query = query.eq('tenant_id', myTenantId)
+      const { data, error } = await query.order('practice_id').order('tenant_id').range(offset, offset + PAGE - 1)
+      // Missing allocation data must not make assigned leads appear unassigned.
+      if (error) throw error
+      rows.push(...(data ?? []))
+      if (!data || data.length < PAGE) return { data: rows }
+    }
+  }
 
   const [assignmentsResult, transfersResult, allocationsResult, engagedResult] = await Promise.all([
-    assignmentsRead, transfersRead, allocationsQuery, engagedRead,
+    assignmentsRead, transfersRead, readAllocations(), engagedRead,
   ])
   const currentUser = me ? {
     full_name: me.full_name,
@@ -136,12 +146,17 @@ export default async function Home() {
   const myAllocatedIds = !isSuperAdmin && myTenantId ? (allocationsResult.data ?? [])
     .map((a: any) => a.practice_id).filter((id: unknown) => typeof id === 'string' && id.length > 0) : []
   const allocatedCodeSet = new Set<string>()
-  const allocatedCompanyByCode: Record<string, string> = {}
+  const allocatedCompanyByCode: Record<string, { id: string; name: string }[]> = {}
   for (const a of (allocationsResult.data ?? []) as any[]) {
     const code = a.master_practices?.practice_code
     if (code) {
       allocatedCodeSet.add(code)
-      if (isSuperAdmin && a.tenants?.name) allocatedCompanyByCode[code] = a.tenants.name
+      if (isSuperAdmin && a.tenant_id) {
+        const companies = allocatedCompanyByCode[code] ??= []
+        if (!companies.some(company => company.id === a.tenant_id)) {
+          companies.push({ id: a.tenant_id, name: a.tenants?.name ?? 'Unknown company' })
+        }
+      }
     }
   }
   const engagedElsewhere = new Set<string>()
@@ -268,7 +283,8 @@ export default async function Home() {
             return person ? { name: person.full_name, role: roleLabel(person.roles?.key) } : null
           })() : null,
       source: allocatedCodeSet.has(p.practice_code) ? 'Allocated' : 'Uploaded',
-      allocatedTo: allocatedCompanyByCode[p.practice_code] ?? null,
+      allocatedTo: allocatedCompanyByCode[p.practice_code]?.map(company => company.name).join(', ') ?? null,
+      allocatedCompanies: allocatedCompanyByCode[p.practice_code] ?? [],
       name: p.name,
       state: p.state,
       specialty: p.specialty,
