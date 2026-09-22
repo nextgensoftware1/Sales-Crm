@@ -228,27 +228,80 @@ export async function reactivateCompany(tenantId: string): Promise<{ ok: boolean
   return { ok: true }
 }
 
-// Permanently deletes a company. Warns the caller (via the returned
-// `usersRemaining`/`leadsRemaining` counts) if there's still real data
-// attached, but — matching the same pattern as hard-deleting a lead — Super
-// Admin has final authority to proceed anyway; the double-confirmation lives
-// in the UI, not as a hard block here.
+// Uses existing APIs; no custom SQL function is required. Requests are not atomic.
 export async function deleteCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
-  const supabase = await createSupabaseServer()
   const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
+  if (!tenantId) return { ok: false, message: 'Company is required.' }
 
-  const { data: tenant } = await supabase.from('tenants').select('is_platform, name').eq('id', tenantId).maybeSingle()
-  if (!tenant) return { ok: false, message: 'Company not found.' }
-  if ((tenant as any).is_platform) return { ok: false, message: 'The Platform company cannot be deleted.' }
+  let removedUsers = 0
+  let deletedLogins = 0
+  const failed = (message: string) => ({ ok: false, message: message +
+    (removedUsers || deletedLogins
+      ? ' Deletion is incomplete: ' + removedUsers + ' user profiles and ' + deletedLogins + ' logins were removed. Refresh and retry after resolving the error.'
+      : ' Nothing was deleted.') })
+  try {
+    const admin = createSupabaseAdmin()
+    const { data: tenant, error: tenantError } = await admin.from('tenants')
+      .select('id, is_platform').eq('id', tenantId).maybeSingle()
+    if (tenantError) return failed(tenantError.message)
+    if (!tenant) return failed('Company not found.')
+    if (tenant.is_platform !== false) return failed('The Platform company cannot be deleted.')
+    if (auth.me.tenantId === tenantId) return failed('You cannot delete your own company.')
 
-  const { error } = await supabase.from('tenants').delete().eq('id', tenantId)
-  if (error) {
-    // Most likely a foreign key constraint — real data (users, leads,
-    // allocations) still references this company at the database level.
-    return { ok: false, message: `Could not delete "${(tenant as any).name}": ${error.message}` }
+    type Member = { id: string; auth_id: string | null; roles: { key: string } | null }
+    const members: Member[] = []
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await admin.from('users').select('id, auth_id, roles(key)')
+        .eq('tenant_id', tenantId).order('id').range(offset, offset + 999)
+        .overrideTypes<Member[], { merge: false }>()
+      if (error) return failed(error.message)
+      members.push(...(data ?? []))
+      if (!data || data.length < 1000) break
+    }
+    if (members.some(member => member.id === auth.me.id || member.roles?.key === 'super_admin')) {
+      return failed('A company containing a Super Admin cannot be deleted.')
+    }
+    // Never delete a login used by another profile (including another company).
+    for (const member of members) {
+      if (!member.auth_id) continue
+      const { data, error } = await admin.from('users').select('id')
+        .eq('auth_id', member.auth_id).neq('id', member.id).limit(1)
+      if (error) return failed(error.message)
+      if (data?.length) return failed('A company user shares a login with another profile.')
+    }
+    for (const member of members) {
+      // Recheck membership before using the privileged Auth API.
+      const { data: current, error: readError } = await admin.from('users')
+        .select('tenant_id, auth_id, roles(key)').eq('id', member.id).maybeSingle()
+        .overrideTypes<{ tenant_id: string | null; auth_id: string | null; roles: { key: string } | null } | null, { merge: false }>()
+      if (readError) return failed(readError.message)
+      if (!current) continue
+      if (current.tenant_id !== tenantId || current.auth_id !== member.auth_id || current.roles?.key === 'super_admin') {
+        return failed('Company membership changed during deletion. Please retry.')
+      }
+      // Login first: if Auth fails, the profile remains available for a retry.
+      // Auth deletion may also cascade to the profile; the scoped delete is safe then.
+      if (member.auth_id) {
+        const { error } = await admin.auth.admin.deleteUser(member.auth_id)
+        if (error && error.code !== 'user_not_found') return failed('Could not remove a user login: ' + error.message)
+        if (!error) deletedLogins++
+      }
+      const { error } = await admin.from('users').delete().eq('id', member.id).eq('tenant_id', tenantId)
+      if (error) return failed('Could not remove a user profile: ' + error.message)
+      removedUsers++
+    }
+    // Check for users added while the deletion was running.
+    const { count, error: countError } = await admin.from('users')
+      .select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId)
+    if (countError) return failed(countError.message)
+    if (count !== 0) return failed('Company users remain or were added during deletion. Please retry.')
+    const { error } = await admin.from('tenants').delete().eq('id', tenantId).eq('is_platform', false)
+    if (error) return failed('Could not remove the company: ' + error.message)
+    return { ok: true }
+  } catch {
+    return { ok: false, message: 'Could not confirm company deletion. Some requests may have completed. Check the server admin key and connection, then refresh to verify the current state before retrying.' }
   }
-  return { ok: true }
 }
 
 export type CompanyStatusInfo = { id: string; userCount: number }
@@ -259,6 +312,7 @@ export async function getCompanyDeletionImpact(tenantId: string): Promise<{ ok: 
   const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
 
-  const { count } = await supabase.from('users').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId)
+  const { count, error } = await supabase.from('users').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId)
+  if (error) return { ok: false, message: 'Could not check company users. Please retry.' }
   return { ok: true, userCount: count ?? 0 }
 }

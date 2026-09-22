@@ -7,6 +7,7 @@ import AdminManageClient from './AdminManageClient'
 import AdminUsersByCompanyClient from './AdminUsersByCompanyClient'
 import CompaniesTable from './CompaniesTable'
 import SectionTabs from '../SectionTabs'
+import AllocationHistory from './AllocationHistory'
 
 export default async function AdminPage() {
   const supabase = await createSupabaseServer()
@@ -103,7 +104,7 @@ export default async function AdminPage() {
     )
   }
 
-  const [{ data: users }, { data: tenants }, { data: allocations }, { data: availableRoles }] = await Promise.all([
+  const [{ data: users }, { data: tenants }, { data: availableRoles }] = await Promise.all([
     supabase
       .from('users')
       .select('email, full_name, status, roles(key, label, level), tenants(name)'),
@@ -111,16 +112,6 @@ export default async function AdminPage() {
       .from('tenants')
       .select('id, name, is_platform, status')
       .order('name'),
-    supabase
-      .from('lead_allocations')
-      .select(`
-        allocated_at,
-        status,
-        tenants ( name ),
-        master_practices ( name, practice_code )
-      `)
-      .order('allocated_at', { ascending: false })
-      .limit(1000),
     rolesQuery,
   ])
 
@@ -211,40 +202,7 @@ export default async function AdminPage() {
             </table>
           </div>
         </div> },
-        { label: 'Allocation History', content: <div className="card">
-          <h2 className="h-section">Allocation History ({allocations?.length ?? 0})</h2>
-          {(!allocations || allocations.length === 0) ? (
-            <p className="subtle">No allocations yet.</p>
-          ) : (
-            <div className="tbl-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Practice</th>
-                    <th>Allocated To</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allocations?.map((a: any, i) => {
-                    const d = new Date(a.allocated_at)
-                    return (
-                      <tr key={i}>
-                        <td>{d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</td>
-                        <td>{d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</td>
-                        <td>{a.master_practices?.name ?? '—'}</td>
-                        <td><strong>{a.tenants?.name ?? '—'}</strong></td>
-                        <td>{a.status}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div> },
+        { label: 'Allocation History', lazy: true, content: <AllocationHistory /> },
       ]} />
     </AppShell>
   )
