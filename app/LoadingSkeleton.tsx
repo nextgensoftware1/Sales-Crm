@@ -1,4 +1,5 @@
 import styles from './loading-skeleton.module.css'
+import BrandLogo from './BrandLogo'
 
 type Props = { title?: string; detail?: boolean }
 
@@ -48,7 +49,7 @@ export default function LoadingSkeleton({ title = 'Loading your workspace', deta
     <div className={styles.shell} aria-busy="true">
       <aside className={styles.sidebar} aria-hidden="true">
         <div className={styles.brand}>
-          HB <span>Hired Billing Support<small>Practice Revenue CRM</small></span>
+          <BrandLogo className="sidebar-logo" />
         </div>
         {Array.from({ length: 6 }, (_, i) => (
           <div className={styles.nav} key={i}>

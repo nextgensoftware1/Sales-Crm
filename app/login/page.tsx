@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import BrandLogo from '../BrandLogo'
 import { createSupabaseBrowser } from '../../lib/supabase-browser'
 import { checkAccountStatus } from '../auth-actions'
 
@@ -54,9 +55,7 @@ export default function LoginPage() {
   return (
     <div className="login-page">
       <div className="login-brand">
-        <div className="login-logo-mark">
-          <span className="accent">+</span>hbs
-        </div>
+        <BrandLogo className="login-logo" />
         <div className="login-brand-copy">
           <h2>More Practices.<br />More Revenue.</h2>
           <p>We help medical practices grow with expert billing support. Our team handles the revenue cycle, so you can focus on patient care.</p>

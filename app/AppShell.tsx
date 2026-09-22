@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
+import BrandLogo from './BrandLogo'
 import ThemeToggle from './ThemeToggle'
 import SignOutButton from './SignOutButton'
 import NotificationBell from './NotificationBell'
@@ -102,9 +103,8 @@ export default function AppShell({
       />
       <aside className={'sidebar' + (menuOpen ? ' open' : '')}>
         <div className="sidebar-brand">
-          <div className="sidebar-mark" aria-hidden="true" title="Hired Billing Support">HB</div>
+          <BrandLogo className="sidebar-logo" />
           <div className="sidebar-brand-close-row">
-            <span className="sidebar-brand-text">Hired Billing Support<small>Practice Revenue CRM</small></span>
             <button
               className="sidebar-close"
               onClick={() => setMenuOpen(false)}
