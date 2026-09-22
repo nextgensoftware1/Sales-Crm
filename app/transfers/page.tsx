@@ -1,4 +1,4 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import { getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -6,16 +6,11 @@ import TransfersClient from './TransfersClient'
 import { getTransfers } from '../transfers-actions'
 
 export default async function TransfersPage() {
-  const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   const transferResult = await getTransfers()
 
   const roleKey = (me as any)?.roles?.key ?? ''

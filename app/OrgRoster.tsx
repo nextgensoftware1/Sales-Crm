@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { getOrgRoster, type RosterMember } from './roster-actions'
 
@@ -14,26 +15,35 @@ export default function OrgRoster({ npi }: { npi: string }) {
 
   const load = async () => {
     setLoading(true); setMsg('')
-    const res = await getOrgRoster(npi)
-    if (res.ok) {
-      setMembers(res.members)
-      setOrgName(res.orgName)
-      setHasOrg(res.hasOrg)
-      setLoaded(true)
-      if (!res.hasOrg) setMsg('This clinician is solo — no organization roster.')
-    } else {
-      setMsg(res.message ?? 'Could not load roster.')
+    try {
+      const res = await getOrgRoster(npi)
+      if (res.ok) {
+        setMembers(res.members)
+        setOrgName(res.orgName)
+        setHasOrg(res.hasOrg)
+        setLoaded(true)
+        if (!res.hasOrg) setMsg('This clinician is solo — no organization roster.')
+      } else {
+        setMsg(res.message ?? 'Could not load roster. Please try again.')
+      }
+    } catch {
+      setMsg('Could not load roster. Check your connection and try again.')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
     <div className="org-roster">
       {!loaded ? (
+        <div aria-busy={loading}>
         <button onClick={load} disabled={loading}
           className="org-roster-load-btn">
           {loading ? 'Loading roster…' : 'View organization roster'}
         </button>
+        {loading && <p className="org-roster-message" role="status">Finding clinicians and their latest worksheet updates…</p>}
+        {msg && <p className="org-roster-message" role="alert">{msg}</p>}
+        </div>
       ) : (
         <div className="org-roster-panel">
           <div className="org-roster-header">
@@ -76,7 +86,7 @@ export default function OrgRoster({ npi }: { npi: string }) {
                         {m.npi}
                       </td>
                       <td style={tdL}>
-                        <a href={`/practice/PR-${m.npi}`} className="org-roster-link">{m.name}</a>
+                        <Link prefetch={false} href={`/practice/PR-${m.npi}`} className="org-roster-link">{m.name}</Link>
                       </td>
                       <td style={tdL}>{m.specialty ?? '—'}</td>
                       <td style={tdL}>{m.city ?? '—'}</td>

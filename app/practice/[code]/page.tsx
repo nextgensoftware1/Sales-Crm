@@ -1,6 +1,8 @@
+import { allRows, getPracticeNavigation } from '../../../lib/practice-navigation'
+import Link from 'next/link'
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
-import { createSupabaseServer } from '../../../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../../lib/supabase-server'
 import { roleLabel } from '../../../lib/roles'
 import AppShell from '../../AppShell'
 import SectionTabs from '../../SectionTabs'
@@ -62,13 +64,9 @@ export default async function PracticeDetail({
   let showTransfers = false
   let canManageUsers = false
   try {
-    const { data: { user: authUser } } = await supabase.auth.getUser()
+    const { data: { user: authUser } } = await getCurrentUser()
     if (authUser) {
-      const { data: me } = await supabase
-        .from('users')
-        .select('id, full_name, tenant_id, roles(key, label), tenants(name)')
-        .eq('auth_id', authUser.id)
-        .single()
+      const { data: me } = await getCurrentProfile(authUser.id)
       if (me) {
         currentUser = {
           full_name: (me as any).full_name,
@@ -111,7 +109,15 @@ export default async function PracticeDetail({
     query = query.is('deleted_at', null)
   }
 
-  const { data: candidates, error } = await query
+  // Permission inputs depend on the verified profile, not on the practice query.
+  const personalScope = !!myUserId && (roleKey === 'agent' || roleKey === 'closer')
+  const [{ data: candidates, error }, { data: myAssignments }, { data: myTransfers }] = await Promise.all([
+    query,
+    personalScope ? allRows<{ practice_id: string }>(() => supabase.from('lead_assignments').select('practice_id')
+      .eq('assigned_to', myUserId!).eq('status', 'active').order('practice_id')).then(data => ({ data })) : Promise.resolve({ data: [] }),
+    personalScope && roleKey === 'closer' ? allRows<{ practice_id: string }>(() => supabase.from('lead_transfers').select('practice_id')
+      .eq('to_user_id', myUserId!).order('practice_id')).then(data => ({ data })) : Promise.resolve({ data: [] }),
+  ])
   const rows = (candidates ?? []) as any[]
 
   let practice: any = null
@@ -130,20 +136,8 @@ export default async function PracticeDetail({
     } else if (roleKey === 'agent' || roleKey === 'closer') {
       const idSet = new Set<string>()
       if (myUserId) {
-        const { data: assigns } = await supabase
-          .from('lead_assignments')
-          .select('practice_id')
-          .eq('assigned_to', myUserId)
-          .eq('status', 'active')
-        for (const a of (assigns ?? []) as any[]) if (a.practice_id) idSet.add(a.practice_id)
-
-        if (roleKey === 'closer') {
-          const { data: transfers } = await supabase
-            .from('lead_transfers')
-            .select('practice_id')
-            .eq('to_user_id', myUserId)
-          for (const t of (transfers ?? []) as any[]) if (t.practice_id) idSet.add(t.practice_id)
-        }
+        for (const a of (myAssignments ?? []) as any[]) if (a.practice_id) idSet.add(a.practice_id)
+        for (const t of (myTransfers ?? []) as any[]) if (t.practice_id) idSet.add(t.practice_id)
       }
       authorized = rows.some((r) => idSet.has(r.id))
 
@@ -175,13 +169,17 @@ export default async function PracticeDetail({
     } else if (myTenantId) {
       const ownsIt = rows.some((r) => r.owner_tenant_id === myTenantId)
       let allocatedToMe = false
+      const allocatedCodes = new Set<string>()
       if (!ownsIt) {
         const { data: allocs } = await supabase
           .from('lead_allocations')
           .select('id, master_practices(practice_code)')
           .eq('tenant_id', myTenantId)
           .eq('status', 'active')
-        allocatedToMe = (allocs ?? []).some((a: any) => a.master_practices?.practice_code === code)
+        for (const a of (allocs ?? []) as any[]) {
+          if (a.master_practices?.practice_code) allocatedCodes.add(a.master_practices.practice_code)
+        }
+        allocatedToMe = allocatedCodes.has(code)
       }
       authorized = ownsIt || allocatedToMe
 
@@ -210,12 +208,6 @@ export default async function PracticeDetail({
           if (orgCodes.some((c) => c.owner === myTenantId)) authorized = true
           // Or is allocated any anchor in this org?
           if (!authorized && orgCodes.length) {
-            const { data: allocs2 } = await supabase
-              .from('lead_allocations')
-              .select('master_practices(practice_code)')
-              .eq('tenant_id', myTenantId)
-              .eq('status', 'active')
-            const allocatedCodes = new Set((allocs2 ?? []).map((a: any) => a.master_practices?.practice_code).filter(Boolean))
             if (orgCodes.some((c) => allocatedCodes.has(c.code))) authorized = true
           }
         }
@@ -229,7 +221,7 @@ export default async function PracticeDetail({
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
-          <a href="/">← Back to all practices</a>
+          <Link prefetch={false} href="/">← Back to all practices</Link>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
           <p className="subtle" style={{ marginTop: 12 }}>
             {error
@@ -246,11 +238,10 @@ export default async function PracticeDetail({
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
 
-  const [{ data: allCodesRows }, { data: activity }, { count: rosterCount }] = await Promise.all([
-    supabase
-      .from('master_practices')
-      .select('practice_code')
-      .order('name', { ascending: true }),
+  const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: editor }] = await Promise.all([
+    getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
+      personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined })
+      .catch(() => null),
     supabase
       .from('lead_activity')
       .select('disposition, note, created_at, users(full_name)')
@@ -263,15 +254,14 @@ export default async function PracticeDetail({
           .select('id', { count: 'exact', head: true })
           .eq('org_pac_id', primaryProvider.org_pac_id)
       : Promise.resolve({ count: null }),
+    supabase.from('lead_transfers').select('to_user_id, note, created_at, users!lead_transfers_to_user_id_fkey(full_name)')
+      .eq('practice_id', practice.id).order('created_at', { ascending: false })
+      .limit(1).maybeSingle(),
+    pr.ws_updated_by
+      ? supabase.from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
+      : Promise.resolve({ data: null }),
   ])
-  const seenCodes = new Set<string>()
-  const codesList: string[] = []
-  for (const r of (allCodesRows ?? []) as any[]) {
-    if (r.practice_code && !seenCodes.has(r.practice_code)) {
-      seenCodes.add(r.practice_code)
-      codesList.push(r.practice_code)
-    }
-  }
+  const codesList = navigationCodes ?? []
   const currentIndex = codesList.indexOf(code)
   const totalCount = codesList.length
   const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
@@ -325,12 +315,7 @@ export default async function PracticeDetail({
   const zone = practice.state ? (ZONE_BY_STATE[practice.state] ?? 'Other') : null
   const statusLabel = pr.ws_disposition || 'New'
 
-  let updatedByName: string | null = null
-  if (pr.ws_updated_by) {
-    const { data: editor } = await supabase
-      .from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
-    updatedByName = (editor as any)?.full_name ?? null
-  }
+  const updatedByName: string | null = editor?.full_name ?? null
 
   // Has this lead already been transferred once? If so, the Worksheet's
   // transfer section shows that history. But whether it's actually LOCKED
@@ -340,20 +325,8 @@ export default async function PracticeDetail({
   // agent who gave it away — who gets the read-only view.
   let existingTransfer: { closerName: string; handoffStatus: string | null; transferredAt: string; toUserId: string | null } | null = null
   {
-    const { data: transferRow } = await supabase
-      .from('lead_transfers')
-      .select('to_user_id, note, created_at')
-      .eq('practice_id', practice.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
     if (transferRow) {
-      let closerName = 'Unknown'
-      if ((transferRow as any).to_user_id) {
-        const { data: closer } = await supabase
-          .from('users').select('full_name').eq('id', (transferRow as any).to_user_id).maybeSingle()
-        closerName = (closer as any)?.full_name ?? 'Unknown'
-      }
+      const closerName = (transferRow as any).users?.full_name ?? 'Unknown'
       existingTransfer = {
         closerName,
         handoffStatus: (transferRow as any).note ?? null,
@@ -399,20 +372,20 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <a href={returnPath} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : 'Back to list'}>
+              <Link prefetch={false} href={returnPath} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : 'Back to list'}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-              </a>
+              </Link>
               <div className="lead-pager">
                 {prevCode ? (
-                  <a href={`/practice/${prevCode}${returnQuery}`} title="Previous Lead">
+                  <Link prefetch={false} href={`/practice/${prevCode}${returnQuery}`} title="Previous Lead">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-                  </a>
+                  </Link>
                 ) : <span className="lead-pager-disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
-                <span className="lead-pager-count">{currentIndex >= 0 ? currentIndex + 1 : '?'} / {totalCount}</span>
+                <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : <>{totalCount} available leads</>}</span>
                 {nextCode ? (
-                  <a href={`/practice/${nextCode}${returnQuery}`} title="Next Lead">
+                  <Link prefetch={false} href={`/practice/${nextCode}${returnQuery}`} title="Next Lead">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
-                  </a>
+                  </Link>
                 ) : <span className="lead-pager-disabled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}
               </div>
               <div>
@@ -497,9 +470,6 @@ export default async function PracticeDetail({
         <SectionTabs label="Lead details" sections={[
           { label: 'Call Notes & Worksheet', content: (
             <div className="lead-2col">
-              <div style={{ minWidth: 0 }}>
-                <Worksheet practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
-              </div>
               <aside style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
                 <div className="lead-card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
@@ -586,8 +556,11 @@ export default async function PracticeDetail({
                   </div>
                 )}
 
-                {primaryProvider?.npi && <OrgRoster npi={primaryProvider.npi} />}
+                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} />}
               </aside>
+              <div style={{ minWidth: 0 }}>
+                <Worksheet key={code} practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
+              </div>
             </div>
           ) },
           { label: 'Activity History & Call Logs', content: (
@@ -613,3 +586,5 @@ export default async function PracticeDetail({
     </AppShell>
   )
 }
+
+

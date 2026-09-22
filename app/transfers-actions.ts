@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 const CAN_VIEW = ['company_admin', 'manager', 'team_lead', 'super_admin', 'agent', 'closer']
 
@@ -34,14 +34,10 @@ export async function getTransfers(): Promise<{
 }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   const roleKey = (me as any)?.roles?.key ?? ''
   if (!CAN_VIEW.includes(roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -89,7 +85,7 @@ export async function getTransfers(): Promise<{
     userIds.length
       ? supabase.from('users').select('id, full_name').in('id', userIds)
       : Promise.resolve({ data: [] }),
-    (isSuperAdmin || isAgentOrCloser) && tenantIds.length
+    isSuperAdmin ? Promise.resolve({ data: companyTenants ?? [] }) : isAgentOrCloser && tenantIds.length
       ? supabase.from('tenants').select('id, name').in('id', tenantIds)
       : Promise.resolve({ data: [] }),
   ])

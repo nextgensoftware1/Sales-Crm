@@ -19,6 +19,7 @@ const IconUsers = () => <svg {...iconProps}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4
 const IconTransfer = () => <svg {...iconProps}><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></svg>
 const IconSettings = () => <svg {...iconProps}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></svg>
 const IconTrash = () => <svg {...iconProps}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+const IconReport = () => <svg {...iconProps}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M15 2v5h5" /><path d="M9 13h6M9 17h6M9 9h1" /></svg>
 
 type NavItem = { href: string; label: string; icon: React.ReactNode; admin?: boolean }
 const NAV: NavItem[] = [
@@ -31,6 +32,7 @@ const NAV: NavItem[] = [
   // visibility rules as before, just visually separated to match the
   // reference image's sidebar grouping.
   { href: '/admin',         label: 'Admin',          icon: <IconSettings />, admin: true },
+  { href: '/worksheet-reports', label: 'Worksheet Reports', icon: <IconReport />, admin: true },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: <IconTrash />, admin: true },
 ]
 
@@ -62,6 +64,7 @@ export default function AppShell({
   const items = NAV.filter((n) => {
     if (n.href === '/deleted-leads') return showAdmin
     if (n.href === '/admin') return showAdmin || canManageUsers
+    if (n.href === '/worksheet-reports') return showAdmin || canManageUsers
     if (n.href === '/transfers') return showTransfers
     return true
   })

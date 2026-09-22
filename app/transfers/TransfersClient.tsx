@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState, Fragment } from 'react'
 import { getTransfers, type Transfer } from '../transfers-actions'
 
@@ -72,7 +73,7 @@ function TransfersTable({ rows, expanded, setExpanded }: {
                     {t.practiceDeleted ? (
                       <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
                     ) : (
-                      <a href={`/practice/${t.practiceCode}?from=transfers`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</a>
+                      <Link prefetch={false} href={`/practice/${t.practiceCode}?from=transfers`} onClick={(e) => e.stopPropagation()}>{t.practiceName}</Link>
                     )}
                   </td>
                   <td>{sourcePill((t as any).isRoster)}</td>
@@ -155,7 +156,7 @@ export default function TransfersClient({ initialData, initialMessage }: {
   const [loading, setLoading] = useState(!initialData && !initialMessage)
   const [msg, setMsg] = useState(initialMessage ?? '')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [selectedCompany, setSelectedCompany] = useState<string>('')
+  const [selectedCompany, setSelectedCompany] = useState<string>(initialData?.allCompanies[0]?.name ?? '')
 
   useEffect(() => {
     if (initialData || initialMessage) return

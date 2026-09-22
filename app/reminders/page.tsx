@@ -1,4 +1,4 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import { getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -6,16 +6,11 @@ import RemindersClient from './RemindersClient'
 import { getReminders } from '../reminders-actions'
 
 export default async function RemindersPage() {
-  const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   const reminderResult = await getReminders()
 
   const roleKey = (me as any)?.roles?.key ?? ''

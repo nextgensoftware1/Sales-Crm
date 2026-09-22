@@ -1,4 +1,5 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import Link from 'next/link'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel, ROLE_PERMISSIONS } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -10,14 +11,10 @@ import SectionTabs from '../SectionTabs'
 export default async function AdminPage() {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, tenant_id, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const currentUser = me
     ? {
@@ -46,12 +43,18 @@ export default async function AdminPage() {
   // company — add teammates within the roles they're allowed to grant, see
   // who's already on the team. No visibility into other companies, the
   // allocation history, or the ability to add a new company (Super Admin only).
+  const rolesQuery = supabase.from('roles').select('key, label, level').order('level')
+  const toRoleOptions = (rows: { key: string; label: string; level: number }[]) => rows
+    .filter((r) => r.key !== 'super_admin' && (roleKey === 'super_admin' || r.level > (me?.roles?.level ?? 999)))
+    .map((r) => ({ key: r.key, label: roleLabel(r.key) }))
+
   if (roleKey !== 'super_admin') {
     const myCompanyName = (me as any)?.tenants?.name ?? 'Your Company'
-    const { data: myUsers } = await supabase
-      .from('users')
-      .select('email, full_name, status, roles(key, label, level)')
-      .eq('tenant_id', (me as any)?.tenant_id)
+    const [{ data: myUsers }, { data: availableRoles }] = await Promise.all([
+      supabase.from('users').select('email, full_name, status, roles(key, label, level)')
+        .eq('tenant_id', (me as any)?.tenant_id),
+      rolesQuery,
+    ])
 
     const sorted = ((myUsers ?? []) as any[])
       // Super Admin is a platform-level role, not a member of any specific
@@ -76,7 +79,7 @@ export default async function AdminPage() {
         canManageUsers={canManageUsers}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          <AdminManageClient isSuperAdmin={false} />
+          <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />
           <div className="card">
             <h2 className="h-section">Your Team ({sorted.length})</h2>
             <div className="tbl-wrap">
@@ -100,7 +103,7 @@ export default async function AdminPage() {
     )
   }
 
-  const [{ data: users }, { data: tenants }, { data: allocations }] = await Promise.all([
+  const [{ data: users }, { data: tenants }, { data: allocations }, { data: availableRoles }] = await Promise.all([
     supabase
       .from('users')
       .select('email, full_name, status, roles(key, label, level), tenants(name)'),
@@ -118,6 +121,7 @@ export default async function AdminPage() {
       `)
       .order('allocated_at', { ascending: false })
       .limit(1000),
+    rolesQuery,
   ])
 
   // Group users by company name
@@ -164,9 +168,9 @@ export default async function AdminPage() {
       showTransfers={showTransfers}
       canManageUsers={canManageUsers}
       headerRight={
-        <a href="/admin/view" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+        <Link prefetch={false} href="/admin/view" className="btn btn-primary" style={{ textDecoration: 'none' }}>
           View as role →
-        </a>
+        </Link>
       }
     >
       <SectionTabs label="Company administration" sections={[
@@ -179,7 +183,8 @@ export default async function AdminPage() {
           <h2 className="h-section">Users by Company</h2>
           <AdminUsersByCompanyClient allCompanyNames={allCompanyNames} usersByCompany={usersByCompany} />
         </div> },
-        { label: 'Manage Companies & Users', content: <AdminManageClient isSuperAdmin={true} /> },
+        { label: 'Manage Companies & Users', content: <AdminManageClient isSuperAdmin={true} roles={toRoleOptions(availableRoles ?? [])}
+          companies={(tenants ?? []).filter((t) => !t.is_platform).map((t) => ({ id: t.id, name: t.name }))} /> },
         { label: 'Roles & Permissions', content: <div className="card">
           <h2 className="h-section">Roles & Permissions</h2>
           <p className="subtle" style={{ marginTop: -8, marginBottom: 14 }}>

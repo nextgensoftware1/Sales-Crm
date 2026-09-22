@@ -1,22 +1,29 @@
 import type { Metadata } from "next";
-import { Inter_Tight, Fraunces, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import "./design-system.css";
 
-const interTight = Inter_Tight({
+const interTight = localFont({
+  src: './fonts/inter-tight-normal.woff2',
+  weight: '100 900',
+  display: 'swap',
   variable: "--font-sans",
-  subsets: ["latin"],
 });
 
-const fraunces = Fraunces({
+const fraunces = localFont({
+  src: [
+    { path: './fonts/fraunces-normal.woff2', weight: '100 900', style: 'normal' },
+    { path: './fonts/fraunces-italic.woff2', weight: '100 900', style: 'italic' },
+  ],
+  display: 'swap',
   variable: "--font-display",
-  subsets: ["latin"],
-  style: ["normal", "italic"],
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const jetbrainsMono = localFont({
+  src: './fonts/jetbrains-mono-normal.woff2',
+  weight: '100 800',
+  display: 'swap',
   variable: "--font-mono",
-  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {

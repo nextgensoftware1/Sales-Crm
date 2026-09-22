@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useMemo } from 'react'
 import AppShell from '../AppShell'
 import DateRangePicker from './DateRangePicker'
@@ -60,9 +61,9 @@ export default function DashboardView(p: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <DateRangePicker from={p.fromDate} to={p.toDate} />
           {p.canManageAssignments && (
-            <a href="/assignments" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+            <Link prefetch={false} href="/assignments" className="btn btn-primary" style={{ textDecoration: 'none' }}>
               Manage assigned leads
-            </a>
+            </Link>
           )}
         </div>
       }

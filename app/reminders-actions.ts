@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 export type Reminder = {
   id: string
@@ -16,14 +16,10 @@ export type Reminder = {
   practiceDeleted: boolean
 }
 
-async function whoAmI(supabase: Awaited<ReturnType<typeof createSupabaseServer>>) {
-  const { data: { user } } = await supabase.auth.getUser()
+async function whoAmI() {
+  const { data: { user } } = await getCurrentUser()
   if (!user) return null
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return null
   return {
     id: (me as any).id as string,
@@ -40,7 +36,7 @@ export async function getReminders(): Promise<{
   ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
 }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
 
   const isSuperAdmin = me.roleKey === 'super_admin'
@@ -49,7 +45,7 @@ export async function getReminders(): Promise<{
 
   let q = supabase
     .from('lead_reminders')
-    .select('id, practice_id, tenant_id, agent_id, remind_at, note, done')
+    .select('id, practice_id, tenant_id, agent_id, remind_at, note, done, master_practices(practice_code, name), users(full_name), tenants(name)')
     .order('remind_at', { ascending: true })
   if (scope === 'company') q = q.eq('tenant_id', me.tenantId)
   else if (scope === 'mine') q = q.eq('agent_id', me.id)
@@ -58,33 +54,8 @@ export async function getReminders(): Promise<{
   if (error) return { ok: false, message: error.message }
   if (!rows || rows.length === 0) return { ok: true, reminders: [], scope }
 
-  const practiceIds = Array.from(new Set(rows.map((r: any) => r.practice_id).filter(Boolean)))
-  const agentIds = Array.from(new Set(rows.map((r: any) => r.agent_id).filter(Boolean)))
-  const tenantIds = Array.from(new Set(rows.map((r: any) => r.tenant_id).filter(Boolean)))
-
-  const [{ data: practices }, { data: agents }, { data: tenants }] = await Promise.all([
-    practiceIds.length
-      ? supabase.from('master_practices').select('id, practice_code, name').in('id', practiceIds)
-      : Promise.resolve({ data: [] }),
-    scope !== 'mine' && agentIds.length
-      ? supabase.from('users').select('id, full_name').in('id', agentIds)
-      : Promise.resolve({ data: [] }),
-    isSuperAdmin && tenantIds.length
-      ? supabase.from('tenants').select('id, name').in('id', tenantIds)
-      : Promise.resolve({ data: [] }),
-  ])
-
-  const practiceById: Record<string, { practice_code: string; name: string }> = {}
-  for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
-
-  const nameByAgentId: Record<string, string> = {}
-  for (const a of (agents ?? []) as any[]) nameByAgentId[a.id] = a.full_name
-
-  const nameByTenantId: Record<string, string> = {}
-  for (const t of (tenants ?? []) as any[]) nameByTenantId[t.id] = t.name
-
   const reminders: Reminder[] = rows.map((r: any) => {
-    const p = practiceById[r.practice_id]
+    const p = r.master_practices
     return {
       id: r.id,
       practiceCode: p?.practice_code ?? null,
@@ -92,8 +63,8 @@ export async function getReminders(): Promise<{
       remindAt: r.remind_at,
       note: r.note ?? null,
       done: !!r.done,
-      agentName: scope !== 'mine' ? (nameByAgentId[r.agent_id] ?? null) : null,
-      companyName: isSuperAdmin ? (nameByTenantId[r.tenant_id] ?? null) : null,
+      agentName: scope !== 'mine' ? (r.users?.full_name ?? null) : null,
+      companyName: isSuperAdmin ? (r.tenants?.name ?? null) : null,
       practiceDeleted: !p,
     }
   })
@@ -107,7 +78,7 @@ export async function getReminders(): Promise<{
 // oversight view should also be able to clear a stale one.
 export async function markReminderDone(reminderId: string): Promise<{ ok: boolean; message?: string }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
 
   const { data: reminder } = await supabase
@@ -129,3 +100,4 @@ export async function markReminderDone(reminderId: string): Promise<{ ok: boolea
   if (error) return { ok: false, message: error.message }
   return { ok: true }
 }
+

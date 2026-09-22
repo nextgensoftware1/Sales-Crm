@@ -1,4 +1,4 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel as canonicalRoleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import DashboardView from './DashboardView'
@@ -19,14 +19,10 @@ export default async function DashboardPage({
 }) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'

@@ -240,7 +240,7 @@
 // }
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 type CsvRow = Record<string, string>
 
@@ -259,14 +259,10 @@ export async function uploadLeadsCsv(
 ): Promise<{ ok: boolean; message: string; inserted?: number; skipped?: number }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
   let tenantId = (me as any)?.tenant_id

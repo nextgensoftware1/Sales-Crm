@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   getMyAssignmentSummary,
@@ -105,7 +106,7 @@ export default function AssignmentsClient() {
                           {incoming.has(l.practiceCode) && (
                             <span title="Also assigned to you by your manager" style={{ color: 'var(--warn)', marginRight: 6 }}>★</span>
                           )}
-                          <a href={`/practice/${l.practiceCode}`}>{l.name}</a>
+                          <Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link>
                         </td>
                         <td>{l.state ?? '—'}</td>
                         <td>{l.specialty ?? '—'}</td>

@@ -446,20 +446,16 @@
 // }
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { revalidatePath } from 'next/cache'
 
 export async function allocatePractices(practiceCodes: string[], tenantSlug: string) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   if ((me as any)?.roles?.key !== 'super_admin') {
     return { ok: false, message: 'Only Super Admin can allocate' }
@@ -503,14 +499,10 @@ export async function logActivity(
 ) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
   const { data: practice } = await supabase
@@ -548,14 +540,10 @@ export async function setReminder(
 ) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
   const { data: practice } = await supabase
@@ -581,14 +569,10 @@ export async function setReminder(
 // PLUS the current user themselves (so an agent can keep/close the lead).
 export async function getClosers() {
   const supabase = await createSupabaseServer()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return []
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, full_name, email, tenant_id, roles(key, label)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return []
 
   const { data: people } = await supabase
@@ -621,14 +605,10 @@ export async function transferToCloser(
 ) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
   const { data: practice } = await supabase
@@ -686,14 +666,10 @@ export async function markAsSold(
 ) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not logged in' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
   const roleKey = (me as any).roles?.key
@@ -758,14 +734,10 @@ export async function markAsSold(
 export async function softDeleteLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   const roleKey = (me as any)?.roles?.key
   if (roleKey !== 'super_admin') {
     return { ok: false, message: 'Only Super Admin can delete leads.' }
@@ -792,14 +764,10 @@ export async function softDeleteLeads(codes: string[]) {
 export async function restoreLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if ((me as any)?.roles?.key !== 'super_admin') {
     return { ok: false, message: 'Only Super Admin can restore leads.' }
   }
@@ -822,14 +790,10 @@ export async function restoreLeads(codes: string[]) {
 export async function hardDeleteLeads(codes: string[]) {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if ((me as any)?.roles?.key !== 'super_admin') {
     return { ok: false, message: 'Only Super Admin can permanently delete leads.' }
   }

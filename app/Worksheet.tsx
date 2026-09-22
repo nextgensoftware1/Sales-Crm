@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
-import { logActivity, setReminder, getClosers, transferToCloser, markAsSold } from './actions'
+import { getClosers, transferToCloser, markAsSold } from './actions'
 
 const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow up', 'Proposal', 'Contract', 'Sold']
 const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
@@ -77,10 +77,6 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
     const res = await saveWorksheet(practiceCode, {
       callDetails, additionalPhone, email, concernedPerson, directLine, callbackAt, timezone, disposition,
     })
-    if (res.ok && disposition && disposition !== 'New') {
-      // log it as activity too (note required = the call details)
-      await logActivity(practiceCode, disposition, callDetails || `Disposition: ${disposition}`)
-    }
     setSaving(false)
     setMsg(res.message)
     if (res.ok) router.refresh()

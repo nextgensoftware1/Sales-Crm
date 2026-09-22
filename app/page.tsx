@@ -1,21 +1,18 @@
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { roleLabel } from '../lib/roles'
 import PracticesTable from './PracticesTable'
 import UploadLeadsButton from './UploadLeadsButton'
 import { redirect } from 'next/navigation'
 import AppShell from './AppShell'
+import { chunks, mapConcurrent } from '../lib/query-utils'
 
 export default async function Home() {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, full_name, tenant_id, roles(key, label, level), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
@@ -26,143 +23,9 @@ export default async function Home() {
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
 
-  let myAgents: { id: string; full_name: string; role: string }[] = []
-  if (canAssign) {
-    const myLevel = (me as any)?.roles?.level ?? 999
-    const { data: agentRows } = await supabase
-      .from('users')
-      .select('id, full_name, roles(key, label, level)')
-      .eq('tenant_id', myTenantId)
-      .order('full_name')
-    myAgents = (agentRows ?? [])
-      .filter((u: any) => (u.roles?.level ?? 0) > myLevel)
-      .map((u: any) => ({ id: u.id, full_name: u.full_name, role: roleLabel(u.roles?.key) }))
-  }
-
-  let companies: { slug: string; name: string }[] = []
-  if (isSuperAdmin) {
-    const { data: tenantRows } = await supabase
-      .from('tenants')
-      .select('slug, name, is_platform')
-      .eq('is_platform', false)
-      .order('name')
-    companies = (tenantRows ?? []).map((t: any) => ({ slug: t.slug, name: t.name }))
-  }
-
-  const currentUser = me
-    ? {
-        full_name: me.full_name,
-        role: roleLabel((me as any).roles?.key),
-        company: (me as any).tenants?.name ?? 'Unknown',
-      }
-    : null
-
-  const allocatedOn: Record<string, string> = {}
-  const leadStatus: Record<string, string> = {}
-  let assignedIds: string[] | null = null
-  if (roleKey === 'agent' || roleKey === 'closer' || roleKey === 'manager' || roleKey === 'team_lead') {
-    const idSet = new Set<string>()
-
-    const { data: assigns } = await supabase
-      .from('lead_assignments')
-      .select('practice_id, assigned_at, current_status')
-      .eq('assigned_to', myUserId)
-      .eq('status', 'active')
-    for (const a of (assigns ?? []) as any[]) {
-      if (a.practice_id) {
-        idSet.add(a.practice_id)
-        allocatedOn[a.practice_id] = a.assigned_at
-        leadStatus[a.practice_id] = a.current_status ?? ''
-      }
-    }
-
-    if (roleKey === 'closer') {
-      const { data: transfers } = await supabase
-        .from('lead_transfers')
-        .select('practice_id, created_at')
-        .eq('to_user_id', myUserId)
-      for (const t of (transfers ?? []) as any[]) {
-        if (t.practice_id) {
-          idSet.add(t.practice_id)
-          if (!allocatedOn[t.practice_id]) allocatedOn[t.practice_id] = t.created_at
-          if (!leadStatus[t.practice_id]) leadStatus[t.practice_id] = 'Transferred'
-        }
-      }
-    }
-
-    assignedIds = Array.from(idSet)
-  }
-
-  let myAssignedCodes: string[] = []
-  const assignedAwayTo: Record<string, { name: string; role: string }> = {}
-  if (canAssign) {
-    const { data: mine } = await supabase
-      .from('lead_assignments')
-      .select('practice_id, master_practices(practice_code)')
-      .eq('assigned_to', myUserId)
-      .eq('status', 'active')
-    myAssignedCodes = (mine ?? [])
-      .map((r: any) => r.master_practices?.practice_code)
-      .filter(Boolean)
-
-    const { data: away } = await supabase
-      .from('lead_assignments')
-      .select('practice_id, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))')
-      .eq('assigned_by', myUserId)
-      .eq('status', 'active')
-    for (const r of (away ?? []) as any[]) {
-      if (r.practice_id && r.users) {
-        assignedAwayTo[r.practice_id] = {
-          name: r.users.full_name,
-          role: roleLabel(r.users.roles?.key),
-        }
-      }
-    }
-  }
-
-  let myAllocatedIds: string[] = []
-  if (!isSuperAdmin && myTenantId) {
-    const { data: allocs } = await supabase
-      .from('lead_allocations')
-      .select('practice_id')
-      .eq('tenant_id', myTenantId)
-      .eq('status', 'active')
-    myAllocatedIds = (allocs ?? [])
-      .map((a: any) => a.practice_id)
-      .filter((id: any) => typeof id === 'string' && id.length > 0)
-  }
-
-  const allocatedCodeSet = new Set<string>()
-  const allocatedCompanyByCode: Record<string, string> = {}
-  {
-    let aq = supabase
-      .from('lead_allocations')
-      .select('tenant_id, master_practices(practice_code), tenants(name)')
-      .eq('status', 'active')
-    if (!isSuperAdmin && myTenantId) aq = aq.eq('tenant_id', myTenantId)
-    const { data: allocAll } = await aq
-    for (const a of (allocAll ?? []) as any[]) {
-      const code = a.master_practices?.practice_code
-      if (code) {
-        allocatedCodeSet.add(code)
-        if (isSuperAdmin && a.tenants?.name) allocatedCompanyByCode[code] = a.tenants.name
-      }
-    }
-  }
-
-  let engagedElsewhere = new Set<string>()
-  if (!isSuperAdmin && myTenantId) {
-    const { data: engaged } = await supabase
-      .from('lead_assignments')
-      .select('practice_id, tenant_id')
-      .eq('status', 'active')
-    for (const a of (engaged ?? []) as any[]) {
-      if (a.tenant_id && a.tenant_id !== myTenantId) engagedElsewhere.add(a.practice_id)
-    }
-  }
-
   const SELECT = `
-    id, practice_code, name, state, specialty, owner_tenant_id, created_at,
+    id, practice_code, name, state, specialty, owner_tenant_id, created_at, lead_activity(created_at),
+    ${canAssign ? 'assigned_away:lead_assignments(users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
     practice_providers (
       providers (
         npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk,
@@ -178,7 +41,9 @@ export default async function Home() {
     const out: any[] = []
     let from = 0
     while (true) {
-      const { data: batch, error: err } = await makeQuery().range(from, from + PAGE - 1)
+      let query = makeQuery()
+      if (canAssign) query = query.eq('assigned_away.assigned_by', myUserId).eq('assigned_away.status', 'active')
+      const { data: batch, error: err } = await query.order('created_at', { referencedTable: 'lead_activity', ascending: false }).limit(1, { referencedTable: 'lead_activity' }).range(from, from + PAGE - 1)
       if (err) throw err
       if (!batch || batch.length === 0) break
       out.push(...batch)
@@ -193,14 +58,95 @@ export default async function Home() {
     if (ids.length === 0) return []
     const chunks: string[][] = []
     for (let i = 0; i < ids.length; i += CHUNK_IDS) chunks.push(ids.slice(i, i + CHUNK_IDS))
-    const results = await Promise.all(
-      chunks.map((chunk) =>
+    const results = await mapConcurrent(chunks, 4, (chunk) =>
         fetchAllPaged(() =>
           supabase.from('master_practices').select(SELECT).in('id', chunk).eq('is_roster', false).order('name')
         )
-      )
     )
     return results.flat()
+  }
+
+  // Start the independent lead scan while dropdown/allocation metadata loads.
+  // Capture errors immediately so an early rejection cannot go unhandled.
+  const earlyLeadRead = isSuperAdmin || roleKey === 'company_admin'
+    ? fetchAllPaged(() => {
+        let query = supabase.from('master_practices').select(SELECT).eq('is_roster', false).order('name')
+        query = isSuperAdmin ? query.is('deleted_at', null) : query.eq('owner_tenant_id', myTenantId)
+        return query
+      }).then(data => ({ data, error: null }), error => ({ data: [], error }))
+    : null
+  // These reads depend only on the verified profile, not on each other.
+  // Reuse assignment/allocation results instead of fetching the same rows twice.
+  const assignmentScoped = ['agent', 'closer', 'manager', 'team_lead'].includes(roleKey)
+  const excludeEngagedElsewhere = ['manager', 'team_lead'].includes(roleKey)
+  const empty = { data: [] }
+  const assignmentsRead = Promise.resolve(assignmentScoped || canAssign ? supabase.from('lead_assignments')
+    .select('practice_id, assigned_at, current_status, master_practices(practice_code)')
+    .eq('assigned_to', myUserId).eq('status', 'active') : empty)
+  const transfersRead = Promise.resolve(roleKey === 'closer'
+    ? supabase.from('lead_transfers').select('practice_id, created_at').eq('to_user_id', myUserId) : empty)
+  const scopeIdsRead = Promise.all([assignmentsRead, transfersRead]).then(results =>
+    Array.from(new Set(results.flatMap(result => (result.data ?? []).map(row => row.practice_id)).filter(Boolean)))
+  )
+  // Start as soon as permissions resolve; dropdowns and unrelated metadata
+  // must not hold up the main data request for agents/managers/closers.
+  const scopedLeadRead = assignmentScoped
+    ? scopeIdsRead.then(fetchByIds).then(data => ({ data, error: null }), error => ({ data: [], error }))
+    : null
+  // Only these assigned practices can appear on this page. Avoid scanning
+  // every active assignment in every company to exclude engaged leads.
+  const engagedRead = excludeEngagedElsewhere && myTenantId
+    ? scopeIdsRead.then(async ids => {
+        const results = await mapConcurrent(chunks(ids, CHUNK_IDS), 4, part =>
+          supabase.from('lead_assignments').select('practice_id, tenant_id')
+            .eq('status', 'active').neq('tenant_id', myTenantId).in('practice_id', part)
+        )
+        return { data: results.flatMap(result => result.data ?? []) }
+      }) : Promise.resolve(empty)
+  let allocationsQuery = supabase.from('lead_allocations')
+    .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)')
+    .eq('status', 'active')
+  if (!isSuperAdmin && myTenantId) allocationsQuery = allocationsQuery.eq('tenant_id', myTenantId)
+
+  const [assignmentsResult, transfersResult, allocationsResult, engagedResult] = await Promise.all([
+    assignmentsRead, transfersRead, allocationsQuery, engagedRead,
+  ])
+  const currentUser = me ? {
+    full_name: me.full_name,
+    role: roleLabel(me.roles?.key),
+    company: me.tenants?.name ?? 'Unknown',
+  } : null
+
+  const allocatedOn: Record<string, string> = {}
+  const leadStatus: Record<string, string> = {}
+  for (const a of (assignmentsResult.data ?? []) as any[]) {
+    if (a.practice_id && assignmentScoped) {
+      allocatedOn[a.practice_id] = a.assigned_at
+      leadStatus[a.practice_id] = a.current_status ?? ''
+    }
+  }
+  for (const t of (transfersResult.data ?? []) as any[]) {
+    if (t.practice_id) {
+      if (!allocatedOn[t.practice_id]) allocatedOn[t.practice_id] = t.created_at
+      if (!leadStatus[t.practice_id]) leadStatus[t.practice_id] = 'Transferred'
+    }
+  }
+  const myAssignedCodes = canAssign ? (assignmentsResult.data ?? [])
+    .map((r: any) => r.master_practices?.practice_code).filter(Boolean) : []
+  const myAllocatedIds = !isSuperAdmin && myTenantId ? (allocationsResult.data ?? [])
+    .map((a: any) => a.practice_id).filter((id: unknown) => typeof id === 'string' && id.length > 0) : []
+  const allocatedCodeSet = new Set<string>()
+  const allocatedCompanyByCode: Record<string, string> = {}
+  for (const a of (allocationsResult.data ?? []) as any[]) {
+    const code = a.master_practices?.practice_code
+    if (code) {
+      allocatedCodeSet.add(code)
+      if (isSuperAdmin && a.tenants?.name) allocatedCompanyByCode[code] = a.tenants.name
+    }
+  }
+  const engagedElsewhere = new Set<string>()
+  for (const a of (engagedResult.data ?? []) as any[]) {
+    if (a.tenant_id && a.tenant_id !== myTenantId) engagedElsewhere.add(a.practice_id)
   }
 
   let data: any[] = []
@@ -208,18 +154,20 @@ export default async function Home() {
   try {
     if (isSuperAdmin) {
       // All ANCHOR practices EXCEPT soft-deleted (roster members hidden).
-      data = await fetchAllPaged(() =>
-        supabase.from('master_practices').select(SELECT)
-          .is('deleted_at', null)
-          .eq('is_roster', false)
-          .order('name')
-      )
+      const result = await earlyLeadRead!
+      if (result.error) throw result.error
+      data = result.data
     } else if (roleKey === 'agent' || roleKey === 'closer' || roleKey === 'manager' || roleKey === 'team_lead') {
-      data = await fetchByIds(assignedIds ?? [])
+      const result = await scopedLeadRead!
+      if (result.error) throw result.error
+      data = result.data
     } else {
       // Company Admin only: OWNED + ALLOCATED — anchors only, roster hidden.
       const [owned, allocated] = await Promise.all([
-        fetchAllPaged(() =>
+        earlyLeadRead ? earlyLeadRead.then(result => {
+          if (result.error) throw result.error
+          return result.data
+        }) : fetchAllPaged(() =>
           supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).eq('is_roster', false).order('name')
         ),
         fetchByIds(myAllocatedIds),
@@ -261,24 +209,13 @@ export default async function Home() {
 
   const lastDialed: Record<string, string> = {}
   const workedPracticeIds = new Set<string>()
-  {
-    const pids = data.map((p: any) => p.id)
-    for (let i = 0; i < pids.length; i += 300) {
-      const part = pids.slice(i, i + 300)
-      const { data: acts } = await supabase
-        .from('lead_activity')
-        .select('practice_id, created_at')
-        .in('practice_id', part)
-        .order('created_at', { ascending: false })
-      for (const a of (acts ?? []) as any[]) {
-        if (a.practice_id) {
-          workedPracticeIds.add(a.practice_id)
-          if (!lastDialed[a.practice_id]) lastDialed[a.practice_id] = a.created_at
-        }
-      }
+  for (const practice of data) {
+    const latest = practice.lead_activity?.[0]?.created_at
+    if (latest) {
+      workedPracticeIds.add(practice.id)
+      lastDialed[practice.id] = latest
     }
   }
-
   const newLeadCodes = new Set<string>()
   const workedLeadCodes = new Set<string>()
   {
@@ -287,7 +224,7 @@ export default async function Home() {
       .filter(Boolean)
       .map((s: string) => new Date(s).getTime())
     if (timestamps.length) {
-      const maxT = Math.max(...timestamps)
+      const maxT = timestamps.reduce((max: number, value: number) => Math.max(max, value), -Infinity)
       const windowMs = 5 * 60 * 1000
       for (const p of data) {
         if (p.created_at) {
@@ -325,7 +262,11 @@ export default async function Home() {
       practiceCode: p.practice_code,
       allocatedOn: allocatedOn[p.id] ?? null,
       status: leadStatus[p.id] ?? null,
-      assignedAwayTo: assignedAwayTo[p.id] ?? null,
+      assignedAwayTo: canAssign && p.assigned_away?.length
+        ? (() => {
+            const person = p.assigned_away.filter((a: any) => a.users).at(-1)?.users
+            return person ? { name: person.full_name, role: roleLabel(person.roles?.key) } : null
+          })() : null,
       source: allocatedCodeSet.has(p.practice_code) ? 'Allocated' : 'Uploaded',
       allocatedTo: allocatedCompanyByCode[p.practice_code] ?? null,
       name: p.name,
@@ -363,9 +304,9 @@ export default async function Home() {
         practices={practices}
         currentUser={currentUser}
         isSuperAdmin={isSuperAdmin}
-        companies={companies}
+        lazyOptions
         canAssign={canAssign}
-        myAgents={myAgents}
+
         myAssignedCodes={myAssignedCodes}
         newLeadCodes={Array.from(newLeadCodes)}
         workedLeadCodes={Array.from(workedLeadCodes)}
@@ -373,3 +314,6 @@ export default async function Home() {
     </AppShell>
   )
 }
+
+
+

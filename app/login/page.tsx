@@ -1,12 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { createSupabaseBrowser } from '../../lib/supabase-browser'
 import { checkAccountStatus } from '../auth-actions'
 
 export default function LoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -48,8 +46,9 @@ export default function LoginPage() {
     }
 
     setLoading(false)
-    router.push('/')
-    router.refresh()
+    // One navigation after the auth boundary, clearing any previous user's
+    // browser/router caches. push + refresh used to request the home page twice.
+    window.location.replace('/')
   }
 
   return (

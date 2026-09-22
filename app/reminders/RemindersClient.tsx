@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { getReminders, markReminderDone, type Reminder } from '../reminders-actions'
 
@@ -78,7 +79,7 @@ export default function RemindersClient({ initialData, initialMessage }: {
                   {r.practiceDeleted ? (
                     <span className="subtle" title="This lead was permanently deleted">{r.practiceName}</span>
                   ) : (
-                    <a href={`/practice/${r.practiceCode}`}>{r.practiceName}</a>
+                    <Link prefetch={false} href={`/practice/${r.practiceCode}`}>{r.practiceName}</Link>
                   )}
                 </td>
                 {showAgentCol && <td>{r.agentName ?? '—'}</td>}

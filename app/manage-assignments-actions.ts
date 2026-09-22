@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { roleLabel } from '../lib/roles'
 
 // ---------------------------------------------------------------------------
@@ -13,14 +13,10 @@ import { roleLabel } from '../lib/roles'
 // All scoped so a caller can only touch assignments they created.
 // ---------------------------------------------------------------------------
 
-async function whoAmI(supabase: any) {
-  const { data: { user } } = await supabase.auth.getUser()
+async function whoAmI() {
+  const { data: { user } } = await getCurrentUser()
   if (!user) return null
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   return me
     ? { id: (me as any).id, tenantId: (me as any).tenant_id, roleKey: (me as any).roles?.key ?? '' }
     : null
@@ -31,7 +27,7 @@ async function whoAmI(supabase: any) {
 // on the Manage Assignments page.
 export async function getMyIncomingCodes(): Promise<string[]> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return []
 
   // Find the company_admin user id(s) for my tenant.
@@ -64,7 +60,7 @@ export async function getMyAssignmentSummary(): Promise<{
   people?: { id: string; full_name: string; role: string; count: number }[]
 }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -99,7 +95,7 @@ export async function getAssignedLeads(agentId: string): Promise<{
   leads?: { practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string }[]
 }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -129,7 +125,7 @@ export async function getAssignedLeads(agentId: string): Promise<{
 // Remove one assignment (I made it) → the lead returns to the unassigned pool.
 export async function unassignLead(practiceCode: string, agentId: string): Promise<{ ok: boolean; message: string }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 

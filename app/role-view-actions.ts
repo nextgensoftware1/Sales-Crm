@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { roleLabel as canonicalRoleLabel } from '../lib/roles'
 
 // ---------------------------------------------------------------------------
@@ -10,11 +10,10 @@ import { roleLabel as canonicalRoleLabel } from '../lib/roles'
 
 type Lead = { practiceCode: string; name: string; state: string | null; specialty: string | null }
 
-async function requireSuperAdmin(supabase: any) {
-  const { data: { user } } = await supabase.auth.getUser()
+async function requireSuperAdmin() {
+  const { data: { user } } = await getCurrentUser()
   if (!user) return null
-  const { data: me } = await supabase
-    .from('users').select('id, roles(key)').eq('auth_id', user.id).single()
+  const { data: me } = await getCurrentProfile(user.id)
   return (me as any)?.roles?.key === 'super_admin' ? me : null
 }
 
@@ -23,7 +22,7 @@ export async function listUsersByRole(roleKey: string): Promise<
   { ok: boolean; message?: string; users?: { id: string; full_name: string; company: string }[] }
 > {
   const supabase = await createSupabaseServer()
-  if (!(await requireSuperAdmin(supabase))) return { ok: false, message: 'Super Admin only.' }
+  if (!(await requireSuperAdmin())) return { ok: false, message: 'Super Admin only.' }
 
   const { data: rows } = await supabase
     .from('users')
@@ -40,7 +39,7 @@ export async function getLeadsForUser(userId: string): Promise<
   { ok: boolean; message?: string; leads?: Lead[]; roleLabel?: string }
 > {
   const supabase = await createSupabaseServer()
-  if (!(await requireSuperAdmin(supabase))) return { ok: false, message: 'Super Admin only.' }
+  if (!(await requireSuperAdmin())) return { ok: false, message: 'Super Admin only.' }
 
   const { data: u } = await supabase
     .from('users')

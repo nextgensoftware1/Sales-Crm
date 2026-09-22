@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { listUsersByRole, getLeadsForUser } from '../../role-view-actions'
 
@@ -96,7 +97,7 @@ export default function RoleViewClient() {
                   <tbody>
                     {leads.map((l) => (
                       <tr key={l.practiceCode}>
-                        <td><a href={`/practice/${l.practiceCode}`}>{l.name}</a></td>
+                        <td><Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link></td>
                         <td>{l.state ?? '—'}</td>
                         <td>{l.specialty ?? '—'}</td>
                       </tr>

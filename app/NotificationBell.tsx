@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { getReminders, type Reminder } from './reminders-actions'
 
@@ -103,7 +104,7 @@ export default function NotificationBell({ initialReminders }: { initialReminder
               {preview.map((r) => {
                 const isOverdue = new Date(r.remindAt) < now
                 return (
-                  <a
+                  <Link prefetch={false} 
                     key={r.id}
                     href={r.practiceDeleted ? '#' : `/practice/${r.practiceCode}`}
                     className="topbar-bell-row"
@@ -118,14 +119,14 @@ export default function NotificationBell({ initialReminders }: { initialReminder
                         {fmtWhen(r.remindAt)}{r.agentName ? ` · ${r.agentName}` : ''}
                       </span>
                     </span>
-                  </a>
+                  </Link>
                 )
               })}
             </div>
           )}
-          <a href="/reminders" className="topbar-bell-viewall" onClick={() => setOpen(false)}>
+          <Link prefetch={false} href="/reminders" className="topbar-bell-viewall" onClick={() => setOpen(false)}>
             View all reminders →
-          </a>
+          </Link>
         </div>
       )}
     </div>

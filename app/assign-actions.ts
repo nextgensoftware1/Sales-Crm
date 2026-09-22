@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 // ---------------------------------------------------------------------------
 // assignLeadsToAgent(practiceCodes, agentUserId)
@@ -22,14 +22,10 @@ export async function assignLeadsToAgent(
 ): Promise<{ ok: boolean; message: string; assigned?: number }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key, level)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const myLevel = (me as any)?.roles?.level ?? 999

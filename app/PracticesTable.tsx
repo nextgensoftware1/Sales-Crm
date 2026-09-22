@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
@@ -34,6 +35,7 @@ type Practice = {
 type Company = { slug: string; name: string }
 
 type Props = {
+  lazyOptions?: boolean
   practices: Practice[]
   companies?: Company[]
   isSuperAdmin?: boolean
@@ -111,8 +113,33 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 }
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [] }: Props) {
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false }: Props) {
   const router = useRouter()
+  const [companies, setCompanies] = useState(initialCompanies)
+  const [myAgents, setMyAgents] = useState(initialAgents)
+  const [optionsLoaded, setOptionsLoaded] = useState(!lazyOptions)
+  const [optionsBusy, setOptionsBusy] = useState(false)
+  const [optionsError, setOptionsError] = useState('')
+  const optionsRequest = useRef(false)
+  const loadOptions = async () => {
+    if (optionsLoaded || optionsRequest.current || (!canAssign && !isSuperAdmin)) return
+    optionsRequest.current = true
+    setOptionsBusy(true)
+    setOptionsError('')
+    try {
+      const response = await fetch('/api/lead-options', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.message || 'Could not load options.')
+      setCompanies(data.companies)
+      setMyAgents(data.agents)
+      setOptionsLoaded(true)
+    } catch (error) {
+      setOptionsError(error instanceof Error ? error.message : 'Could not load options. Please retry.')
+    } finally {
+      optionsRequest.current = false
+      setOptionsBusy(false)
+    }
+  }
 
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
@@ -261,6 +288,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const toggleSelect = (code: string) => {
+    void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
       next.has(code) ? next.delete(code) : next.add(code)
@@ -271,6 +299,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // Select-all: reflects the currently FILTERED rows.
   const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.practiceCode))
   const toggleSelectAll = () => {
+    void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
       if (allSelected) {
@@ -284,6 +313,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
   // Select rows N..M (1-based, inclusive) of the currently filtered list.
   const applyRange = () => {
+    void loadOptions()
     const total = filtered.length
     let from = parseInt(rangeFrom, 10)
     let to = parseInt(rangeTo, 10)
@@ -355,12 +385,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Leads Distribution Console</h2>
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {/* <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
               <span key={t} style={pill(t === 'All Leads')}>{t}</span>
             ))}
             <SampleTag />
-          </div>
+          </div> */}
         </div>
         <div className="grid-zones" style={{ marginBottom: 14 }}>
           {ZONE_KEYS.map((z) => (
@@ -392,7 +422,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           </div>
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
-            <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>1 &nbsp;to&nbsp; 15</div>
+            <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>
+              {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + PAGE_SIZE, filtered.length)}`}
+            </div>
           </div>
         </div>
       </section>
@@ -481,8 +513,8 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       {isSuperAdmin && (
         <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.blue }}>
           <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
-          <select value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
-            <option value="">Choose company…</option>
+          <select aria-label="Company" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
+            <option value="">{optionsBusy ? 'Loading companies…' : 'Choose company…'}</option>
             {companies.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
           </select>
           <button onClick={handleAllocate} style={btnPrimary}>Allocate Selected</button>
@@ -519,16 +551,17 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <button onClick={applyRange} style={btnGhost}>Select range</button>
             <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
           </div>
-          <select value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
-            <option value="">Assign to…</option>
+          <select aria-label="Assign to team member" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
+            <option value="">{optionsBusy ? 'Loading team…' : 'Assign to…'}</option>
             {myAgents.map((a) => <option key={a.id} value={a.id}>{a.full_name} · {a.role}</option>)}
           </select>
           <button onClick={handleAssign} style={{ ...btnPrimary, background: C.green }}>Assign Selected</button>
-          {myAgents.length === 0 && <span style={{ fontSize: 13, color: C.faint }}>No direct reports to assign to.</span>}
+          {optionsLoaded && myAgents.length === 0 && <span style={{ fontSize: 13, color: C.faint }}>No direct reports to assign to.</span>}
           {assignMsg && <span style={{ fontSize: 13, color: C.dim }}>{assignMsg}</span>}
         </section>
       )}
 
+      {optionsError && <p role="alert">{optionsError} <button type="button" onClick={() => void loadOptions()} disabled={optionsBusy}>Retry</button></p>}
       {/* ---- Table ---- */}
       <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -575,7 +608,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                   {prioritySet.has(p.practiceCode) && (
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
-                  <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</a>
+                  <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
                   {p.assignedAwayTo && (
                     <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
@@ -726,10 +759,10 @@ function SampleTag({ note }: { note?: string }) {
 }
 
 // ---- shared styles ----
-const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 0, padding: 18 }
-const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
-const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
-const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
+const panel: React.CSSProperties = { background: C.panel, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: 18 }
+const input: React.CSSProperties = { background: C.panelAlt, color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
+const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', borderWidth: 0, borderStyle: 'none', borderColor: 'transparent', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
+const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
 const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.6, whiteSpace: 'nowrap' }
 const thLeft: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { padding: '16px', textAlign: 'center' }
@@ -738,7 +771,7 @@ const tdLeft: React.CSSProperties = { padding: '16px', textAlign: 'left' }
 function pill(active: boolean): React.CSSProperties {
   return {
     fontSize: 12, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', userSelect: 'none',
-    border: `1px solid ${active ? C.blue : C.line}`,
+    borderWidth: 1, borderStyle: 'solid', borderColor: active ? C.blue : C.line,
     background: active ? 'rgba(var(--accent-rgb),0.15)' : 'transparent',
     color: active ? C.text : C.dim,
   }

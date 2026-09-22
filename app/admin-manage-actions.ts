@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { createSupabaseAdmin } from '../lib/supabase-admin'
 import { roleLabel } from '../lib/roles'
 
@@ -9,14 +9,10 @@ import { roleLabel } from '../lib/roles'
 // create anyone.
 const MANAGER_ROLES = ['super_admin', 'company_admin', 'manager', 'team_lead']
 
-async function whoAmI(supabase: Awaited<ReturnType<typeof createSupabaseServer>>) {
-  const { data: { user } } = await supabase.auth.getUser()
+async function whoAmI() {
+  const { data: { user } } = await getCurrentUser()
   if (!user) return null
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key, level)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return null
   return {
     id: (me as any).id as string,
@@ -48,7 +44,7 @@ export async function createCompany(name: string): Promise<{ ok: boolean; messag
   if (!baseSlug) return { ok: false, message: 'Company name must include at least one letter or number.' }
 
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (me.roleKey !== 'super_admin') return { ok: false, message: 'Only Super Admin can add a company.' }
 
@@ -81,7 +77,7 @@ export type AssignableRole = { key: string; label: string }
 //   Agent/Closer  → nobody (not a manager role at all)
 export async function getAssignableRoles(): Promise<{ ok: boolean; roles?: AssignableRole[]; message?: string }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!MANAGER_ROLES.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -103,7 +99,7 @@ export type CompanyOption = { id: string; name: string }
 // picker is needed for them.
 export async function getCompaniesForUserCreation(): Promise<{ ok: boolean; companies?: CompanyOption[]; message?: string }> {
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (me.roleKey !== 'super_admin') return { ok: false, message: 'Not allowed.' }
 
@@ -131,7 +127,7 @@ export async function createUser(input: {
   }
 
   const supabase = await createSupabaseServer()
-  const me = await whoAmI(supabase)
+  const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!MANAGER_ROLES.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -189,8 +185,8 @@ export async function createUser(input: {
 
 // ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----
 
-async function requireSuperAdmin(supabase: Awaited<ReturnType<typeof createSupabaseServer>>) {
-  const me = await whoAmI(supabase)
+async function requireSuperAdmin() {
+  const me = await whoAmI()
   if (!me) return { ok: false as const, message: 'Not signed in.' }
   if (me.roleKey !== 'super_admin') return { ok: false as const, message: 'Only Super Admin can manage companies.' }
   return { ok: true as const, me }
@@ -202,7 +198,7 @@ async function requireSuperAdmin(supabase: Awaited<ReturnType<typeof createSupab
 // anyone who happened to already be inactive for an unrelated reason.
 export async function suspendCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
   const supabase = await createSupabaseServer()
-  const auth = await requireSuperAdmin(supabase)
+  const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
 
   const { data: tenant } = await supabase.from('tenants').select('is_platform').eq('id', tenantId).maybeSingle()
@@ -220,7 +216,7 @@ export async function suspendCompany(tenantId: string): Promise<{ ok: boolean; m
 
 export async function reactivateCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
   const supabase = await createSupabaseServer()
-  const auth = await requireSuperAdmin(supabase)
+  const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
 
   const { error: tenantErr } = await supabase.from('tenants').update({ status: 'active' }).eq('id', tenantId)
@@ -239,7 +235,7 @@ export async function reactivateCompany(tenantId: string): Promise<{ ok: boolean
 // in the UI, not as a hard block here.
 export async function deleteCompany(tenantId: string): Promise<{ ok: boolean; message?: string }> {
   const supabase = await createSupabaseServer()
-  const auth = await requireSuperAdmin(supabase)
+  const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
 
   const { data: tenant } = await supabase.from('tenants').select('is_platform, name').eq('id', tenantId).maybeSingle()
@@ -260,7 +256,7 @@ export type CompanyStatusInfo = { id: string; userCount: number }
 // Real counts to warn the caller with before they delete — not a guess.
 export async function getCompanyDeletionImpact(tenantId: string): Promise<{ ok: boolean; userCount?: number; message?: string }> {
   const supabase = await createSupabaseServer()
-  const auth = await requireSuperAdmin(supabase)
+  const auth = await requireSuperAdmin()
   if (!auth.ok) return auth
 
   const { count } = await supabase.from('users').select('id', { count: 'exact', head: true }).eq('tenant_id', tenantId)
