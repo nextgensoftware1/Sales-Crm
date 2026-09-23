@@ -235,9 +235,9 @@ function fmtDateTime(iso?: string | null): string {
 }
 
 // ---- shared styles ----
-const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 0, padding: 18 }
-const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
-const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
+const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 18 }
+const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: '8px 12px', fontSize: 13 }
+const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
 const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.6, whiteSpace: 'nowrap' }
 const thLeft: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { padding: '14px 16px', textAlign: 'center' }

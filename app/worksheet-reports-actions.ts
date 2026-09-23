@@ -26,7 +26,7 @@ export type WorksheetReportRow = {
 }
 
 export type WorksheetReportsResult =
-  | { ok: true; scope: 'all' | 'company'; companyName: string | null; rows: WorksheetReportRow[]; truncated: boolean }
+  | { ok: true; scope: 'all' | 'company' | 'personal'; companyName: string | null; rows: WorksheetReportRow[]; truncated: boolean }
   | { ok: false; message: string }
 
 // Cap the report at a fixed size rather than loading every worksheet ever
@@ -34,6 +34,34 @@ export type WorksheetReportsResult =
 // the leads table), and `truncated` tells the page whether there's more
 // than this beyond what's shown.
 const REPORT_LIMIT = 300
+
+type CompanyUserRow = { id: string }
+type AssignmentRow = { practice_id: string; assigned_to: string; current_status: string | null }
+type TransferRow = { practice_id: string; to_user_id: string | null; from_user_id: string | null; note: string | null }
+type ReportUserRow = {
+  id: string
+  full_name: string
+  tenant_id: string | null
+  tenants: { name: string } | null
+}
+type PracticeRow = {
+  id: string
+  practice_code: string
+  name: string
+  state: string | null
+  specialty: string | null
+  ws_call_details: string | null
+  ws_additional_phone: string | null
+  ws_email: string | null
+  ws_concerned_person: string | null
+  ws_direct_line: string | null
+  ws_callback_at: string | null
+  ws_timezone: string | null
+  ws_disposition: string | null
+  ws_updated_at: string | null
+  ws_updated_by: string | null
+  practice_providers: Array<{ providers: { org_name: string | null } | null }> | null
+}
 
 export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   const supabase = await createSupabaseServer()
@@ -44,17 +72,32 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found.' }
 
-  const roleKey = (me as any).roles?.key ?? ''
+  const roleKey = me.roles?.key ?? ''
 
-  // Enforced here, not just by the Admin page not rendering this tab for
-  // them — agents and closers must not be able to reach worksheet reports
-  // even by calling this action directly.
-  const allowed = ['super_admin', 'company_admin', 'manager', 'team_lead'].includes(roleKey)
+  // Managers see their company. Agents and closers see only worksheets they
+  // personally saved. This is enforced in the action as well as the page UI.
+  const allowed = ['super_admin', 'company_admin', 'manager', 'team_lead', 'agent', 'closer'].includes(roleKey)
   if (!allowed) return { ok: false, message: 'You do not have permission to view worksheet reports.' }
 
   const isSuperAdmin = roleKey === 'super_admin'
-  const myTenantId = (me as any).tenant_id as string | null
-  const myCompanyName = (me as any).tenants?.name ?? null
+  const isPersonal = roleKey === 'agent' || roleKey === 'closer'
+  const myTenantId = me.tenant_id
+  const myCompanyName = me.tenants?.name ?? null
+
+  // Company visibility follows the company of the person who saved the
+  // worksheet. This correctly includes leads allocated by Super Admin whose
+  // owner_tenant_id may still belong to the platform.
+  let companyUserIds: string[] = []
+  if (!isSuperAdmin && !isPersonal) {
+    if (!myTenantId) return { ok: false, message: 'Your account is not assigned to a company.' }
+    const { data: companyUsers, error: companyUsersError } = await supabase
+      .from('users').select('id').eq('tenant_id', myTenantId)
+    if (companyUsersError) return { ok: false, message: companyUsersError.message }
+    companyUserIds = ((companyUsers ?? []) as CompanyUserRow[]).map((row) => row.id).filter(Boolean)
+    if (companyUserIds.length === 0) {
+      return { ok: true, scope: 'company', companyName: myCompanyName, rows: [], truncated: false }
+    }
+  }
 
   // Only leads with an actual saved worksheet, excluding soft-deleted
   // leads (handles "deleted or missing practices safely" — a deleted
@@ -74,33 +117,31 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     .order('ws_updated_at', { ascending: false })
     .limit(REPORT_LIMIT + 1)
 
-  if (!isSuperAdmin) practicesQ = practicesQ.eq('owner_tenant_id', myTenantId)
+  if (isPersonal) practicesQ = practicesQ.eq('ws_updated_by', me.id)
+  else if (!isSuperAdmin) practicesQ = practicesQ.in('ws_updated_by', companyUserIds)
 
   const { data: practices, error: practicesErr } = await practicesQ
   if (practicesErr) return { ok: false, message: practicesErr.message }
   if (!practices || practices.length === 0) {
-    return { ok: true, scope: isSuperAdmin ? 'all' : 'company', companyName: isSuperAdmin ? null : myCompanyName, rows: [], truncated: false }
+    return { ok: true, scope: isSuperAdmin ? 'all' : isPersonal ? 'personal' : 'company', companyName: isSuperAdmin ? null : myCompanyName, rows: [], truncated: false }
   }
 
   const truncated = practices.length > REPORT_LIMIT
-  const page = truncated ? practices.slice(0, REPORT_LIMIT) : practices
-  const practiceIds = page.map((p: any) => p.id)
+  const page = (truncated ? practices.slice(0, REPORT_LIMIT) : practices) as unknown as PracticeRow[]
+  const practiceIds = page.map((p) => p.id)
 
   // These three are all independent of each other — only dependent on the
   // practice ids above — so they run together instead of one after another.
-  const [{ data: assignments }, { data: transfers }, tenantsRes] = await Promise.all([
+  const [{ data: assignments }, { data: transfers }] = await Promise.all([
     supabase.from('lead_assignments').select('practice_id, assigned_to, current_status').in('practice_id', practiceIds),
     supabase.from('lead_transfers').select('practice_id, to_user_id, from_user_id, note').in('practice_id', practiceIds),
-    isSuperAdmin
-      ? supabase.from('tenants').select('id, name')
-      : Promise.resolve({ data: [] as any[] }),
   ])
 
   const transferByPractice: Record<string, { toUserId: string | null; fromUserId: string | null; note: string | null }> = {}
-  for (const t of (transfers ?? []) as any[]) transferByPractice[t.practice_id] = { toUserId: t.to_user_id, fromUserId: t.from_user_id, note: t.note }
+  for (const t of (transfers ?? []) as TransferRow[]) transferByPractice[t.practice_id] = { toUserId: t.to_user_id, fromUserId: t.from_user_id, note: t.note }
 
   const agentAssignmentByPractice: Record<string, string> = {}
-  for (const a of (assignments ?? []) as any[]) {
+  for (const a of (assignments ?? []) as AssignmentRow[]) {
     // A transferred lead can have more than one lead_assignments row (the
     // original agent's, plus one for the closer). The one that isn't the
     // transfer's recipient is the original agent's.
@@ -108,21 +149,22 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     if (!t || a.assigned_to !== t.toUserId) agentAssignmentByPractice[a.practice_id] = a.assigned_to
   }
 
-  const tenantNameById: Record<string, string> = {}
-  for (const t of (tenantsRes.data ?? []) as any[]) tenantNameById[t.id] = t.name
-
   const userIds = new Set<string>()
-  for (const p of page as any[]) if (p.ws_updated_by) userIds.add(p.ws_updated_by)
+  for (const p of page) if (p.ws_updated_by) userIds.add(p.ws_updated_by)
   for (const id of Object.values(agentAssignmentByPractice)) userIds.add(id)
   for (const t of Object.values(transferByPractice)) { if (t.toUserId) userIds.add(t.toUserId) }
 
   const { data: userRows } = userIds.size
-    ? await supabase.from('users').select('id, full_name').in('id', Array.from(userIds))
-    : { data: [] as any[] }
+    ? await supabase.from('users').select('id, full_name, tenant_id, tenants(name)').in('id', Array.from(userIds))
+    : { data: [] as ReportUserRow[] }
   const nameById: Record<string, string> = {}
-  for (const u of (userRows ?? []) as any[]) nameById[u.id] = u.full_name
+  const companyByUserId: Record<string, string> = {}
+  for (const u of (userRows ?? []) as unknown as ReportUserRow[]) {
+    nameById[u.id] = u.full_name
+    companyByUserId[u.id] = u.tenants?.name ?? 'Unknown company'
+  }
 
-  const rows: WorksheetReportRow[] = page.map((p: any) => {
+  const rows: WorksheetReportRow[] = page.map((p) => {
     const transfer = transferByPractice[p.id]
     const orgName = p.practice_providers?.[0]?.providers?.org_name ?? null
     return {
@@ -132,7 +174,9 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       orgName,
       state: p.state,
       specialty: p.specialty,
-      companyName: isSuperAdmin ? (tenantNameById[p.owner_tenant_id] ?? null) : myCompanyName,
+      companyName: isSuperAdmin
+        ? (p.ws_updated_by ? companyByUserId[p.ws_updated_by] ?? 'Unknown company' : 'Unknown company')
+        : myCompanyName,
       assignedAgent: agentAssignmentByPractice[p.id] ? (nameById[agentAssignmentByPractice[p.id]] ?? null) : null,
       assignedCloser: transfer?.toUserId ? (nameById[transfer.toUserId] ?? null) : null,
       callDetails: p.ws_call_details,
@@ -149,5 +193,11 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     }
   })
 
-  return { ok: true, scope: isSuperAdmin ? 'all' : 'company', companyName: isSuperAdmin ? null : myCompanyName, rows, truncated }
+  return {
+    ok: true,
+    scope: isSuperAdmin ? 'all' : isPersonal ? 'personal' : 'company',
+    companyName: isSuperAdmin ? null : myCompanyName,
+    rows,
+    truncated,
+  }
 }

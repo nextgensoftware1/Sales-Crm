@@ -53,12 +53,14 @@ function ReportTable({
               const isOpen = expanded.has(r.practiceId)
               return (
                 <Fragment key={r.practiceId}>
-                  <tr onClick={() => onToggleRow(r.practiceId)} style={{ cursor: 'pointer' }}>
+                  <tr>
                     <td style={{ width: 20 }}>
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
-                        style={{ transition: 'transform .15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>
-                        <path d="m9 18 6-6-6-6" />
-                      </svg>
+                      <button type="button" className="report-row-toggle" aria-expanded={isOpen} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${r.practiceName}`} onClick={() => onToggleRow(r.practiceId)}>
+                        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+                          style={{ transition: 'transform .15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </button>
                     </td>
                     <td>
                       <strong>{r.practiceName}</strong>
@@ -146,7 +148,7 @@ function CompanySection({
         }}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
             style={{ transition: 'transform .15s ease', transform: open ? 'rotate(90deg)' : 'none' }}>
             <path d="m9 18 6-6-6-6" />
           </svg>
@@ -167,7 +169,7 @@ export default function WorksheetReportsClient({
   rows, scope, companyName, truncated,
 }: {
   rows: WorksheetReportRow[]
-  scope: 'all' | 'company'
+  scope: 'all' | 'company' | 'personal'
   companyName: string | null
   truncated: boolean
 }) {
@@ -212,10 +214,12 @@ export default function WorksheetReportsClient({
           </select>
         )}
         {scope === 'company' && <span className="subtle" style={{ fontSize: 12 }}>Scoped to {companyName ?? 'your company'}</span>}
+        {scope === 'personal' && <span className="subtle" style={{ fontSize: 12 }}>Your saved worksheets</span>}
       </div>
       <p className="subtle" style={{ marginTop: -2, marginBottom: 14 }}>
         The latest saved worksheet per lead — not a log of every edit. Click a row to see the full call details.
         {scope === 'all' && ' Grouped by company — click a company to expand or collapse it.'}
+        {scope === 'personal' && ' Only worksheets most recently saved by you are shown.'}
       </p>
 
       {truncated && (

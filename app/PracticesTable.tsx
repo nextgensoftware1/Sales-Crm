@@ -33,7 +33,7 @@ type Practice = {
   assignedAwayTo?: { name: string; role: string } | null
 }
 
-type Company = { slug: string; name: string }
+type Company = { id: string; slug: string; name: string }
 
 type Props = {
   lazyOptions?: boolean
@@ -89,17 +89,6 @@ const SIGNALS: { key: string; label: string; test: (p: Practice) => boolean }[] 
   { key: 'mips',   label: 'MIPS',    test: (p) => hasRealMips(p) },
 ]
 
-// The 7 boolean signal COLUMNS shown in the table (MIPS has its own column).
-const COLUMN_SIGNALS: { key: keyof Practice; label: string }[] = [
-  { key: 'ccm', label: 'CCM' },
-  { key: 'pcm', label: 'PCM' },
-  { key: 'awv', label: 'AWV' },
-  { key: 'tcm', label: 'TCM' },
-  { key: 'bhi', label: 'BHI' },
-  { key: 'rpm', label: 'RPM' },
-  { key: 'rcmFit', label: 'RCM Fit' },
-]
-
 // Deterministic state -> US timezone-zone mapping (same lookup used on the
 // single-practice page), so these counts reflect the real practices in view.
 const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
@@ -113,8 +102,9 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
   AK: 'Other', HI: 'Other',
 }
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
+type ZoneKey = typeof ZONE_KEYS[number]
 
-export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false }: Props) {
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false }: Props) {
   const router = useRouter()
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -141,21 +131,33 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       setOptionsBusy(false)
     }
   }
+  // Populate the company-wise filter in the background so its first opening
+  // already contains every registered company. The main lead request remains
+  // independent of this smaller options request.
+  useEffect(() => {
+    if (isSuperAdmin) void loadOptions()
+    // loadOptions deliberately runs once for the role present at mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperAdmin])
 
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
   const [specialtyFilter, setSpecialtyFilter] = useState('')
   const [dispositionFilter, setDispositionFilter] = useState('')
-  const [allocationFilter, setAllocationFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
-  const allocatedCompanies = useMemo(() => {
-    const companies = new Map<string, string>()
+  const [zoneFilter, setZoneFilter] = useState<ZoneKey | ''>('')
+  const companyFilterOptions = useMemo(() => {
+    const registered = new Map<string, string>()
+    for (const company of companies) registered.set(company.id, company.name)
+    // Keep allocated companies available while the lazy registered-company
+    // request is loading, and tolerate historical allocations whose company
+    // has since been deactivated or removed from the normal company list.
     for (const practice of practices) {
-      for (const company of practice.allocatedCompanies ?? []) companies.set(company.id, company.name)
+      for (const company of practice.allocatedCompanies ?? []) registered.set(company.id, company.name)
     }
-    return Array.from(companies, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
-  }, [practices])
+    return Array.from(registered, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [companies, practices])
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
@@ -216,10 +218,23 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     return counts
   }, [practices])
 
+  const summaryCounts = useMemo(() => ({
+    total: practices.length,
+    unassigned: practices.filter((p) => isSuperAdmin
+      ? (p.allocatedCompanies?.length ?? 0) === 0
+      : !p.assignedAwayTo).length,
+    assigned: practices.filter((p) => isSuperAdmin
+      ? (p.allocatedCompanies?.length ?? 0) > 0
+      : !!p.assignedAwayTo).length,
+    worked: practices.filter((p) => workedLeadSet.has(p.practiceCode)).length,
+    qualified: practices.filter((p) => (p.status ?? '').toLowerCase().includes('qualif')).length,
+  }), [practices, isSuperAdmin, workedLeadSet])
+
   const toggleSignal = (key: string) => {
     setActiveSignals((prev) => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -227,13 +242,16 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const filtered = useMemo(() => {
     const rows = practices.filter((p) => {
       if (isSuperAdmin) {
-        const allocated = p.source === 'Allocated'
-        if (allocationFilter === 'assigned' && !allocated) return false
-        if (allocationFilter === 'unassigned' && allocated) return false
-        if (companyFilter && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
+        if (companyFilter === '__unassigned__' && (p.allocatedCompanies?.length ?? 0) > 0) return false
+        if (companyFilter && companyFilter !== '__unassigned__'
+          && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
       }
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
+      if (zoneFilter) {
+        const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'
+        if (practiceZone !== zoneFilter) return false
+      }
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
 
       // Category tab filter (All / MIPS / RCM / CCM)
@@ -276,7 +294,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, allocationFilter, companyFilter])
+  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter])
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -289,7 +307,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const pageRows = filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, allocationFilter, companyFilter])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -307,7 +325,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
-      next.has(code) ? next.delete(code) : next.add(code)
+      if (next.has(code)) next.delete(code)
+      else next.add(code)
       return next
     })
   }
@@ -389,17 +408,41 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   }
 
   const resetFilters = () => {
-    setAllocationFilter(''); setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
+    setCompanyFilter('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all')
   }
 
+  const activeFilterCount = [
+    search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, companyFilter,
+    catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
+    poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
+  ].filter(Boolean).length + activeSignals.size
+
   return (
-    <div style={{ color: C.text, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
-      {/* ---- Distribution Console (placeholder) ---- */}
+    <div className="leads-engine" style={{ color: C.text, fontFamily: 'var(--font-sans), ui-sans-serif, system-ui, sans-serif' }}>
+      <section className="lead-summary-grid" aria-label="Lead pool summary">
+        {[
+          { label: 'Total Leads', value: summaryCounts.total, tone: 'blue' },
+          { label: 'Unassigned', value: summaryCounts.unassigned, tone: 'amber' },
+          { label: 'Assigned', value: summaryCounts.assigned, tone: 'purple' },
+          { label: 'Worked', value: summaryCounts.worked, tone: 'cyan' },
+          { label: 'Qualified', value: summaryCounts.qualified, tone: 'green' },
+        ].map((item) => (
+          <div className={`lead-summary-card tone-${item.tone}`} key={item.label}>
+            <span className="lead-summary-icon" aria-hidden="true" />
+            <span>
+              <strong>{item.value}</strong>
+              <small>{item.label}</small>
+            </span>
+          </div>
+        ))}
+      </section>
+
+      {/* ---- Distribution Console ---- */}
       <section style={{ ...panel, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
           <div style={{ minWidth: 0 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Leads Distribution Console</h2>
+            <h2 className="leads-section-title">Leads Distribution Console</h2>
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
           {/* <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -410,22 +453,33 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           </div> */}
         </div>
         <div className="grid-zones" style={{ marginBottom: 14 }}>
-          {ZONE_KEYS.map((z) => (
-            <div key={z} style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: 12, background: C.panelAlt, minWidth: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.dim }}>
-                <span style={{ letterSpacing: 0.5 }}>{z} ZONE</span>
-                <span style={{ color: C.amber }}>{zoneCounts[z]}</span>
-              </div>
-              <input disabled value={zoneCounts[z]} style={{ ...input, width: '100%', minWidth: 0, boxSizing: 'border-box', marginTop: 8, textAlign: 'center' }} />
-            </div>
-          ))}
+          {ZONE_KEYS.map((z) => {
+            const active = zoneFilter === z
+            const empty = zoneCounts[z] === 0
+            return (
+            <button
+              key={z}
+              type="button"
+              className={`zone-filter-card${active ? ' active' : ''}`}
+              aria-pressed={active}
+              aria-label={`${active ? 'Clear' : 'Filter by'} ${z} zone, ${zoneCounts[z]} lead${zoneCounts[z] === 1 ? '' : 's'}`}
+              disabled={empty && !active}
+              onClick={() => setZoneFilter(active ? '' : z)}
+            >
+              <span className="zone-filter-head">
+                <span style={{ letterSpacing: 0.5, fontWeight: 700 }}>{z} ZONE</span>
+                <span className="zone-filter-count">{zoneCounts[z]}</span>
+              </span>
+              <span className="zone-filter-value">{zoneCounts[z]}</span>
+            </button>
+          )})}
         </div>
         <div className="grid-console">
           {!isSuperAdmin && (
             <LabeledSelect label="TARGET AGENT" options={['— Select Agent / Closer —']} />
           )}
-          <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '6px 12px', background: C.panelAlt }}>
-            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>SPECIALTY</div>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 12px', background: C.panelAlt }}>
+            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5, fontWeight: 700 }}>SPECIALTY</div>
             <select
               value={specialtyFilter}
               onChange={(e) => setSpecialtyFilter(e.target.value)}
@@ -437,9 +491,9 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               ))}
             </select>
           </div>
-          <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
-            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
-            <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '8px 12px', background: C.panelAlt }}>
+            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5, fontWeight: 700 }}>PRACTICE SIZE</div>
+            <div style={{ fontSize: 13, marginTop: 4, color: C.text, fontWeight: 700 }}>
               {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + pageSize, filtered.length)}`}
             </div>
           </div>
@@ -449,7 +503,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       {/* ---- Lead Pool bar ---- */}
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Lead Pool <span style={{ color: C.dim, fontWeight: 400 }}>({filtered.length} leads)</span></h2>
+          <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filtered.length} leads)</span></h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -458,99 +512,138 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             if (t === 'New Leads')    count = newLeadSet.size
             if (t === 'Worked Leads') count = workedLeadSet.size
             return (
-              <span key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>
+              <button type="button" aria-pressed={poolTab === t} key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>
                 {t}{count !== null ? ` (${count})` : ''}
-              </span>
+              </button>
             )
           })}
         </div>
         {hasPriority && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span
+            <button type="button"
+              aria-pressed={assignedView === 'mine'}
               onClick={() => setAssignedView('mine')}
               style={{ ...pill(assignedView === 'mine'), cursor: 'pointer', borderColor: C.amber, color: assignedView === 'mine' ? C.text : C.amber }}
             >
               ★ My assigned ({prioritySet.size})
-            </span>
-            <span
+            </button>
+            <button type="button"
+              aria-pressed={assignedView === 'all'}
               onClick={() => setAssignedView('all')}
               style={{ ...pill(assignedView === 'all'), cursor: 'pointer' }}
             >
               All company
-            </span>
+            </button>
           </div>
         )}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {(['All', 'Allocated', 'Uploaded'] as const).map((t) => (
-            <span key={t} onClick={() => setSourceTab(t)}
+            <button type="button" aria-pressed={sourceTab === t} key={t} onClick={() => setSourceTab(t)}
               style={{
                 ...pill(sourceTab === t), cursor: 'pointer',
                 borderColor: sourceTab === t ? (t === 'Allocated' ? 'var(--purple)' : t === 'Uploaded' ? 'var(--c-transfers)' : C.blue) : C.line,
               }}>
               {t === 'All' ? 'All Sources' : t}
-            </span>
+            </button>
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
-            <span key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</span>
+            <button type="button" aria-pressed={catTab === t} key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</button>
           ))}
         </div>
       </section>
 
-      {/* ---- Filter bar (real: search, state, signals) ---- */}
+      {/* ---- Quick and advanced filters ---- */}
       <section style={{ ...panel, marginBottom: 14 }}>
+        <div className="filter-section-head">
+          <div>
+            <h2 className="leads-section-title">Find Leads</h2>
+            <p>Search the pool and narrow results with the most-used filters.</p>
+          </div>
+          <span className="filter-result-count">{filtered.length} result{filtered.length === 1 ? '' : 's'}</span>
+        </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, minWidth: 220 }} />
-          {isSuperAdmin && <>
-            <label style={{ fontSize: 12, color: C.dim }}>Company assignment{' '}
-              <select aria-label="Company assignment status" value={allocationFilter} style={input} onChange={e => {
-                setAllocationFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
-                if (e.target.value === 'unassigned') setCompanyFilter('')
-              }}>
-                <option value="">All leads</option>
-                <option value="assigned">Assigned to a company</option>
-                <option value="unassigned">Not assigned to a company</option>
-              </select>
-            </label>
-            <label style={{ fontSize: 12, color: C.dim }}>Assigned company{' '}
-              <select aria-label="Filter by assigned company" value={companyFilter} style={input} onChange={e => {
-                setCompanyFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
-                if (e.target.value) setAllocationFilter('assigned')
-              }}>
-                <option value="">All companies</option>
-                {allocatedCompanies.map(company => <option key={company.id} value={company.id}>{company.name}</option>)}
-              </select>
-            </label>
-          </>}
-          <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
+          <label className="filter-control filter-search"><span>Search</span><input aria-label="Search practices" placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={input} /></label>
+          <label className="filter-control"><span>State</span><select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select disabled style={{ ...input, opacity: 0.6 }}><option>MIPS Year 2026</option></select>
-          <select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
+          </select></label>
+          <label className="filter-control"><span>Specialty</span><select value={specialtyFilter} onChange={(e) => setSpecialtyFilter(e.target.value)} style={input}>
+            <option value="">All Specialties</option>
+            {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select></label>
+          <label className="filter-control"><span>Disposition</span><select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
             <option value="">All Dispositions</option>
             {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-          <select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select>
-          <button onClick={resetFilters} style={btnGhost}>Reset</button>
-          <SampleTag note="MIPS year / enrichment filters not wired" />
+          </select></label>
         </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: C.dim }}>Filter by signal:</span>
-          {SIGNALS.map((s) => (
-            <span key={s.key as string} onClick={() => toggleSignal(s.key)}
-              style={pill(activeSignals.has(s.key))}>
-              {s.label}
-            </span>
-          ))}
-        </div>
+
+        <details className="advanced-lead-tools">
+          <summary>Advanced filters <span>{activeFilterCount > 0 ? `${activeFilterCount} active` : 'Optional'}</span></summary>
+          <div className="advanced-filter-grid">
+            {isSuperAdmin && <label className="filter-control"><span>Assigned company</span>
+              <select aria-label="Filter by assigned company" value={companyFilter} style={input}
+                onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()}
+                onChange={e => { setCompanyFilter(e.target.value); setSourceTab('All'); setSelected(new Set()) }}>
+                <option value="">{optionsBusy ? 'Loading companies…' : 'All registered companies'}</option>
+                <option value="__unassigned__">Not assigned</option>
+                {companyFilterOptions.map(company => <option key={company.id} value={company.id}>{company.name}</option>)}
+              </select>
+            </label>}
+            <label className="filter-control"><span>MIPS year</span><select disabled style={{ ...input, opacity: 0.6 }}><option>MIPS Year 2026</option></select></label>
+            <label className="filter-control"><span>Enrichment</span><select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select></label>
+          </div>
+          <div className="signal-filter-row">
+            <strong>Signals</strong>
+            {SIGNALS.map((s) => (
+              <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+            ))}
+            <SampleTag note="MIPS year / enrichment filters are display-only" />
+          </div>
+        </details>
+
+        {activeFilterCount > 0 && (
+          <div className="active-filter-row">
+            <strong>Active filters</strong>
+            {search && <button onClick={() => setSearch('')}>Search: {search} ×</button>}
+            {zoneFilter && <button onClick={() => setZoneFilter('')}>{zoneFilter} Zone ×</button>}
+            {stateFilter && <button onClick={() => setStateFilter('')}>{stateFilter} ×</button>}
+            {specialtyFilter && <button onClick={() => setSpecialtyFilter('')}>{specialtyFilter} ×</button>}
+            {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
+            {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
+            {poolTab !== 'All Leads' && <button onClick={() => setPoolTab('All Leads')}>{poolTab} ×</button>}
+            {sourceTab !== 'All' && <button onClick={() => setSourceTab('All')}>{sourceTab} source ×</button>}
+            {catTab !== 'All Categories' && <button onClick={() => setCatTab('All Categories')}>{catTab} ×</button>}
+            {assignedView === 'mine' && <button onClick={() => setAssignedView('all')}>My assigned ×</button>}
+            {Array.from(activeSignals).map((key) => <button key={key} onClick={() => toggleSignal(key)}>{SIGNALS.find((s) => s.key === key)?.label ?? key} ×</button>)}
+            <button className="clear-all-filters" onClick={resetFilters}>Clear all</button>
+          </div>
+        )}
       </section>
 
       {/* ---- Allocation bar (real, Super Admin) ---- */}
       {isSuperAdmin && (
-        <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.blue }}>
-          <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
+        <section className="bulk-action-bar" style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.blue }}>
+          <strong className="leads-selected-count">{selected.size} selected</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.dim }}>
+            <strong style={{ color: C.text }}>Range</strong>
+            <input
+              aria-label="Select range from"
+              type="number" min={1} placeholder="from"
+              value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)}
+              style={{ ...input, width: 74, padding: '6px 8px' }}
+            />
+            <span>to</span>
+            <input
+              aria-label="Select range to"
+              type="number" min={1} placeholder="to"
+              value={rangeTo} onChange={(e) => setRangeTo(e.target.value)}
+              style={{ ...input, width: 74, padding: '6px 8px' }}
+            />
+            <button onClick={applyRange} style={btnGhost}>Select range</button>
+            <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
+          </div>
           <select aria-label="Company" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
             <option value="">{optionsBusy ? 'Loading companies…' : 'Choose company…'}</option>
             {companies.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
@@ -571,10 +664,10 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
       {/* ---- Assign bar (Company Admin / Manager / Team Lead) ---- */}
       {canAssign && (
-        <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.green }}>
-          <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
+        <section className="bulk-action-bar" style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.green }}>
+          <strong className="leads-selected-count">{selected.size} selected</strong>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.dim }}>
-            <span>Range</span>
+            <strong style={{ color: C.text }}>Range</strong>
             <input
               type="number" min={1} placeholder="from"
               value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)}
@@ -623,6 +716,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               <th style={th}>Risk</th>
               <th style={th}>Payment Adj %</th>
               <th style={thLeft}>Source</th>
+              {isSuperAdmin && <th style={thLeft}>Assigned Company</th>}
               <th style={thLeft}>Last Dialed</th>
               <th style={thLeft}>Assigned On</th>
               <th style={thLeft}>Status</th>
@@ -660,7 +754,14 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
                 <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
                 <td style={{ ...td, color: p.paymentAdj ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.paymentAdj ?? '—'}</td>
-                <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source, p.allocatedTo)}</td>
+                <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source)}</td>
+                {isSuperAdmin && (
+                  <td style={{ ...tdLeft, fontSize: 12, minWidth: 170 }}>
+                    {p.allocatedTo
+                      ? <span className="leads-company-name">{p.allocatedTo}</span>
+                      : <span className="leads-unassigned">Unassigned</span>}
+                  </td>
+                )}
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.lastDialed)}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.allocatedOn)}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
@@ -679,7 +780,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, filtered.length)} of ${filtered.length} leads`}
           </span>
           {isSuperAdmin && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.dim }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.text, fontWeight: 700 }}>
               Rows per page
               <select
                 aria-label="Rows per page"
@@ -738,7 +839,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   // ---- small components ----
   function LabeledSelect({ label, options }: { label: string; options: string[] }) {
     return (
-      <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '6px 12px', background: C.panelAlt }}>
+      <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 12px', background: C.panelAlt }}>
         <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>{label}</div>
         <select disabled style={{ ...input, border: 'none', background: 'transparent', padding: '4px 0', width: '100%' }}>
           {options.map((o) => <option key={o}>{o}</option>)}
@@ -760,7 +861,7 @@ function fmtDateTime(iso?: string | null): string {
 }
 
 // Source badge: where the lead came from — Allocated (Super Admin) or Uploaded (company).
-function sourceBadge(source?: string | null, allocatedTo?: string | null) {
+function sourceBadge(source?: string | null) {
   const s = (source ?? '').trim()
   if (!s) return <span style={{ color: 'var(--muted-2)' }}>—</span>
   const isAllocated = s.toLowerCase().includes('alloc')
@@ -776,9 +877,6 @@ function sourceBadge(source?: string | null, allocatedTo?: string | null) {
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
         {label}
       </span>
-      {isAllocated && allocatedTo && (
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>→ {allocatedTo}</span>
-      )}
     </span>
   )
 }
@@ -808,18 +906,18 @@ function statusBadge(status?: string | null) {
 
 function SampleTag({ note }: { note?: string }) {
   return (
-    <span title={note} style={{ fontSize: 9, color: 'var(--muted-2)', border: '1px solid var(--border-dim)', borderRadius: 0, padding: '2px 6px', alignSelf: 'center' }}>
+    <span title={note} style={{ fontSize: 9, color: 'var(--muted-2)', border: '1px solid var(--border-dim)', borderRadius: 4, padding: '2px 6px', alignSelf: 'center' }}>
       sample
     </span>
   )
 }
 
 // ---- shared styles ----
-const panel: React.CSSProperties = { background: C.panel, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: 18 }
-const input: React.CSSProperties = { background: C.panelAlt, color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
-const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', borderWidth: 0, borderStyle: 'none', borderColor: 'transparent', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
-const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
-const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.6, whiteSpace: 'nowrap' }
+const panel: React.CSSProperties = { background: C.panel, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 8, padding: 18 }
+const input: React.CSSProperties = { background: C.panelAlt, color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 6, padding: '8px 12px', fontSize: 13, fontWeight: 500 }
+const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', borderWidth: 0, borderStyle: 'none', borderColor: 'transparent', borderRadius: 6, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }
+const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 6, padding: '8px 14px', fontSize: 13, fontWeight: 650, cursor: 'pointer' }
+const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.7, whiteSpace: 'nowrap' }
 const thLeft: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { padding: '16px', textAlign: 'center' }
 const tdLeft: React.CSSProperties = { padding: '16px', textAlign: 'left' }
@@ -830,5 +928,6 @@ function pill(active: boolean): React.CSSProperties {
     borderWidth: 1, borderStyle: 'solid', borderColor: active ? C.blue : C.line,
     background: active ? 'rgba(var(--accent-rgb),0.15)' : 'transparent',
     color: active ? C.text : C.dim,
+    fontWeight: active ? 700 : 500,
   }
 }

@@ -14,7 +14,7 @@ export async function GET() {
   }
   const db = await createSupabaseServer()
   if (role === 'super_admin') {
-    const { data, error } = await db.from('tenants').select('slug, name').eq('is_platform', false).order('name')
+    const { data, error } = await db.from('tenants').select('id, slug, name').eq('is_platform', false).order('name')
     return error ? respond({ message: 'Could not load companies. Please retry.' }, 503)
       : respond({ companies: data ?? [], agents: [] })
   }

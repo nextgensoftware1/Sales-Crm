@@ -14,25 +14,24 @@ export default async function WorksheetReportsPage() {
 
   const currentUser = me
     ? {
-        full_name: (me as any).full_name,
-        role: roleLabel((me as any).roles?.key),
-        company: (me as any).tenants?.name ?? '',
+        full_name: me.full_name,
+        role: roleLabel(me.roles?.key),
+        company: me.tenants?.name ?? '',
       }
     : null
 
-  const roleKey = (me as any)?.roles?.key ?? ''
+  const roleKey = me?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
   const canManageUsers = ['super_admin', 'company_admin', 'manager', 'team_lead'].includes(roleKey)
+  const canViewWorksheetReports = ['super_admin', 'company_admin', 'manager', 'team_lead', 'agent', 'closer'].includes(roleKey)
+  const personalScope = roleKey === 'agent' || roleKey === 'closer'
 
-  // Same permission gate as the Admin page — Agents and Closers can't reach
-  // this even by URL. Enforced again inside getWorksheetReports() itself,
-  // independent of this page.
-  if (!canManageUsers) {
+  if (!canViewWorksheetReports) {
     return (
       <AppShell title="Worksheet Reports" currentUser={currentUser} active="/worksheet-reports" showAdmin={isSuperAdmin} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 480 }}>
           <h1 style={{ color: 'var(--danger)', fontSize: 20, margin: '0 0 8px' }}>Access denied</h1>
-          <p className="subtle">Only Team Lead, Manager, Company Admin, and Super Admin can view worksheet reports.</p>
+          <p className="subtle">You do not have permission to view worksheet reports.</p>
         </div>
       </AppShell>
     )
@@ -43,7 +42,11 @@ export default async function WorksheetReportsPage() {
   return (
     <AppShell
       title="Worksheet Reports"
-      subtitle={isSuperAdmin ? 'Platform-wide — every company' : `Scoped to ${(me as any)?.tenants?.name ?? 'your company'}`}
+      subtitle={isSuperAdmin
+        ? 'Platform-wide — every company'
+        : personalScope
+          ? 'Your personally saved worksheets'
+          : `Scoped to ${me?.tenants?.name ?? 'your company'}`}
       currentUser={currentUser}
       active="/worksheet-reports"
       showAdmin={isSuperAdmin}

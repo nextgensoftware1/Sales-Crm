@@ -447,6 +447,7 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { authorizePractice } from '../lib/lead-access'
 import { revalidatePath } from 'next/cache'
 
 export async function allocatePractices(practiceCodes: string[], tenantSlug: string) {
@@ -505,12 +506,8 @@ export async function logActivity(
   const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
-  const { data: practice } = await supabase
-    .from('master_practices')
-    .select('id')
-    .eq('practice_code', practiceCode)
-    .maybeSingle()
-  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
+  const practice = await authorizePractice(supabase, me, practiceCode)
+  if (!practice) return { ok: false, message: 'This lead is unavailable or you do not have permission to update it.' }
 
   const { error } = await supabase.from('lead_activity').insert({
     practice_id: practice.id,
@@ -546,12 +543,8 @@ export async function setReminder(
   const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
-  const { data: practice } = await supabase
-    .from('master_practices')
-    .select('id')
-    .eq('practice_code', practiceCode)
-    .maybeSingle()
-  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
+  const practice = await authorizePractice(supabase, me, practiceCode)
+  if (!practice) return { ok: false, message: 'This lead is unavailable or you do not have permission to update it.' }
 
   const { error } = await supabase.from('lead_reminders').insert({
     practice_id: practice.id,
@@ -611,24 +604,35 @@ export async function transferToCloser(
   const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found' }
 
-  const { data: practice } = await supabase
-    .from('master_practices')
-    .select('id')
-    .eq('practice_code', practiceCode)
+  const practice = await authorizePractice(supabase, me, practiceCode)
+  if (!practice) return { ok: false, message: 'This lead is unavailable or you do not have permission to transfer it.' }
+
+  const { data: recipient } = await supabase.from('users')
+    .select('id, tenant_id, status, roles(key)')
+    .eq('id', closerId)
     .maybeSingle()
-  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
+  const target = recipient as unknown as { id: string; tenant_id: string | null; status: string; roles: { key: string } | null } | null
+  const transferringToSelf = closerId === me.id
+  if (!target || target.tenant_id !== me.tenant_id || target.status !== 'active'
+      || (!transferringToSelf && target.roles?.key !== 'closer')) {
+    return { ok: false, message: 'Choose an active closer from your company.' }
+  }
 
-  // Keep only ONE transfer row per practice — remove any prior transfers for
-  // this practice, then insert the current one. Prevents duplicate rows.
-  await supabase.from('lead_transfers').delete().eq('practice_id', practice.id)
-
-  const { error: tErr } = await supabase.from('lead_transfers').insert({
-    practice_id: practice.id,
-    tenant_id: (me as any).tenant_id,
-    from_user_id: (me as any).id,
+  // Update the existing handoff in place so a failed replacement never
+  // destroys the previous transfer record.
+  const { data: previousTransfer } = await supabase.from('lead_transfers')
+    .select('id, tenant_id, from_user_id, to_user_id, note')
+    .eq('practice_id', practice.id).limit(1).maybeSingle()
+  const transferValues = {
+    tenant_id: me.tenant_id,
+    from_user_id: me.id,
     to_user_id: closerId,
-    note: note || null,
-  })
+    note: note.trim() || null,
+  }
+  const transferWrite = previousTransfer
+    ? await supabase.from('lead_transfers').update(transferValues).eq('id', previousTransfer.id)
+    : await supabase.from('lead_transfers').insert({ practice_id: practice.id, ...transferValues })
+  const tErr = transferWrite.error
   if (tErr) return { ok: false, message: tErr.message }
 
   const { error: aErr } = await supabase
@@ -643,7 +647,20 @@ export async function transferToCloser(
       },
       { onConflict: 'practice_id,assigned_to' }
     )
-  if (aErr) return { ok: false, message: aErr.message }
+  if (aErr) {
+    if (previousTransfer) {
+      await supabase.from('lead_transfers').update({
+        tenant_id: previousTransfer.tenant_id,
+        from_user_id: previousTransfer.from_user_id,
+        to_user_id: previousTransfer.to_user_id,
+        note: previousTransfer.note,
+      }).eq('id', previousTransfer.id)
+    } else {
+      await supabase.from('lead_transfers').delete()
+        .eq('practice_id', practice.id).eq('from_user_id', me.id).eq('to_user_id', closerId)
+    }
+    return { ok: false, message: aErr.message }
+  }
 
   await supabase.from('lead_activity').insert({
     practice_id: practice.id,
@@ -677,12 +694,21 @@ export async function markAsSold(
     return { ok: false, message: 'Only a Closer or Company Admin can mark a sale' }
   }
 
-  const { data: practice } = await supabase
-    .from('master_practices')
-    .select('id')
-    .eq('practice_code', practiceCode)
-    .maybeSingle()
-  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
+  const practice = await authorizePractice(supabase, me, practiceCode)
+  if (!practice) return { ok: false, message: 'This lead is unavailable or you do not have permission to sell it.' }
+
+  const service = serviceSold.trim()
+  const contractAmount = contractValue.trim() ? Number(contractValue) : null
+  const monthlyAmount = mrr.trim() ? Number(mrr) : null
+  if (!service) return { ok: false, message: 'Service sold is required.' }
+  if ((contractAmount != null && (!Number.isFinite(contractAmount) || contractAmount < 0))
+      || (monthlyAmount != null && (!Number.isFinite(monthlyAmount) || monthlyAmount < 0))) {
+    return { ok: false, message: 'Contract value and MRR must be valid positive amounts.' }
+  }
+
+  const { data: existingOwnership } = await supabase.from('client_ownership')
+    .select('id').eq('practice_id', practice.id).eq('active', true).limit(1).maybeSingle()
+  if (existingOwnership) return { ok: false, message: 'This practice is already an active client.' }
 
   const { data: sale, error: sErr } = await supabase
     .from('sales')
@@ -690,9 +716,9 @@ export async function markAsSold(
       practice_id: practice.id,
       tenant_id: (me as any).tenant_id,
       sold_by: (me as any).id,
-      service_sold: serviceSold || null,
-      contract_value: contractValue ? Number(contractValue) : null,
-      mrr: mrr ? Number(mrr) : null,
+      service_sold: service,
+      contract_value: contractAmount,
+      mrr: monthlyAmount,
       note: note || null,
     })
     .select('id')
@@ -707,7 +733,10 @@ export async function markAsSold(
       sale_id: (sale as any).id,
       active: true,
     })
-  if (oErr) return { ok: false, message: 'This practice is already a client (locked): ' + oErr.message }
+  if (oErr) {
+    await supabase.from('sales').delete().eq('id', (sale as { id: string }).id)
+    return { ok: false, message: 'This practice could not be converted to a client: ' + oErr.message }
+  }
 
   await supabase
     .from('lead_assignments')

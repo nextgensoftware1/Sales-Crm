@@ -174,7 +174,8 @@ for (const [role, codes] of Object.entries(expected)) {
 const worksheet = { callDetails: 'Called the practice', additionalPhone: '', email: '', concernedPerson: '', directLine: '', callbackAt: '', timezone: 'Eastern', disposition: 'Interested' }
 function loadWorksheet({ recipient = null, signedIn = true, failures = {} } = {}) {
   const calls = []
-  const db = database({ master_practices: [{ id: 'p1', practice_code: 'PR-p1' }],
+  const db = database({ master_practices: [{ id: 'p1', practice_code: 'PR-p1', deleted_at: null, practice_providers: [] }],
+    lead_assignments: [{ practice_id: 'p1', assigned_to: 'me', status: 'active' }],
     lead_transfers: recipient ? [{ practice_id: 'p1', to_user_id: recipient }] : [] }, calls, failures)
   let authCalls = 0
   const actions = loadTs('app/worksheet-actions.ts', { '../lib/supabase-server': {
@@ -209,7 +210,7 @@ test('activity failure is reported and does not write a misleading assignment st
   const run = loadWorksheet({ failures: { 'lead_activity:insert': { message: 'unavailable' } } })
   const result = await run.save('PR-p1', worksheet)
   assert.match(result.message, /activity log could not be saved/)
-  assert.equal(run.calls.filter((c) => c.table === 'lead_assignments').length, 0)
+  assert.equal(run.calls.filter((c) => c.table === 'lead_assignments' && c.operation === 'update').length, 0)
 })
 
 for (const [role, assigned, transferred, allowed] of [

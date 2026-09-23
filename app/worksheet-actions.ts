@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { authorizePractice } from '../lib/lead-access'
 
 export type WorksheetData = {
   callDetails: string
@@ -30,12 +31,8 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
   const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found.' }
 
-  const { data: practice } = await supabase
-    .from('master_practices')
-    .select('id')
-    .eq('practice_code', practiceCode)
-    .maybeSingle()
-  if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
+  const practice = await authorizePractice(supabase, me, practiceCode)
+  if (!practice) return { ok: false, message: 'This lead is unavailable or you do not have permission to edit it.' }
 
   // Once transferred, only the receiving closer — or Super Admin — may keep
   // editing the worksheet; the original transferring agent is locked out.

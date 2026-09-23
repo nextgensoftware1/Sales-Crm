@@ -82,7 +82,7 @@ export default function WorksheetReportsClient({
                     <Fragment key={r.practiceId}>
                       <tr onClick={() => toggle(r.practiceId)} style={{ cursor: 'pointer' }}>
                         <td style={{ width: 20 }}>
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+                          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
                             style={{ transition: 'transform .15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>
                             <path d="m9 18 6-6-6-6" />
                           </svg>

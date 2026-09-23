@@ -100,14 +100,14 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   return (
     <div className="lead-card">
       <h4>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
         </svg>
         Worksheet
       </h4>
 
       {locked && (
-        <p style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 0, padding: '10px 12px', marginBottom: 16 }}>
+        <p style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', marginBottom: 16 }}>
           This lead has already been transferred to {existingTransfer!.closerName} — the worksheet is locked and can no longer be edited from here.
         </p>
       )}
@@ -196,7 +196,7 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
               </select>
             </div>
             <button onClick={doTransfer} className="lead-transfer-btn" style={{ marginTop: 10 }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
               Transfer
             </button>
             {transferMsg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{transferMsg}</p>}

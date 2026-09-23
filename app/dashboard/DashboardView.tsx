@@ -189,7 +189,11 @@ function Kpi({ label, value, sub, color, icon, sample }: {
 }
 
 // ---- Small hand-authored icon set (stroke-based, matches lucide's visual style) ----
-const iconProps = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+const iconProps = {
+  viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2,
+  strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const,
+  'aria-hidden': true, focusable: false,
+}
 function IconTransfer() {
   return <svg {...iconProps}><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></svg>
 }
@@ -227,7 +231,7 @@ function Panel({ title, subtitle, sample, children }: { title: string; subtitle?
 function Donut() {
   // static placeholder ring
   return (
-    <svg width="120" height="120" viewBox="0 0 120 120">
+    <svg aria-hidden="true" focusable="false" width="120" height="120" viewBox="0 0 120 120">
       <circle cx="60" cy="60" r="44" fill="none" stroke="var(--surface-2)" strokeWidth="16" />
       <circle cx="60" cy="60" r="44" fill="none" stroke="var(--accent)" strokeWidth="16"
         strokeDasharray="276" strokeDashoffset="90" transform="rotate(-90 60 60)" strokeLinecap="round" />
