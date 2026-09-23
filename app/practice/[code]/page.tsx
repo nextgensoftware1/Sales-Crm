@@ -300,17 +300,44 @@ export default async function PracticeDetail({
   const penaltyRaw = (primaryProvider?.penalty ?? '').toString().trim()
   const penaltyValue = penaltyRaw ? `$${Number(penaltyRaw).toLocaleString()}` : '—'
 
-  let mipsIndividual = 0, mipsGroup = 0, mipsNonEligible = 0
+  // MIPS eligibility across the WHOLE organization roster (all clinicians
+  // sharing this org's PAC id), classified purely from the MIPS 2026 text:
+  //   has Individual AND Group -> Group + Individual
+  //   only Individual          -> Individual
+  //   only Group               -> Group
+  //   neither                  -> Non Eligible
+  let mipsIndividual = 0, mipsGroup = 0, mipsBoth = 0, mipsNonEligible = 0
   let anyCcm = false
-  for (const prov of providersList) {
+  let rosterClinicianCount = 0
+
+  let rosterProviders: any[] = providersList
+  const orgPac = primaryProvider?.org_pac_id
+  if (orgPac) {
+    const { data: orgProvs } = await supabase
+      .from('providers')
+      .select('npi, provider_signals(ccm), provider_mips(reporting_option)')
+      .eq('org_pac_id', orgPac)
+    if (orgProvs && orgProvs.length) rosterProviders = orgProvs
+  }
+
+  const seenNpi = new Set<string>()
+  for (const prov of rosterProviders) {
+    if (prov.npi && seenNpi.has(prov.npi)) continue
+    if (prov.npi) seenNpi.add(prov.npi)
+    rosterClinicianCount++
     const mipsRows: any[] = Array.isArray(prov.provider_mips) ? prov.provider_mips : (prov.provider_mips ? [prov.provider_mips] : [])
     const reportingOption = mipsRows[0]?.reporting_option
-    const status2026 = mips2026(reportingOption).toLowerCase()
-    if (status2026.includes('individual')) mipsIndividual++
-    else if (status2026.includes('group') || status2026.includes('apm')) mipsGroup++
+    const s = mips2026(reportingOption).toLowerCase()
+    const hasInd = s.includes('individual')
+    const hasGrp = s.includes('group') || s.includes('apm')
+    if (hasInd && hasGrp) mipsBoth++
+    else if (hasInd) mipsIndividual++
+    else if (hasGrp) mipsGroup++
     else mipsNonEligible++
-    if (prov.provider_signals?.ccm) anyCcm = true
+    const sig = prov.provider_signals
+    if (sig?.ccm || (Array.isArray(sig) && sig[0]?.ccm)) anyCcm = true
   }
+  if (rosterClinicianCount === 0) rosterClinicianCount = providersList.length
 
   const zone = practice.state ? (ZONE_BY_STATE[practice.state] ?? 'Other') : null
   const statusLabel = pr.ws_disposition || 'New'
@@ -515,7 +542,7 @@ export default async function PracticeDetail({
                   </div>
 
                   <div className="lead-divider">
-                    <span className="lead-subhead">MIPS Eligibility ({providersList.length} Clinicians)</span>
+                    <span className="lead-subhead">MIPS Eligibility ({rosterClinicianCount} Clinicians)</span>
                     <div className="lead-mips-grid">
                       <div className="lead-mips-cell good">
                         <span className="n">{mipsIndividual}</span>
@@ -523,7 +550,11 @@ export default async function PracticeDetail({
                       </div>
                       <div className="lead-mips-cell warn">
                         <span className="n">{mipsGroup}</span>
-                        <span className="l">Group/Opt-in</span>
+                        <span className="l">Group</span>
+                      </div>
+                      <div className="lead-mips-cell good">
+                        <span className="n">{mipsBoth}</span>
+                        <span className="l">Group + Individual</span>
                       </div>
                       <div className="lead-mips-cell bad">
                         <span className="n">{mipsNonEligible}</span>
@@ -586,5 +617,3 @@ export default async function PracticeDetail({
     </AppShell>
   )
 }
-
-
