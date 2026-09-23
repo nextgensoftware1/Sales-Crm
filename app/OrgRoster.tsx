@@ -71,6 +71,7 @@ export default function OrgRoster({ npi }: { npi: string }) {
                   <tr>
                   <th style={th}>NPI</th>
                   <th style={thL}>Name</th>
+                  <th style={thL}>Organization</th>
                   <th style={thL}>Specialty</th>
                   <th style={thL}>City</th>
                   <th style={th}>State</th>
@@ -88,6 +89,7 @@ export default function OrgRoster({ npi }: { npi: string }) {
                       <td style={tdL}>
                         <Link prefetch={false} href={`/practice/PR-${m.npi}`} className="org-roster-link">{m.name}</Link>
                       </td>
+                      <td style={tdL}>{m.org_name ?? '—'}</td>
                       <td style={tdL}>{m.specialty ?? '—'}</td>
                       <td style={tdL}>{m.city ?? '—'}</td>
                       <td style={td}>{m.state ?? '—'}</td>
