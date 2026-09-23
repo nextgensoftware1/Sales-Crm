@@ -1,4 +1,4 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -7,15 +7,11 @@ import DeletedLeadsTable from './DeletedLeadsTable'
 export default async function DeletedLeads() {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
   // Super Admin only.
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
   if (roleKey !== 'super_admin') redirect('/')

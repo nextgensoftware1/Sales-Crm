@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 // ---------------------------------------------------------------------------
 // allocatePracticesExclusive(practiceCodes, tenantSlug)
@@ -16,14 +16,10 @@ export async function allocatePracticesExclusive(
 ): Promise<{ ok: boolean; message: string; allocated?: number; blocked?: number }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if ((me as any)?.roles?.key !== 'super_admin') {
     return { ok: false, message: 'Only the Super Admin can allocate leads.' }
   }

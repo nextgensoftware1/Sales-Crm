@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  createCompany, createUser, getAssignableRoles, getCompaniesForUserCreation,
+  createCompany, createUser,
   type AssignableRole, type CompanyOption,
 } from '../admin-manage-actions'
 
@@ -15,7 +15,7 @@ function genTempPassword() {
   return out
 }
 
-function AddCompanyForm({ onCreated }: { onCreated: () => void }) {
+function AddCompanyForm() {
   const router = useRouter()
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -27,7 +27,6 @@ function AddCompanyForm({ onCreated }: { onCreated: () => void }) {
     if (res.ok) {
       setMsg({ text: `"${name.trim()}" was added.`, ok: true })
       setName('')
-      onCreated()
       router.refresh()
     } else {
       setMsg({ text: res.message ?? 'Could not add company.', ok: false })
@@ -52,34 +51,19 @@ function AddCompanyForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-function AddUserForm({ isSuperAdmin }: { isSuperAdmin: boolean }) {
+function AddUserForm({ isSuperAdmin, roles, companies }: {
+  isSuperAdmin: boolean; roles: AssignableRole[]; companies: CompanyOption[]
+}) {
   const router = useRouter()
-  const [roles, setRoles] = useState<AssignableRole[]>([])
-  const [companies, setCompanies] = useState<CompanyOption[]>([])
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
-  const [roleKey, setRoleKey] = useState('')
-  const [tenantId, setTenantId] = useState('')
+  const [selectedRole, setRoleKey] = useState(roles[0]?.key ?? '')
+  const [selectedTenant, setTenantId] = useState(companies[0]?.id ?? '')
+  const roleKey = roles.some(r => r.key === selectedRole) ? selectedRole : roles[0]?.key ?? ''
+  const tenantId = companies.some(c => c.id === selectedTenant) ? selectedTenant : companies[0]?.id ?? ''
   const [tempPassword, setTempPassword] = useState(genTempPassword())
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
-
-  useEffect(() => {
-    (async () => {
-      const rolesRes = await getAssignableRoles()
-      if (rolesRes.ok) {
-        setRoles(rolesRes.roles ?? [])
-        if (rolesRes.roles?.length) setRoleKey(rolesRes.roles[0].key)
-      }
-      if (isSuperAdmin) {
-        const companiesRes = await getCompaniesForUserCreation()
-        if (companiesRes.ok) {
-          setCompanies(companiesRes.companies ?? [])
-          if (companiesRes.companies?.length) setTenantId(companiesRes.companies[0].id)
-        }
-      }
-    })()
-  }, [isSuperAdmin])
 
   const submit = async () => {
     setBusy(true); setMsg(null)
@@ -141,11 +125,13 @@ function AddUserForm({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   )
 }
 
-export default function AdminManageClient({ isSuperAdmin, onCompanyCreated }: { isSuperAdmin: boolean; onCompanyCreated?: () => void }) {
+export default function AdminManageClient({ isSuperAdmin, roles, companies }: {
+  isSuperAdmin: boolean; roles: AssignableRole[]; companies: CompanyOption[]
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {isSuperAdmin && <AddCompanyForm onCreated={() => onCompanyCreated?.()} />}
-      <AddUserForm isSuperAdmin={isSuperAdmin} />
+      {isSuperAdmin && <AddCompanyForm />}
+      <AddUserForm isSuperAdmin={isSuperAdmin} roles={roles} companies={companies} />
     </div>
   )
 }

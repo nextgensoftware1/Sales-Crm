@@ -37,19 +37,25 @@ export default function CompaniesTable({ companies }: { companies: Company[] }) 
   const handleDelete = async (c: Company) => {
     setBusyId(c.id); setMsg('')
     const impact = await getCompanyDeletionImpact(c.id)
-    const userWarning = impact.ok && impact.userCount ? ` It still has ${impact.userCount} user(s).` : ''
+    if (!impact.ok) { setMsg(impact.message ?? 'Could not check company users.'); setBusyId(null); return }
+    const userWarning = ` All ${impact.userCount ?? 0} users and their login accounts will also be permanently deleted.`
 
     const proceed = window.confirm(
-      `Permanently DELETE "${c.name}"?${userWarning}\n\nThis cannot be undone. Type DELETE on the next dialog to confirm.`
+      `Permanently DELETE "${c.name}"?${userWarning}\n\nIf linked records block deletion, some users may already have been removed. This cannot be undone. Type DELETE on the next dialog to confirm.`
     )
     if (!proceed) { setBusyId(null); return }
     const typed = window.prompt('Type DELETE to confirm permanent deletion:')
     if (typed !== 'DELETE') { setMsg('Cancelled — you must type DELETE exactly.'); setBusyId(null); return }
 
-    const res = await deleteCompany(c.id)
-    setMsg(res.ok ? `"${c.name}" was permanently deleted.` : (res.message ?? 'Could not delete company.'))
-    setBusyId(null)
-    if (res.ok) router.refresh()
+    try {
+      const res = await deleteCompany(c.id)
+      setMsg(res.ok ? `"${c.name}" and all its users were permanently deleted.` : (res.message ?? 'Could not delete company.'))
+      router.refresh()
+    } catch {
+      setMsg('Could not confirm deletion. Refresh the page to check the company before retrying.')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   return (

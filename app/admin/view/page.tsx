@@ -1,20 +1,16 @@
-import { createSupabaseServer } from '../../../lib/supabase-server'
+import Link from 'next/link'
+import { getCurrentUser, getCurrentProfile } from '../../../lib/supabase-server'
 import { roleLabel } from '../../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../../AppShell'
 import RoleViewClient from './RoleViewClient'
 
 export default async function RoleView() {
-  const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const currentUser = me
     ? {
@@ -34,7 +30,7 @@ export default async function RoleView() {
       showTransfers
       canManageUsers
       headerRight={
-        <a href="/admin" className="btn" style={{ textDecoration: 'none' }}>← Back to admin</a>
+        <Link prefetch={false} href="/admin" className="btn" style={{ textDecoration: 'none' }}>← Back to admin</Link>
       }
     >
       <RoleViewClient />

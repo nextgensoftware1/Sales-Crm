@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { getReminders, markReminderDone, type Reminder } from '../reminders-actions'
 
@@ -9,14 +10,18 @@ const SCOPE_LABEL: Record<string, string> = {
   mine: "you've scheduled",
 }
 
-export default function RemindersClient() {
-  const [reminders, setReminders] = useState<Reminder[]>([])
-  const [scope, setScope] = useState<'all' | 'company' | 'mine'>('mine')
-  const [loading, setLoading] = useState(true)
-  const [msg, setMsg] = useState('')
+export default function RemindersClient({ initialData, initialMessage }: {
+  initialData?: { reminders: Reminder[]; scope: 'all' | 'company' | 'mine' }
+  initialMessage?: string
+}) {
+  const [reminders, setReminders] = useState<Reminder[]>(initialData?.reminders ?? [])
+  const [scope, setScope] = useState<'all' | 'company' | 'mine'>(initialData?.scope ?? 'mine')
+  const [loading, setLoading] = useState(!initialData && !initialMessage)
+  const [msg, setMsg] = useState(initialMessage ?? '')
   const [busyId, setBusyId] = useState<string | null>(null)
 
   useEffect(() => {
+    if (initialData || initialMessage) return
     (async () => {
       setLoading(true)
       const res = await getReminders()
@@ -28,7 +33,7 @@ export default function RemindersClient() {
       }
       setLoading(false)
     })()
-  }, [])
+  }, [initialData, initialMessage])
 
   const handleDone = async (id: string) => {
     setBusyId(id)
@@ -74,7 +79,7 @@ export default function RemindersClient() {
                   {r.practiceDeleted ? (
                     <span className="subtle" title="This lead was permanently deleted">{r.practiceName}</span>
                   ) : (
-                    <a href={`/practice/${r.practiceCode}`}>{r.practiceName}</a>
+                    <Link prefetch={false} href={`/practice/${r.practiceCode}`}>{r.practiceName}</Link>
                   )}
                 </td>
                 {showAgentCol && <td>{r.agentName ?? '—'}</td>}

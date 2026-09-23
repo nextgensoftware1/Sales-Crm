@@ -1,4 +1,5 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import Link from 'next/link'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -6,14 +7,10 @@ import AppShell from '../AppShell'
 export default async function ClientsPage() {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, tenant_id, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
   const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
@@ -70,9 +67,9 @@ export default async function ClientsPage() {
                   <tr key={i}>
                     <td>
                       {c.master_practices ? (
-                        <a href={`/practice/${c.master_practices.practice_code}`}>
+                        <Link prefetch={false} href={`/practice/${c.master_practices.practice_code}`}>
                           {c.master_practices.name}
-                        </a>
+                        </Link>
                       ) : (
                         <span className="subtle" title="This practice was permanently deleted">— (deleted)</span>
                       )}

@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { getAgentAssignedLeads } from '../agent-assigned-actions'
 
@@ -87,7 +88,7 @@ export default function AgentAssignedClient() {
                     <tbody>
                       {current.leads.map((l) => (
                         <tr key={l.practiceCode}>
-                          <td><a href={`/practice/${l.practiceCode}`}>{l.name}</a></td>
+                          <td><Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link></td>
                           <td>{l.state ?? '—'}</td>
                           <td>{l.specialty ?? '—'}</td>
                           <td>{l.assignedBy ?? '—'}</td>

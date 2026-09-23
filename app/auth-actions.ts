@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 // Called immediately after a successful Supabase Auth sign-in. Auth alone
 // doesn't know about our own users.status column or whether the users row
@@ -13,15 +13,10 @@ export async function checkAccountStatus(): Promise<{
   ok: boolean
   reason?: 'not_found' | 'suspended'
 }> {
-  const supabase = await createSupabaseServer()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, reason: 'not_found' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('status, tenants(status)')
-    .eq('auth_id', user.id)
-    .maybeSingle()
+  const { data: me } = await getCurrentProfile(user.id)
 
   // No matching profile — most likely the company (or the user itself) was
   // permanently deleted. The auth account may still technically work, but

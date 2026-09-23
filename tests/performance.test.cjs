@@ -311,3 +311,107 @@ for (const role of ['manager','super_admin','agent','signed_out']) {
     if(role==='agent'||role==='signed_out') assert.equal(calls.length,0)
   })
 }
+
+for (const role of ['super_admin', 'company_admin', 'agent', null]) {
+  test(`allocation history authorizes ${role ?? 'signed_out'} before reading data`, async () => {
+    const calls = []
+    const db = database({ lead_allocations: [{ allocated_at: '2026-09-22T00:00:00Z', status: 'active', tenants: { name: 'A' }, master_practices: { name: 'Practice' } }] }, calls)
+    const { getAllocationHistory } = loadTs('app/admin/allocation-history-actions.ts', {
+      '../../lib/supabase-server': {
+        createSupabaseServer: async () => db,
+        getCurrentUser: async () => ({ data: { user: role ? { id: 'verified' } : null } }),
+        getCurrentProfile: async () => ({ data: { roles: { key: role } } }),
+      },
+    })
+    if (role === 'super_admin') {
+      const rows = await getAllocationHistory()
+      assert.equal(rows.length, 1)
+      assert.equal(rows[0].company, 'A')
+      assert.equal(rows[0].practice, 'Practice')
+      assert.equal(calls.length, 1)
+    } else {
+      await assert.rejects(getAllocationHistory(), /Not allowed|Not signed in/)
+      assert.equal(calls.length, 0)
+    }
+  })
+}
+
+
+function deletionFixture({ role = 'super_admin', platform = false, authFailure = null, profileFailure = null, tenantFailure = null, memberRole = 'agent', size = 1, shared = false } = {}) {
+  const calls = []
+  let members = Array.from({ length: size }, (_, i) => ({ id: `member-${i}`, auth_id: `login-${i}`, tenant_id: 'target', roles: { key: memberRole } }))
+  if (shared) members.push({ id: 'outside', auth_id: 'login-0', tenant_id: 'other', roles: { key: 'agent' } })
+  const admin = {
+    auth: { admin: { deleteUser: async id => { calls.push(`auth:${id}`); return { error: authFailure } } } },
+    from(table) {
+      const filters = []; let operation = 'read', single = false, range = null, countOnly = false, max = null
+      const query = {
+        select(_fields, options) { countOnly = options?.head; return query },
+        eq(key, value) { filters.push(row => row[key] === value); return query },
+        neq(key, value) { filters.push(row => row[key] !== value); return query },
+        order() { return query }, range(from, to) { range = [from, to]; return query },
+        limit(n) { max = n; return query }, overrideTypes() { return query },
+        maybeSingle() { single = true; return query }, delete() { operation = 'delete'; return query },
+        then(resolve, reject) {
+          let rows = (table === 'users' ? members : [{ id: 'target', is_platform: platform }]).filter(row => filters.every(fn => fn(row)))
+          let error = null
+          if (operation === 'delete') {
+            calls.push(`delete:${table}`)
+            error = table === 'users' ? profileFailure : tenantFailure
+            if (!error && table === 'users') members = members.filter(row => !rows.includes(row))
+          }
+          const count = rows.length
+          if (range) rows = rows.slice(range[0], range[1] + 1)
+          if (max !== null) rows = rows.slice(0, max)
+          return Promise.resolve({ data: countOnly ? null : single ? rows[0] ?? null : rows, count, error }).then(resolve, reject)
+        },
+      }
+      return query
+    },
+  }
+  const { deleteCompany } = loadTs('app/admin-manage-actions.ts', {
+    '../lib/supabase-server': {
+      getCurrentUser: async () => ({ data: { user: role ? { id: 'admin-login' } : null } }),
+      getCurrentProfile: async () => ({ data: { id: 'admin', tenant_id: 'platform', roles: { key: role } } }),
+    },
+    '../lib/supabase-admin': { createSupabaseAdmin: () => admin },
+  })
+  return { run: () => deleteCompany('target'), calls }
+}
+
+test('company and users delete through APIs without a SQL function', async () => {
+  const run = deletionFixture()
+  assert.equal((await run.run()).ok, true)
+  assert.deepEqual(run.calls, ['auth:login-0', 'delete:users', 'delete:tenants'])
+})
+test('company deletion protects roles, platform and shared logins', async () => {
+  for (const options of [{ role: null }, { role: 'company_admin' }, { platform: true }, { memberRole: 'super_admin' }, { shared: true }]) {
+    const run = deletionFixture(options)
+    assert.equal((await run.run()).ok, false)
+    assert.deepEqual(run.calls, [])
+  }
+})
+test('Auth failure preserves the profile and stops company deletion', async () => {
+  const run = deletionFixture({ authFailure: { code: 'bad_key', message: 'Unregistered API key' } })
+  assert.equal((await run.run()).ok, false)
+  assert.deepEqual(run.calls, ['auth:login-0'])
+})
+test('already removed login can be retried', async () => {
+  const run = deletionFixture({ authFailure: { code: 'user_not_found' } })
+  assert.equal((await run.run()).ok, true)
+})
+test('partial failure is reported without claiming rollback', async () => {
+  for (const options of [{ profileFailure: { message: 'Linked records' } }, { tenantFailure: { message: 'Linked records' } }]) {
+    const run = deletionFixture(options)
+    const result = await run.run()
+    assert.equal(result.ok, false)
+    assert.match(result.message, /Deletion is incomplete/)
+    if (options.profileFailure) assert.ok(!run.calls.includes('delete:tenants'))
+  }
+})
+test('company deletion loads team members beyond the API row limit', async () => {
+  const run = deletionFixture({ size: 1001 })
+  assert.equal((await run.run()).ok, true)
+  assert.equal(run.calls.filter(call => call.startsWith('auth:')).length, 1001)
+  assert.equal(run.calls.at(-1), 'delete:tenants')
+})

@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 export type WorksheetData = {
   callDetails: string
@@ -24,14 +24,10 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
 
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   if (!me) return { ok: false, message: 'User not found.' }
 
   const { data: practice } = await supabase
@@ -41,16 +37,22 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     .maybeSingle()
   if (!practice) return { ok: false, message: 'This lead could not be found — it may have been deleted.' }
 
-  // Once transferred, the whole worksheet is frozen — matches the UI, but
-  // enforced here too so it can't be bypassed by calling this action directly.
-  const { data: transferred } = await supabase
-    .from('lead_transfers')
-    .select('id')
-    .eq('practice_id', practice.id)
-    .limit(1)
-    .maybeSingle()
-  if (transferred) {
-    return { ok: false, message: 'This lead has already been transferred — the worksheet is locked and can no longer be edited.' }
+  // Once transferred, only the receiving closer — or Super Admin — may keep
+  // editing the worksheet; the original transferring agent is locked out.
+  // This mirrors the UI's `worksheetLocked` check in practice/[code]/page.tsx
+  // (locked unless you're the transfer's recipient or Super Admin), enforced
+  // here too so it can't be bypassed by calling this action directly.
+  const isSuperAdmin = (me as any).roles?.key === 'super_admin'
+  if (!isSuperAdmin) {
+    const { data: transferred } = await supabase
+      .from('lead_transfers')
+      .select('to_user_id')
+      .eq('practice_id', practice.id)
+      .limit(1)
+      .maybeSingle()
+    if (transferred && (transferred as any).to_user_id !== (me as any).id) {
+      return { ok: false, message: 'This lead has already been transferred — only the receiving closer (or Super Admin) can edit the worksheet now.' }
+    }
   }
 
   const callbackIso = ws.callbackAt ? new Date(ws.callbackAt).toISOString() : null
@@ -73,16 +75,36 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
 
   if (error) return { ok: false, message: `Save failed: ${error.message}` }
 
-  // If a callback date was set, also create a reminder for the caller.
-  if (callbackIso) {
-    await supabase.from('lead_reminders').insert({
+  // Save the activity in this same authenticated request. The client used to
+  // dispatch a second Server Action, repeating auth/profile/practice reads.
+  const shouldLog = !!ws.disposition && ws.disposition !== 'New'
+  const [reminderResult, activityResult] = await Promise.all([
+    callbackIso ? supabase.from('lead_reminders').insert({
       practice_id: (practice as any).id,
       tenant_id: (me as any).tenant_id,
       agent_id: (me as any).id,
       remind_at: callbackIso,
       note: ws.disposition ? `Callback (${ws.disposition})` : 'Worksheet callback',
-    })
+    }) : Promise.resolve({ error: null }),
+    shouldLog ? supabase.from('lead_activity').insert({
+      practice_id: practice.id,
+      tenant_id: me.tenant_id,
+      agent_id: me.id,
+      type: 'call',
+      disposition: ws.disposition,
+      note: ws.callDetails,
+    }) : Promise.resolve({ error: null }),
+  ])
+  const warnings: string[] = []
+  if (reminderResult.error) warnings.push('the callback reminder could not be created')
+  if (activityResult.error) warnings.push('the activity log could not be saved')
+  if (shouldLog && !activityResult.error) {
+    const { error: statusError } = await supabase.from('lead_assignments')
+      .update({ current_status: ws.disposition, last_activity_at: new Date().toISOString() })
+      .eq('practice_id', practice.id).eq('assigned_to', me.id)
+    if (statusError) warnings.push('the assignment status could not be updated')
   }
 
-  return { ok: true, message: 'Worksheet saved.' }
+  return { ok: true, message: warnings.length
+    ? `Worksheet saved, but ${warnings.join('; ')}.` : 'Worksheet saved.' }
 }

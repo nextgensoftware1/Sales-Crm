@@ -86,17 +86,11 @@ export async function getOrgRoster(clickedNpi: string): Promise<{
   if (codes.length) {
     const { data: pracs } = await supabase
       .from('master_practices')
-      .select('practice_code, ws_updated_by')
+      .select('practice_code, users!master_practices_ws_updated_by_fkey(full_name)')
       .in('practice_code', codes)
-    const editorIds = Array.from(new Set((pracs ?? []).map((p: any) => p.ws_updated_by).filter(Boolean)))
-    const nameById: Record<string, string> = {}
-    if (editorIds.length) {
-      const { data: users } = await supabase.from('users').select('id, full_name').in('id', editorIds)
-      for (const u of (users ?? []) as any[]) nameById[u.id] = u.full_name
-    }
     const workedByCode: Record<string, string | null> = {}
     for (const p of (pracs ?? []) as any[]) {
-      workedByCode[p.practice_code] = p.ws_updated_by ? (nameById[p.ws_updated_by] ?? null) : null
+      workedByCode[p.practice_code] = p.users?.full_name ?? null
     }
     for (const m of members) {
       m.workedBy = workedByCode[`PR-${m.npi}`] ?? null

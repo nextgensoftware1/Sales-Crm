@@ -388,6 +388,10 @@ export async function uploadLeadsCsv(
       payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || col(row, 'Payment Adjustment Percentage') || null,
       at_risk: col(row, 'At_Risk') || null,
       penalty: col(row, 'Panelty') || col(row, 'Penalty') || null,
+      status: col(row, 'NPPES_Status') || null,
+      taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || null,
+      mailing_phone: col(row, 'NPPES_MailingPhone') || col(row, 'NPPES_ContactPhone') || null,
+      entity_type: col(row, 'NPPES_EnumerationType') || null,
       is_anchor: isAnchorRow(code),
       owner_tenant_id: tenantId,
     }

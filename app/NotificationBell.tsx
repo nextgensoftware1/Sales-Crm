@@ -1,9 +1,33 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { getReminders, type Reminder } from './reminders-actions'
 
-const REFRESH_MS = 60_000 // keep the badge reasonably live without hammering the DB
+// Keep the bell quiet after its first successful load. A full browser reload
+// starts a fresh cache, while route changes reuse this in-memory result.
+let reminderCache: { reminders: Reminder[] } | null = null
+let reminderRequest: Promise<Reminder[] | null> | null = null
+
+function primeReminderCache(reminders: Reminder[]) {
+  reminderCache = { reminders }
+}
+
+async function getCachedReminders(): Promise<Reminder[] | null> {
+  if (reminderCache) return reminderCache.reminders
+  if (reminderRequest) return reminderRequest
+
+  reminderRequest = getReminders()
+    .then((res) => {
+      if (!res.ok) return null
+      const reminders = res.reminders ?? []
+      primeReminderCache(reminders)
+      return reminders
+    })
+    .finally(() => { reminderRequest = null })
+
+  return reminderRequest
+}
 
 function fmtWhen(iso: string) {
   const d = new Date(iso)
@@ -14,23 +38,26 @@ function fmtWhen(iso: string) {
     : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
-export default function NotificationBell() {
-  const [reminders, setReminders] = useState<Reminder[]>([])
+export default function NotificationBell({ initialReminders }: { initialReminders?: Reminder[] }) {
+  const [reminders, setReminders] = useState<Reminder[]>(initialReminders ?? [])
   const [open, setOpen] = useState(false)
-  const [loaded, setLoaded] = useState(false)
+  const [loaded, setLoaded] = useState(initialReminders !== undefined)
   const boxRef = useRef<HTMLDivElement>(null)
+  const loadingRef = useRef<Promise<void> | null>(null)
 
   const load = async () => {
-    const res = await getReminders()
-    if (res.ok) setReminders(res.reminders ?? [])
-    setLoaded(true)
+    if (loadingRef.current) return loadingRef.current
+    loadingRef.current = (async () => {
+      const nextReminders = await getCachedReminders()
+      if (nextReminders) setReminders(nextReminders)
+      setLoaded(true)
+    })().finally(() => { loadingRef.current = null })
+    return loadingRef.current
   }
 
   useEffect(() => {
-    (async () => { await load() })()
-    const id = setInterval(load, REFRESH_MS)
-    return () => clearInterval(id)
-  }, [])
+    if (initialReminders !== undefined) primeReminderCache(initialReminders)
+  }, [initialReminders])
 
   // Close the dropdown on an outside click.
   useEffect(() => {
@@ -77,7 +104,7 @@ export default function NotificationBell() {
               {preview.map((r) => {
                 const isOverdue = new Date(r.remindAt) < now
                 return (
-                  <a
+                  <Link prefetch={false} 
                     key={r.id}
                     href={r.practiceDeleted ? '#' : `/practice/${r.practiceCode}`}
                     className="topbar-bell-row"
@@ -92,14 +119,14 @@ export default function NotificationBell() {
                         {fmtWhen(r.remindAt)}{r.agentName ? ` · ${r.agentName}` : ''}
                       </span>
                     </span>
-                  </a>
+                  </Link>
                 )
               })}
             </div>
           )}
-          <a href="/reminders" className="topbar-bell-viewall" onClick={() => setOpen(false)}>
+          <Link prefetch={false} href="/reminders" className="topbar-bell-viewall" onClick={() => setOpen(false)}>
             View all reminders →
-          </a>
+          </Link>
         </div>
       )}
     </div>

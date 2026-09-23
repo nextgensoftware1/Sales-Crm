@@ -1,14 +1,8 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { getOrgRoster, type RosterMember } from './roster-actions'
-
-// Drop-in: <OrgRoster npi={provider.npi} /> on the practice detail page.
-// Shows a button; on click loads and lists everyone sharing the same Org_PAC_ID.
-const C = {
-  panel: '#0f1620', panelAlt: '#0b1119', line: '#1c2836',
-  text: '#e6edf3', dim: '#8a99a8', faint: '#566472', cyan: '#22d3ee', amber: '#f59e0b',
-}
 
 export default function OrgRoster({ npi }: { npi: string }) {
   const [loading, setLoading] = useState(false)
@@ -21,56 +15,60 @@ export default function OrgRoster({ npi }: { npi: string }) {
 
   const load = async () => {
     setLoading(true); setMsg('')
-    const res = await getOrgRoster(npi)
-    if (res.ok) {
-      setMembers(res.members)
-      setOrgName(res.orgName)
-      setHasOrg(res.hasOrg)
-      setLoaded(true)
-      if (!res.hasOrg) setMsg('This clinician is solo — no organization roster.')
-    } else {
-      setMsg(res.message ?? 'Could not load roster.')
+    try {
+      const res = await getOrgRoster(npi)
+      if (res.ok) {
+        setMembers(res.members)
+        setOrgName(res.orgName)
+        setHasOrg(res.hasOrg)
+        setLoaded(true)
+        if (!res.hasOrg) setMsg('This clinician is solo — no organization roster.')
+      } else {
+        setMsg(res.message ?? 'Could not load roster. Please try again.')
+      }
+    } catch {
+      setMsg('Could not load roster. Check your connection and try again.')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
-    <div style={{ marginTop: 20 }}>
+    <div className="org-roster">
       {!loaded ? (
+        <div aria-busy={loading}>
         <button onClick={load} disabled={loading}
-          style={{
-            background: C.cyan, color: '#04121a', border: 'none', borderRadius: 8,
-            padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: loading ? 'default' : 'pointer',
-          }}>
+          className="org-roster-load-btn">
           {loading ? 'Loading roster…' : 'View organization roster'}
         </button>
+        {loading && <p className="org-roster-message" role="status">Finding clinicians and their latest worksheet updates…</p>}
+        {msg && <p className="org-roster-message" role="alert">{msg}</p>}
+        </div>
       ) : (
-        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div className="org-roster-panel">
+          <div className="org-roster-header">
             <div>
-              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: C.text }}>
+              <h3 className="org-roster-title">
                 Organization roster{orgName ? ` — ${orgName}` : ''}
               </h3>
-              <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>
+              <div className="org-roster-subtitle">
                 {hasOrg ? `${members.length} clinician(s) share this organization` : 'Solo clinician'}
               </div>
             </div>
             <button
               onClick={() => setShowRoster((v) => !v)}
-              style={{
-                background: 'transparent', color: C.cyan, border: `1px solid ${C.line}`,
-                borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer',
-              }}>
+              className="org-roster-toggle">
               {showRoster ? 'Hide roster ▲' : 'Show roster ▼'}
             </button>
           </div>
 
-          {msg && <p style={{ fontSize: 13, color: C.faint }}>{msg}</p>}
+          {msg && <p className="org-roster-message">{msg}</p>}
 
           {showRoster && members.length > 0 && (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${C.line}` }}>
+            <div className="org-roster-table-wrap">
+              <table className="org-roster-table">
+                <thead>
+                  <tr>
                   <th style={th}>NPI</th>
                   <th style={thL}>Name</th>
                   <th style={thL}>Specialty</th>
@@ -78,31 +76,28 @@ export default function OrgRoster({ npi }: { npi: string }) {
                   <th style={th}>State</th>
                   <th style={thL}>MIPS</th>
                   <th style={thL}>Worked By</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((m) => (
-                  <tr key={m.npi}
-                    style={{
-                      borderBottom: `1px solid ${C.line}`,
-                      background: m.is_clicked ? 'rgba(245,158,11,0.10)' : 'transparent',
-                    }}>
-                    <td style={td}>
-                      {m.is_clicked && <span title="Selected clinician" style={{ color: C.amber, marginRight: 6 }}>★</span>}
-                      {m.npi}
-                    </td>
-                    <td style={tdL}>
-                      <a href={`/practice/PR-${m.npi}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 600 }}>{m.name}</a>
-                    </td>
-                    <td style={{ ...tdL, color: C.dim }}>{m.specialty ?? '—'}</td>
-                    <td style={{ ...tdL, color: C.dim }}>{m.city ?? '—'}</td>
-                    <td style={{ ...td, color: C.dim }}>{m.state ?? '—'}</td>
-                    <td style={{ ...tdL, color: C.dim, fontSize: 12 }}>{m.mips ?? '—'}</td>
-                    <td style={{ ...tdL, color: m.workedBy ? C.cyan : C.faint, fontSize: 12 }}>{m.workedBy ?? '—'}</td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {members.map((m) => (
+                    <tr key={m.npi} className={m.is_clicked ? 'org-roster-selected' : undefined}>
+                      <td style={td}>
+                        {m.is_clicked && <span title="Selected clinician" className="org-roster-star">★</span>}
+                        {m.npi}
+                      </td>
+                      <td style={tdL}>
+                        <Link prefetch={false} href={`/practice/PR-${m.npi}`} className="org-roster-link">{m.name}</Link>
+                      </td>
+                      <td style={tdL}>{m.specialty ?? '—'}</td>
+                      <td style={tdL}>{m.city ?? '—'}</td>
+                      <td style={td}>{m.state ?? '—'}</td>
+                      <td style={tdL}>{m.mips ?? '—'}</td>
+                      <td style={tdL} className={m.workedBy ? 'org-roster-worked' : undefined}>{m.workedBy ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -110,7 +105,7 @@ export default function OrgRoster({ npi }: { npi: string }) {
   )
 }
 
-const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'center', fontSize: 11, color: '#8a99a8', textTransform: 'uppercase', letterSpacing: 0.4 }
+const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'center' }
 const thL: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { padding: '8px 10px', textAlign: 'center' }
 const tdL: React.CSSProperties = { padding: '8px 10px', textAlign: 'left' }

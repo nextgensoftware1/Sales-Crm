@@ -1,20 +1,16 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
+import Link from 'next/link'
+import { getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AgentAssignedClient from './AgentAssignedClient'
 
 export default async function AgentAssignedLeadsPage() {
-  const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
   const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
@@ -37,7 +33,7 @@ export default async function AgentAssignedLeadsPage() {
       showTransfers={showTransfers}
       canManageUsers={canManageUsers}
       headerRight={
-        <a href="/" className="btn" style={{ textDecoration: 'none' }}>← Back to practices</a>
+        <Link prefetch={false} href="/" className="btn" style={{ textDecoration: 'none' }}>← Back to practices</Link>
       }
     >
       <AgentAssignedClient />

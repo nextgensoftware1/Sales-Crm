@@ -1,22 +1,21 @@
-import { createSupabaseServer } from '../../lib/supabase-server'
-import { roleLabel } from '../../lib/roles'
+import Link from 'next/link'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
+import { roleLabel, ROLE_PERMISSIONS } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AdminManageClient from './AdminManageClient'
 import AdminUsersByCompanyClient from './AdminUsersByCompanyClient'
 import CompaniesTable from './CompaniesTable'
+import SectionTabs from '../SectionTabs'
+import AllocationHistory from './AllocationHistory'
 
 export default async function AdminPage() {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('full_name, tenant_id, roles(key, label), tenants(name)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
 
   const currentUser = me
     ? {
@@ -45,12 +44,18 @@ export default async function AdminPage() {
   // company — add teammates within the roles they're allowed to grant, see
   // who's already on the team. No visibility into other companies, the
   // allocation history, or the ability to add a new company (Super Admin only).
+  const rolesQuery = supabase.from('roles').select('key, label, level').order('level')
+  const toRoleOptions = (rows: { key: string; label: string; level: number }[]) => rows
+    .filter((r) => r.key !== 'super_admin' && (roleKey === 'super_admin' || r.level > (me?.roles?.level ?? 999)))
+    .map((r) => ({ key: r.key, label: roleLabel(r.key) }))
+
   if (roleKey !== 'super_admin') {
     const myCompanyName = (me as any)?.tenants?.name ?? 'Your Company'
-    const { data: myUsers } = await supabase
-      .from('users')
-      .select('email, full_name, status, roles(key, label, level)')
-      .eq('tenant_id', (me as any)?.tenant_id)
+    const [{ data: myUsers }, { data: availableRoles }] = await Promise.all([
+      supabase.from('users').select('email, full_name, status, roles(key, label, level)')
+        .eq('tenant_id', (me as any)?.tenant_id),
+      rolesQuery,
+    ])
 
     const sorted = ((myUsers ?? []) as any[])
       // Super Admin is a platform-level role, not a member of any specific
@@ -75,7 +80,7 @@ export default async function AdminPage() {
         canManageUsers={canManageUsers}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          <AdminManageClient isSuperAdmin={false} />
+          <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />
           <div className="card">
             <h2 className="h-section">Your Team ({sorted.length})</h2>
             <div className="tbl-wrap">
@@ -99,25 +104,16 @@ export default async function AdminPage() {
     )
   }
 
-  const { data: users } = await supabase
-    .from('users')
-    .select('email, full_name, status, roles(key, label, level), tenants(name)')
-
-  const { data: tenants } = await supabase
-    .from('tenants')
-    .select('id, name, is_platform, status')
-    .order('name')
-    // Allocation history — who got allocated what, and when
-  const { data: allocations } = await supabase
-    .from('lead_allocations')
-    .select(`
-      allocated_at,
-      status,
-      tenants ( name ),
-      master_practices ( name, practice_code )
-    `)
-    .order('allocated_at', { ascending: false })
-    .limit(1000)
+  const [{ data: users }, { data: tenants }, { data: availableRoles }] = await Promise.all([
+    supabase
+      .from('users')
+      .select('email, full_name, status, roles(key, label, level), tenants(name)'),
+    supabase
+      .from('tenants')
+      .select('id, name, is_platform, status')
+      .order('name'),
+    rolesQuery,
+  ])
 
   // Group users by company name
   const byCompany: Record<string, any[]> = {}
@@ -163,59 +159,51 @@ export default async function AdminPage() {
       showTransfers={showTransfers}
       canManageUsers={canManageUsers}
       headerRight={
-        <a href="/admin/view" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+        <Link prefetch={false} href="/admin/view" className="btn btn-primary" style={{ textDecoration: 'none' }}>
           View as role →
-        </a>
+        </Link>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <AdminManageClient isSuperAdmin={true} />
-        <div className="card">
+      <SectionTabs label="Company administration" sections={[
+        { label: 'Company Settings', content: <div className="card">
           <h2 className="h-section">Companies ({tenants?.length ?? 0})</h2>
           <p className="subtle" style={{ marginTop: -8, marginBottom: 14 }}>Suspend, reactivate, or permanently delete a company</p>
           <CompaniesTable companies={companiesForTable} />
-        </div>
-
-        <div className="card">
+        </div> },
+        { label: 'Users & Teams', content: <div className="card">
           <h2 className="h-section">Users by Company</h2>
           <AdminUsersByCompanyClient allCompanyNames={allCompanyNames} usersByCompany={usersByCompany} />
-        </div>
-
-        <div className="card">
-          <h2 className="h-section">Allocation History ({allocations?.length ?? 0})</h2>
-          {(!allocations || allocations.length === 0) ? (
-            <p className="subtle">No allocations yet.</p>
-          ) : (
-            <div className="tbl-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Practice</th>
-                    <th>Allocated To</th>
-                    <th>Status</th>
+        </div> },
+        { label: 'Manage Companies & Users', content: <AdminManageClient isSuperAdmin={true} roles={toRoleOptions(availableRoles ?? [])}
+          companies={(tenants ?? []).filter((t) => !t.is_platform).map((t) => ({ id: t.id, name: t.name }))} /> },
+        { label: 'Roles & Permissions', content: <div className="card">
+          <h2 className="h-section">Roles & Permissions</h2>
+          <p className="subtle" style={{ marginTop: -8, marginBottom: 14 }}>
+            Read-only reference — this reflects the role hierarchy and assignment rules already enforced elsewhere in the app; it does not grant or change anything here.
+          </p>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th>Can assign leads to</th>
+                  <th>Sees</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ROLE_PERMISSIONS.map((r) => (
+                  <tr key={r.key}>
+                    <td><strong>{roleLabel(r.key)}</strong></td>
+                    <td>{r.canAssignTo.length ? r.canAssignTo.map(roleLabel).join(', ') : '—'}</td>
+                    <td className="subtle" style={{ fontSize: 12.5 }}>{r.sees}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {allocations?.map((a: any, i) => {
-                    const d = new Date(a.allocated_at)
-                    return (
-                      <tr key={i}>
-                        <td>{d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</td>
-                        <td>{d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</td>
-                        <td>{a.master_practices?.name ?? '—'}</td>
-                        <td><strong>{a.tenants?.name ?? '—'}</strong></td>
-                        <td>{a.status}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div> },
+        { label: 'Allocation History', lazy: true, content: <AllocationHistory /> },
+      ]} />
     </AppShell>
   )
 }

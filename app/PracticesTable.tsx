@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
@@ -23,6 +24,7 @@ type Practice = {
   status?: string | null
   source?: string | null
   allocatedTo?: string | null
+  allocatedCompanies?: { id: string; name: string }[]
   sex?: string | null
   orgName?: string | null
   risk?: string | null
@@ -34,6 +36,7 @@ type Practice = {
 type Company = { slug: string; name: string }
 
 type Props = {
+  lazyOptions?: boolean
   practices: Practice[]
   companies?: Company[]
   isSuperAdmin?: boolean
@@ -111,14 +114,48 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 }
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 
-export default function PracticesTable({ practices, companies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [] }: Props) {
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, currentUser, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false }: Props) {
   const router = useRouter()
+  const [companies, setCompanies] = useState(initialCompanies)
+  const [myAgents, setMyAgents] = useState(initialAgents)
+  const [optionsLoaded, setOptionsLoaded] = useState(!lazyOptions)
+  const [optionsBusy, setOptionsBusy] = useState(false)
+  const [optionsError, setOptionsError] = useState('')
+  const optionsRequest = useRef(false)
+  const loadOptions = async () => {
+    if (optionsLoaded || optionsRequest.current || (!canAssign && !isSuperAdmin)) return
+    optionsRequest.current = true
+    setOptionsBusy(true)
+    setOptionsError('')
+    try {
+      const response = await fetch('/api/lead-options', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.message || 'Could not load options.')
+      setCompanies(data.companies)
+      setMyAgents(data.agents)
+      setOptionsLoaded(true)
+    } catch (error) {
+      setOptionsError(error instanceof Error ? error.message : 'Could not load options. Please retry.')
+    } finally {
+      optionsRequest.current = false
+      setOptionsBusy(false)
+    }
+  }
 
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
   const [specialtyFilter, setSpecialtyFilter] = useState('')
   const [dispositionFilter, setDispositionFilter] = useState('')
+  const [allocationFilter, setAllocationFilter] = useState('')
+  const [companyFilter, setCompanyFilter] = useState('')
+  const allocatedCompanies = useMemo(() => {
+    const companies = new Map<string, string>()
+    for (const practice of practices) {
+      for (const company of practice.allocatedCompanies ?? []) companies.set(company.id, company.name)
+    }
+    return Array.from(companies, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [practices])
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
@@ -189,6 +226,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
   const filtered = useMemo(() => {
     const rows = practices.filter((p) => {
+      if (isSuperAdmin) {
+        const allocated = p.source === 'Allocated'
+        if (allocationFilter === 'assigned' && !allocated) return false
+        if (allocationFilter === 'unassigned' && allocated) return false
+        if (companyFilter && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
+      }
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
       if (stateFilter && p.state !== stateFilter) return false
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
@@ -233,9 +276,35 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       })
     }
     return rows
-  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority])
+  }, [practices, search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, allocationFilter, companyFilter])
+
+  // Real client-side pagination over the already-fetched/filtered array —
+  // no new queries, same `filtered` rows, just windowed into pages instead
+  // of rendering the entire result set at once.
+  const PAGE_SIZE = 8
+  const [page, setPage] = useState(1)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pageStart = (safePage - 1) * PAGE_SIZE
+  const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE)
+  // Any change to the filtered set (search, a filter, a tab) should land
+  // back on page 1 rather than leaving the user stranded past the end.
+  useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, allocationFilter, companyFilter])
+
+  function getPageNumbers(current: number, total: number): (number | '…')[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+    let end = Math.min(total, Math.max(current + 2, 5))
+    const start = Math.max(1, end - 4)
+    end = Math.min(total, start + 4)
+    const pages: (number | '…')[] = []
+    for (let i = start; i <= end; i++) pages.push(i)
+    if (end < total - 1) pages.push('…')
+    if (end < total) pages.push(total)
+    return pages
+  }
 
   const toggleSelect = (code: string) => {
+    void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
       next.has(code) ? next.delete(code) : next.add(code)
@@ -246,6 +315,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   // Select-all: reflects the currently FILTERED rows.
   const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.practiceCode))
   const toggleSelectAll = () => {
+    void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
       if (allSelected) {
@@ -259,6 +329,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
 
   // Select rows N..M (1-based, inclusive) of the currently filtered list.
   const applyRange = () => {
+    void loadOptions()
     const total = filtered.length
     let from = parseInt(rangeFrom, 10)
     let to = parseInt(rangeTo, 10)
@@ -318,6 +389,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
   }
 
   const resetFilters = () => {
+    setAllocationFilter(''); setCompanyFilter('')
     setSearch(''); setStateFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All')
   }
 
@@ -330,12 +402,12 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Leads Distribution Console</h2>
             <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {/* <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
               <span key={t} style={pill(t === 'All Leads')}>{t}</span>
             ))}
             <SampleTag />
-          </div>
+          </div> */}
         </div>
         <div className="grid-zones" style={{ marginBottom: 14 }}>
           {ZONE_KEYS.map((z) => (
@@ -367,7 +439,9 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
           </div>
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
-            <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>1 &nbsp;to&nbsp; 15</div>
+            <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>
+              {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + PAGE_SIZE, filtered.length)}`}
+            </div>
           </div>
         </div>
       </section>
@@ -376,7 +450,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Lead Pool <span style={{ color: C.dim, fontWeight: 400 }}>({filtered.length} leads)</span></h2>
-          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage unassigned master records</div>
+          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {(['All Leads', 'New Leads', 'Worked Leads'] as const).map((t) => {
@@ -428,6 +502,27 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       <section style={{ ...panel, marginBottom: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, minWidth: 220 }} />
+          {isSuperAdmin && <>
+            <label style={{ fontSize: 12, color: C.dim }}>Company assignment{' '}
+              <select aria-label="Company assignment status" value={allocationFilter} style={input} onChange={e => {
+                setAllocationFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
+                if (e.target.value === 'unassigned') setCompanyFilter('')
+              }}>
+                <option value="">All leads</option>
+                <option value="assigned">Assigned to a company</option>
+                <option value="unassigned">Not assigned to a company</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: C.dim }}>Assigned company{' '}
+              <select aria-label="Filter by assigned company" value={companyFilter} style={input} onChange={e => {
+                setCompanyFilter(e.target.value); setSourceTab('All'); setSelected(new Set())
+                if (e.target.value) setAllocationFilter('assigned')
+              }}>
+                <option value="">All companies</option>
+                {allocatedCompanies.map(company => <option key={company.id} value={company.id}>{company.name}</option>)}
+              </select>
+            </label>
+          </>}
           <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -456,8 +551,8 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
       {isSuperAdmin && (
         <section style={{ ...panel, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderColor: C.blue }}>
           <strong style={{ fontSize: 14 }}>{selected.size} selected</strong>
-          <select value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
-            <option value="">Choose company…</option>
+          <select aria-label="Company" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
+            <option value="">{optionsBusy ? 'Loading companies…' : 'Choose company…'}</option>
             {companies.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
           </select>
           <button onClick={handleAllocate} style={btnPrimary}>Allocate Selected</button>
@@ -494,16 +589,17 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             <button onClick={applyRange} style={btnGhost}>Select range</button>
             <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
           </div>
-          <select value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
-            <option value="">Assign to…</option>
+          <select aria-label="Assign to team member" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
+            <option value="">{optionsBusy ? 'Loading team…' : 'Assign to…'}</option>
             {myAgents.map((a) => <option key={a.id} value={a.id}>{a.full_name} · {a.role}</option>)}
           </select>
           <button onClick={handleAssign} style={{ ...btnPrimary, background: C.green }}>Assign Selected</button>
-          {myAgents.length === 0 && <span style={{ fontSize: 13, color: C.faint }}>No direct reports to assign to.</span>}
+          {optionsLoaded && myAgents.length === 0 && <span style={{ fontSize: 13, color: C.faint }}>No direct reports to assign to.</span>}
           {assignMsg && <span style={{ fontSize: 13, color: C.dim }}>{assignMsg}</span>}
         </section>
       )}
 
+      {optionsError && <p role="alert">{optionsError} <button type="button" onClick={() => void loadOptions()} disabled={optionsBusy}>Retry</button></p>}
       {/* ---- Table ---- */}
       <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -533,7 +629,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
             </tr>
           </thead>
           <tbody>
-            {filtered.map((p) => (
+            {pageRows.map((p) => (
               <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
                 {(isSuperAdmin || canAssign) && (
                   <td style={td}>
@@ -550,7 +646,7 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
                   {prioritySet.has(p.practiceCode) && (
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
-                  <a href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</a>
+                  <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
                   {p.assignedAwayTo && (
                     <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
@@ -577,11 +673,45 @@ export default function PracticesTable({ practices, companies = [], isSuperAdmin
         </table>
       </section>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim }}>
-        <span>Showing {filtered.length} of {practices.length} practices</span>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button disabled style={{ ...btnGhost, opacity: 0.5 }}>Previous</button>
-          <button disabled style={{ ...btnGhost, opacity: 0.5 }}>Next</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
+        <span>
+          {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length} leads`}
+        </span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1}
+            style={{ ...btnGhost, opacity: safePage <= 1 ? 0.5 : 1 }}
+          >
+            Previous
+          </button>
+          {getPageNumbers(safePage, totalPages).map((n, i) =>
+            n === '…' ? (
+              <span key={`ellipsis-${i}`} style={{ padding: '0 4px', color: C.faint }}>…</span>
+            ) : (
+              <button
+                key={n}
+                onClick={() => setPage(n)}
+                style={{
+                  ...btnGhost,
+                  minWidth: 32,
+                  padding: '6px 0',
+                  ...(n === safePage
+                    ? { background: C.green, color: '#fff', borderColor: C.green, fontWeight: 700 }
+                    : {}),
+                }}
+              >
+                {n}
+              </button>
+            )
+          )}
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages}
+            style={{ ...btnGhost, opacity: safePage >= totalPages ? 0.5 : 1 }}
+          >
+            Next
+          </button>
         </div>
       </div>
     </div>
@@ -667,10 +797,10 @@ function SampleTag({ note }: { note?: string }) {
 }
 
 // ---- shared styles ----
-const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 0, padding: 18 }
-const input: React.CSSProperties = { background: C.panelAlt, color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
-const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', border: 'none', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
-const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
+const panel: React.CSSProperties = { background: C.panel, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: 18 }
+const input: React.CSSProperties = { background: C.panelAlt, color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 12px', fontSize: 13 }
+const btnPrimary: React.CSSProperties = { background: C.blue, color: '#fff', borderWidth: 0, borderStyle: 'none', borderColor: 'transparent', borderRadius: 0, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }
+const btnGhost: React.CSSProperties = { background: 'transparent', color: C.text, borderWidth: 1, borderStyle: 'solid', borderColor: C.line, borderRadius: 0, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }
 const th: React.CSSProperties = { padding: '14px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.6, whiteSpace: 'nowrap' }
 const thLeft: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { padding: '16px', textAlign: 'center' }
@@ -679,7 +809,7 @@ const tdLeft: React.CSSProperties = { padding: '16px', textAlign: 'left' }
 function pill(active: boolean): React.CSSProperties {
   return {
     fontSize: 12, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', userSelect: 'none',
-    border: `1px solid ${active ? C.blue : C.line}`,
+    borderWidth: 1, borderStyle: 'solid', borderColor: active ? C.blue : C.line,
     background: active ? 'rgba(var(--accent-rgb),0.15)' : 'transparent',
     color: active ? C.text : C.dim,
   }

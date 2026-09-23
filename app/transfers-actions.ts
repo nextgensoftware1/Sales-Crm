@@ -1,6 +1,6 @@
 'use server'
 
-import { createSupabaseServer } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 const CAN_VIEW = ['company_admin', 'manager', 'team_lead', 'super_admin', 'agent', 'closer']
 
@@ -34,14 +34,10 @@ export async function getTransfers(): Promise<{
 }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await supabase
-    .from('users')
-    .select('id, tenant_id, roles(key)')
-    .eq('auth_id', user.id)
-    .single()
+  const { data: me } = await getCurrentProfile(user.id)
   const roleKey = (me as any)?.roles?.key ?? ''
   if (!CAN_VIEW.includes(roleKey)) return { ok: false, message: 'Not allowed.' }
 
@@ -50,12 +46,6 @@ export async function getTransfers(): Promise<{
   const myTenantId = (me as any)?.tenant_id
   const myUserId = (me as any)?.id
   const scope: 'all' | 'company' | 'mine' = isSuperAdmin ? 'all' : isAgentOrCloser ? 'mine' : 'company'
-
-  let allCompanies: { id: string; name: string }[] | undefined
-  if (isSuperAdmin) {
-    const { data: tenants } = await supabase.from('tenants').select('id, name').order('name')
-    allCompanies = (tenants ?? []) as any[]
-  }
 
   let transferQ = supabase
     .from('lead_transfers')
@@ -66,7 +56,13 @@ export async function getTransfers(): Promise<{
   } else if (!isSuperAdmin) {
     transferQ = transferQ.eq('tenant_id', myTenantId)
   }
-  const { data: rows, error } = await transferQ
+  const [{ data: companyTenants }, { data: rows, error }] = await Promise.all([
+    isSuperAdmin
+      ? supabase.from('tenants').select('id, name').order('name')
+      : Promise.resolve({ data: [] }),
+    transferQ,
+  ])
+  const allCompanies: { id: string; name: string }[] | undefined = isSuperAdmin ? (companyTenants ?? []) as any[] : undefined
   if (error) return { ok: false, message: error.message }
   if (!rows || rows.length === 0) return { ok: true, transfers: [], scope, allCompanies }
 
@@ -77,31 +73,31 @@ export async function getTransfers(): Promise<{
   ].filter(Boolean)))
   const tenantIds = Array.from(new Set(rows.map((r: any) => r.tenant_id).filter(Boolean)))
 
+  const [{ data: practices }, { data: users }, { data: tenantRows }] = await Promise.all([
+    practiceIds.length
+      ? supabase.from('master_practices').select(`
+          id, practice_code, name, state, specialty, is_roster,
+          ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
+          ws_direct_line, ws_timezone, ws_disposition, ws_updated_at,
+          practice_providers ( providers ( org_name ) )
+        `).in('id', practiceIds)
+      : Promise.resolve({ data: [] }),
+    userIds.length
+      ? supabase.from('users').select('id, full_name').in('id', userIds)
+      : Promise.resolve({ data: [] }),
+    isSuperAdmin ? Promise.resolve({ data: companyTenants ?? [] }) : isAgentOrCloser && tenantIds.length
+      ? supabase.from('tenants').select('id, name').in('id', tenantIds)
+      : Promise.resolve({ data: [] }),
+  ])
+
   const practiceById: Record<string, any> = {}
-  if (practiceIds.length) {
-    const { data: practices } = await supabase
-      .from('master_practices')
-      .select(`
-        id, practice_code, name, state, specialty, is_roster,
-        ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
-        ws_direct_line, ws_timezone, ws_disposition, ws_updated_at,
-        practice_providers ( providers ( org_name ) )
-      `)
-      .in('id', practiceIds)
-    for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
-  }
+  for (const p of (practices ?? []) as any[]) practiceById[p.id] = p
 
   const nameByUserId: Record<string, string> = {}
-  if (userIds.length) {
-    const { data: users } = await supabase.from('users').select('id, full_name').in('id', userIds)
-    for (const u of (users ?? []) as any[]) nameByUserId[u.id] = u.full_name
-  }
+  for (const u of (users ?? []) as any[]) nameByUserId[u.id] = u.full_name
 
   const nameByTenantId: Record<string, string> = {}
-  if ((isSuperAdmin || isAgentOrCloser) && tenantIds.length) {
-    const { data: tenants } = await supabase.from('tenants').select('id, name').in('id', tenantIds)
-    for (const t of (tenants ?? []) as any[]) nameByTenantId[t.id] = t.name
-  }
+  for (const t of (tenantRows ?? []) as any[]) nameByTenantId[t.id] = t.name
 
   const transfers: Transfer[] = rows
     .map((r: any) => {

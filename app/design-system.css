@@ -28,6 +28,15 @@ input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px;
 .sidebar-brand { height: 86px; padding: 16px; border-bottom: 0; gap: 0; }
 .sidebar-mark { background: #fff; color: #031321; border-radius: 5px; box-shadow: 0 0 0 7px #fff; }
 .sidebar-brand-close-row { flex: 0; }
+.brand-logo { display: block; position: relative; overflow: hidden; aspect-ratio: 4.3; background: transparent; }
+/* Remove only the artwork's empty canvas margins from the visible frame. */
+.brand-logo img { position: absolute; width: 108%; max-width: none; height: auto; top: 50%; left: -4%; transform: translateY(-52%); }
+.sidebar-logo { width: 160px; flex-shrink: 0; }
+.login-logo { width: 320px; max-width: 100%; flex-shrink: 0; z-index: 1; }
+@media (min-width: 901px) {
+  .sidebar-collapsed .sidebar-logo { width: 44px; aspect-ratio: 1; }
+  .sidebar-collapsed .sidebar-logo img { width: 225%; left: -7%; }
+}
 .sidebar-nav { padding: 12px 12px; gap: 5px; }
 .nav-item { height: 39px; padding: 0 12px; font-size: 13px; font-weight: 450; gap: 11px; transition: background-color .15s ease, color .15s ease; }
 .nav-item.active { background: var(--sidebar-active); color: #60ecd0; }
@@ -139,16 +148,9 @@ input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px;
 .admin-manage-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
 @media (max-width: 1000px) { .admin-manage-grid { grid-template-columns: 1fr; } }
 
-/* ---- Login: navy brand panel and quiet paper form panel ----
-   This snapshot's login page previously used a full-bleed background image
-   with absolutely-positioned brand text; rewritten (see login/page.tsx) to
-   a real two-column layout matching the reference image, with a
-   text-based logotype instead of an image asset (none exists in this
-   project yet). */
+/* ---- Login: navy brand panel, supplied logo, and paper form panel ---- */
 .login-page { display: grid; grid-template-columns: 43% 57%; min-height: 100dvh; background: #fcfaf6; color: #0a203b; }
 .login-brand { position: relative; inset: auto; align-self: stretch; max-width: none; display: flex; flex-direction: column; padding: clamp(40px, 6vw, 100px); background: #031321; overflow: hidden; gap: 64px; }
-.login-logo-mark { display: inline-flex; align-items: center; gap: 8px; width: fit-content; background: #fff; color: #031321; border-radius: 6px; padding: 10px 16px; box-shadow: 0 0 0 14px #fff; margin-top: 48px; z-index: 1; font-family: var(--font-display), Georgia, serif; font-weight: 700; font-size: 20px; }
-.login-logo-mark .accent { color: #00876B; }
 .login-brand-copy { position: relative; z-index: 1; max-width: 320px; }
 .login-brand-copy h2 { color: #fff; font-size: clamp(30px, 3vw, 44px); line-height: 1.2; margin: 0 0 20px; font-weight: 600; }
 .login-brand-copy p { color: #cbd8e3; font-size: 14px; line-height: 1.9; margin: 0; }
