@@ -240,7 +240,7 @@
 // }
 'use server'
 
-import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { createSupabaseServer } from '../lib/supabase-server'
 
 type CsvRow = Record<string, string>
 
@@ -259,10 +259,14 @@ export async function uploadLeadsCsv(
 ): Promise<{ ok: boolean; message: string; inserted?: number; skipped?: number }> {
   const supabase = await createSupabaseServer()
 
-  const { data: { user } } = await getCurrentUser()
+  const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
 
-  const { data: me } = await getCurrentProfile(user.id)
+  const { data: me } = await supabase
+    .from('users')
+    .select('id, tenant_id, roles(key)')
+    .eq('auth_id', user.id)
+    .single()
 
   const roleKey = (me as any)?.roles?.key ?? ''
   let tenantId = (me as any)?.tenant_id
@@ -384,6 +388,10 @@ export async function uploadLeadsCsv(
       payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || col(row, 'Payment Adjustment Percentage') || null,
       at_risk: col(row, 'At_Risk') || null,
       penalty: col(row, 'Panelty') || col(row, 'Penalty') || null,
+      status: col(row, 'NPPES_Status') || null,
+      taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || null,
+      mailing_phone: col(row, 'NPPES_MailingPhone') || col(row, 'NPPES_ContactPhone') || null,
+      entity_type: col(row, 'NPPES_EnumerationType') || null,
       is_anchor: isAnchorRow(code),
       owner_tenant_id: tenantId,
     }

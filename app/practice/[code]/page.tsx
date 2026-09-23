@@ -414,10 +414,10 @@ export default async function PracticeDetail({
 
           <div className="lead-fields-panel" style={{ marginTop: 16 }}>
             <div className="lead-fields-grid">
-              <div>
+              {/* <div>
                 <span className="lead-field-label">Additional Phone</span>
                 <div className="lead-field-value">{primaryProvider?.phone || '—'}</div>
-              </div>
+              </div> */}
               <div>
                 <span className="lead-field-label">NPPES_Status</span>
                 <div className="lead-field-value">{primaryProvider?.status || '—'}</div>
