@@ -281,12 +281,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
   // of rendering the entire result set at once.
-  const PAGE_SIZE = 8
+  const [pageSize, setPageSize] = useState(isSuperAdmin ? 20 : 8)
   const [page, setPage] = useState(1)
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * PAGE_SIZE
-  const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE)
+  const pageStart = (safePage - 1) * pageSize
+  const pageRows = filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
   useEffect(() => { setPage(1) }, [search, stateFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, allocationFilter, companyFilter])
@@ -440,7 +440,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 0, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>PRACTICE SIZE</div>
             <div style={{ fontSize: 13, marginTop: 4, color: C.dim }}>
-              {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + PAGE_SIZE, filtered.length)}`}
+              {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + pageSize, filtered.length)}`}
             </div>
           </div>
         </div>
@@ -674,9 +674,27 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       </section>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
-        <span>
-          {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length} leads`}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>
+            {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, filtered.length)} of ${filtered.length} leads`}
+          </span>
+          {isSuperAdmin && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.dim }}>
+              Rows per page
+              <select
+                aria-label="Rows per page"
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value))
+                  setPage(1)
+                }}
+                style={{ ...input, padding: '6px 28px 6px 9px' }}
+              >
+                {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
