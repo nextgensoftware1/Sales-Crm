@@ -1,0 +1,241 @@
+/* Reference visual system. Business components retain their existing data/actions. */
+:root, [data-theme="dark"] {
+  --sidebar: #031321; --sidebar-2: #071b2d; --bg: #041522;
+  --surface: #061a2b; --surface-2: #0b2236; --border: #17364c;
+  --border-dim: #204057; --ink: #eaf3fb; --ink-strong: #f7fbff;
+  --muted: #a0b8cc; --muted-2: #7896ae; --th-bg: #092033; --th-ink: #b0c8dc;
+  --radius: 6px; --radius-lg: 8px; --radius-xl: 12px;
+  --shadow-card: none; --kpi-card-bg: var(--surface); --kpi-card-border: var(--border);
+  --sidebar-active: #004c4d;
+  /* This snapshot's base accent is blue (#3b82f6) — the reference image's
+     brand color is green, so it's overridden here rather than in globals.css. */
+  --accent: #00C896; --accent-dark: #00876B; --accent-rgb: 0,200,150;
+}
+[data-theme="light"] {
+  --bg: #fbfaf7; --surface: #fff; --surface-2: #f4f8fa;
+  --border: #dfE8ef; --border-dim: #d3e0e9; --ink: #314e68; --ink-strong: #0a203b;
+  --muted: #577791; --muted-2: #6c879c; --th-bg: #f4f8fa; --th-ink: #496c87;
+  --shadow-card: none; --kpi-card-bg: #fff; --kpi-card-border: var(--border);
+  --accent: #00C896; --accent-dark: #00876B; --accent-rgb: 0,200,150;
+}
+body { margin: 0; font-family: var(--font-sans), sans-serif; font-size: 14px; }
+button, input, select, textarea { font-family: inherit; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), select:not(:disabled) { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+.sidebar { width: 218px; border-right-color: #173044; }
+.sidebar-brand { height: 86px; padding: 16px; border-bottom: 0; gap: 0; }
+.sidebar-mark { background: #fff; color: #031321; border-radius: 5px; box-shadow: 0 0 0 7px #fff; }
+.sidebar-brand-close-row { flex: 0; }
+.sidebar-nav { padding: 12px 12px; gap: 5px; }
+.nav-item { height: 39px; padding: 0 12px; font-size: 13px; font-weight: 450; gap: 11px; transition: background-color .15s ease, color .15s ease; }
+.nav-item.active { background: var(--sidebar-active); color: #60ecd0; }
+.nav-item.active::before { display: none; }
+/* Section label above the Admin/Deleted Leads group — mirrors the reference
+   image's separate "ADMIN" sidebar section. */
+.nav-section-label { margin: 20px 12px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); }
+.nav-item .ico { display: inline-flex; align-items: center; justify-content: center; }
+.nav-item .ico svg { width: 17px; height: 17px; }
+.sidebar-foot { background: transparent; }
+.sidebar-user { padding: 14px; gap: 10px; }
+.sidebar-user b { font-size: 12px; }
+.sidebar-user span { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 11px; }
+.sidebar-avatar, .topbar-avatar { width: 30px; height: 30px; font-size: 10px; }
+.sidebar-signout { padding: 10px 16px; font-size: 12px; }
+.main-col { margin-left: 218px; }
+.topbar { min-height: 60px; padding: 10px 26px; flex-wrap: nowrap; background: var(--surface); }
+.topbar-right { gap: 12px; flex-wrap: nowrap; }
+.topbar .who { font-size: 10px; text-align: left; }
+.topbar .who b { font-size: 12px; }
+.top-user { flex-direction: row-reverse; }
+.desktop-collapse, .menu-toggle, .topbar-bell, .theme-toggle { background: transparent; border-color: transparent; }
+.theme-toggle { font-size: 11px; }
+.content { padding: 24px 26px 36px; }
+.card, .lead-card, .kpi { border: 1px solid var(--border); box-shadow: none; border-radius: 7px; padding: 20px; }
+.btn { font-size: 12px; font-weight: 600; border-radius: 5px; min-height: 34px; }
+.btn-primary, .login-submit, .lead-save-btn { background: linear-gradient(110deg, #00cba4, #00bd96); }
+.input, .lead-input, .lead-select, .lead-textarea { border-color: var(--border); background: var(--surface); font-size: 12px; border-radius: 5px; transition: border-color .15s ease; }
+.tbl thead th { font-size: 11px; font-weight: 600; padding: 13px 14px; }
+.tbl tbody td { font-size: 12px; padding: 14px; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.badge { border-radius: 5px; font-size: 10px; padding: 4px 9px; }
+[data-theme="light"] .badge-blue { color: #0875db; background: #e0efff; }
+[data-theme="light"] .badge-green { color: #00876b; background: #d0faed; }
+[data-theme="light"] .badge-amber { color: #a55b00; background: #fff0d2; }
+[data-theme="light"] .badge-red { color: #bd3651; background: #ffe5ea; }
+.hero-stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; border: 0; padding: 0; }
+.hero-stats-divider { display: none; }
+.hero-stat { min-width: 0; border: 1px solid var(--border); background: var(--surface); padding: 20px; border-radius: 7px; }
+.hero-stat-value { font-size: clamp(26px, 2.6vw, 38px); color: var(--ink-strong) !important; }
+.hero-stat-label { font-size: 11px; letter-spacing: .02em; margin-top: 8px; font-weight: 500; }
+.hero-stat-sub { font-size: 11px; margin-top: 7px; }
+.kpi-cards-grid-secondary { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.kpi-cards-grid-secondary .kpi-card { min-height: 88px; padding: 15px; }
+.kpi-card:hover { transform: none; }
+.kpi-card-stripe { display: none; }
+.kpi-card-top { flex-direction: row-reverse; align-items: center; justify-content: flex-end; gap: 12px; }
+.kpi-card-text { display: flex; flex-direction: column; }
+.kpi-card-label { order: 2; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; margin-top: 5px; line-height: 1.3; }
+.kpi-card-value { order: 1; font-family: var(--font-display), Georgia, serif; margin: 0; font-size: 24px; font-weight: 600; }
+.kpi-card-sub { order: 3; font-size: 10px; line-height: 1.4; margin-top: 5px; }
+.kpi-card-icon { width: 34px; height: 34px; border: 0; border-radius: 7px; }
+.kpi-card-icon svg { width: 19px; height: 19px; }
+.grid-dash-a { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chart-layout { display: flex; gap: 24px; align-items: center; min-height: 210px; }
+.chart-graphic { width: 44%; max-width: 190px; flex-shrink: 0; }
+.chart-legend { flex: 1; min-width: 0; display: grid; gap: 16px; font-size: 12px; }
+.chart-legend-row { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.chart-legend-row i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.chart-legend-row strong { margin-left: auto; white-space: nowrap; color: var(--ink); font-size: 11px; font-weight: 500; }
+.dashboard-secondary { margin-top: 2px; }
+.lead-title { font-size: 25px; }
+.lead-badge { border-radius: 5px; font-weight: 500; }
+.lead-card h3, .lead-subhead { font-family: var(--font-display), Georgia, serif; }
+.lead-stat-value { font-family: var(--font-display), Georgia, serif; }
+.lead-activity-row { position: relative; margin-left: 5px; padding-left: 18px; border-top: 0; border-left: 1px solid var(--border-dim); font-size: 12px; }
+.lead-activity-row::before { content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); left: -4px; top: 14px; }
+.lead-transfer-btn { background: var(--accent); }
+.lead-fields-panel { background: var(--surface); }
+.lead-field-value { background: var(--surface-2); font-size: 12px; }
+.org-roster { margin-top: 20px; min-width: 0; }
+.org-roster-load-btn { padding: 9px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 700; cursor: pointer; }
+.org-roster-load-btn:disabled { cursor: default; opacity: .65; }
+.org-roster-panel { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--ink); }
+.org-roster-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; min-width: 0; }
+.org-roster-title { min-width: 0; margin: 0; color: var(--ink-strong); font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.org-roster-subtitle { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.org-roster-toggle { flex: 0 0 auto; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+.org-roster-toggle:hover { border-color: var(--accent); background: var(--surface-2); }
+.org-roster-message { color: var(--muted); font-size: 13px; }
+.org-roster-table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.org-roster-table { width: 100%; min-width: 700px; border-collapse: collapse; color: var(--ink); font-size: 13px; }
+.org-roster-table th { border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.org-roster-table td { border-bottom: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.org-roster-table tbody tr:hover { background: var(--surface-2); }
+.org-roster-selected { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.org-roster-star { margin-right: 6px; color: var(--warn); }
+.org-roster-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.org-roster-link:hover { text-decoration: underline; }
+.org-roster-worked { color: var(--accent) !important; }
+@media (max-width: 640px) {
+  .org-roster-panel { padding: 12px; }
+  .org-roster-header { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .org-roster-toggle { align-self: flex-start; }
+  .org-roster-table { min-width: 660px; font-size: 12px; }
+}
+/* .lead-2col is this snapshot's practice-detail 2-column grid (base: equal
+   1fr/1fr above 1024px, single column below — untouched here). Weighting
+   it 1.6fr/1fr gives the Worksheet column real prominence, matching the
+   reference image, without disturbing the mobile single-column fallback. */
+@media (min-width: 1024px) {
+  .lead-2col { grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); }
+}
+.section-tab-list { display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin-bottom: 22px; overflow-x: auto; }
+.section-tab-list button { border: 0; border-bottom: 2px solid transparent; padding: 13px 2px; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.section-tab-list button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent-dark); font-weight: 650; }
+[data-theme="dark"] .section-tab-list button[aria-selected="true"] { color: var(--accent); }
+.section-tabs [role="tabpanel"] > .card { margin-bottom: 18px; }
+.admin-manage-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 1000px) { .admin-manage-grid { grid-template-columns: 1fr; } }
+
+/* ---- Login: navy brand panel and quiet paper form panel ----
+   This snapshot's login page previously used a full-bleed background image
+   with absolutely-positioned brand text; rewritten (see login/page.tsx) to
+   a real two-column layout matching the reference image, with a
+   text-based logotype instead of an image asset (none exists in this
+   project yet). */
+.login-page { display: grid; grid-template-columns: 43% 57%; min-height: 100dvh; background: #fcfaf6; color: #0a203b; }
+.login-brand { position: relative; inset: auto; align-self: stretch; max-width: none; display: flex; flex-direction: column; padding: clamp(40px, 6vw, 100px); background: #031321; overflow: hidden; gap: 64px; }
+.login-logo-mark { display: inline-flex; align-items: center; gap: 8px; width: fit-content; background: #fff; color: #031321; border-radius: 6px; padding: 10px 16px; box-shadow: 0 0 0 14px #fff; margin-top: 48px; z-index: 1; font-family: var(--font-display), Georgia, serif; font-weight: 700; font-size: 20px; }
+.login-logo-mark .accent { color: #00876B; }
+.login-brand-copy { position: relative; z-index: 1; max-width: 320px; }
+.login-brand-copy h2 { color: #fff; font-size: clamp(30px, 3vw, 44px); line-height: 1.2; margin: 0 0 20px; font-weight: 600; }
+.login-brand-copy p { color: #cbd8e3; font-size: 14px; line-height: 1.9; margin: 0; }
+.login-waves { position: absolute; bottom: -40px; left: -40px; width: 115%; max-width: none; pointer-events: none; }
+.login-form-area { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100dvh; padding: 48px 28px; gap: 64px; }
+.login-card { width: 100%; max-width: 420px; padding: 36px; background: #fff; border: 1px solid #dde6ec; box-shadow: none; border-radius: 7px; backdrop-filter: none; }
+.login-card-blob, .login-icon { display: none; }
+.login-head { text-align: left; margin-bottom: 28px; }
+.login-card h1 { color: #0a203b; font-size: 26px; font-weight: 600; }
+.login-sub { color: #577791; margin-top: 9px; font-size: 12px; }
+.login-form { gap: 20px; }
+.login-label { color: #496c87; font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.login-input { width: 100%; background: #fff; color: #0a203b; border: 1px solid #dce6ee; border-radius: 5px; font-size: 13px; padding: 12px; }
+.login-input::placeholder { color: #7894aa; }
+.login-input:focus { background: #fff; border-color: #00bd96; }
+.login-pw-toggle { color: #577791; }
+.login-submit { border-radius: 5px; font-size: 13px; height: 43px; box-shadow: none; }
+.login-submit svg { display: none; }
+.login-forgot { color: #008f79; font-size: 12px; }
+.login-forgot:hover { color: #006a57; }
+.login-remember-row { display: flex; align-items: center; justify-content: space-between; margin-top: -8px; }
+.login-remember { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #577791; cursor: pointer; user-select: none; }
+.login-remember input[type="checkbox"] { accent-color: #00bd96; width: 14px; height: 14px; margin: 0; }
+.login-copyright { font-size: 10px; color: #6c879c; text-align: center; }
+@media (max-width: 900px) {
+  .main-col { margin-left: 0; }
+  .sidebar-brand { justify-content: space-between; }
+  .content { padding: 22px 18px; }
+  .topbar { padding: 10px 18px; }
+  .grid-dash-a { grid-template-columns: 1fr; }
+  .login-brand { padding: 36px; gap: 50px; }
+}
+@media (max-width: 1100px) {
+  .kpi-cards-grid-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-layout { gap: 14px; }
+  .chart-legend { font-size: 11px; }
+}
+@media (max-width: 600px) {
+  .page-heading { align-items: flex-start; flex-direction: column; }
+  .hero-stats-row { grid-template-columns: 1fr; gap: 12px; }
+  .hero-stat { padding: 18px; }
+  .topbar-right { gap: 5px; }
+  .login-page { grid-template-columns: 1fr; }
+  .login-brand { display: flex; padding: 34px 30px; gap: 28px; }
+  .login-brand-copy h2 { font-size: 27px; margin-bottom: 10px; }
+  .login-brand-copy p { font-size: 12px; }
+  .login-waves { width: 60%; left: auto; right: -30px; opacity: .5; }
+  .login-form-area { min-height: auto; padding: 30px 20px; gap: 20px; }
+  .login-card { padding: 26px; }
+}
+
+/* ---- Minimal, soft hover polish — additive only ----
+   A quiet, theme-agnostic fallback (opacity dip) for controls that had no
+   hover feedback at all — plain buttons built from inline style objects
+   (pagination, admin actions, worksheet buttons), form inputs, and
+   inactive tab labels. Deliberately NOT applied to .card / .lead-card /
+   .kpi-card — those aren't clickable. */
+button:not(:disabled), .btn, select:not(:disabled) {
+  transition: opacity .15s ease, background-color .15s ease, border-color .15s ease, filter .15s ease;
+}
+button:not(:disabled):hover, .btn:hover { opacity: 0.9; }
+
+.input:hover, .lead-input:hover, .lead-select:hover, .lead-textarea:hover,
+select:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+.section-tab-list button { transition: color .15s ease; }
+.section-tab-list button:not([aria-selected="true"]):hover { color: var(--ink); }
+
+/* Icon-only buttons (sidebar nav, bell, theme toggle, sign-out) get a soft
+   icon-scale on hover — same language as the KPI card icon hover already
+   defined below. */
+.nav-item .ico svg, .topbar-bell svg, .theme-toggle svg, .topbar-signout svg, .sidebar-signout svg {
+  transition: transform .15s ease;
+}
+.nav-item:hover .ico svg, .topbar-bell:hover svg, .theme-toggle:hover svg, .topbar-signout:hover svg, .sidebar-signout:hover svg {
+  transform: scale(1.08);
+}
+.kpi-card:hover .kpi-card-icon svg { transform: scale(1.08); transition: transform .15s ease; }
+
+.date-range-picker { display: flex; align-items: center; gap: 6px; }
+.date-range-picker .input { width: auto; padding: 6px 10px; font-size: 12px; height: 34px; }
+.date-range-sep { color: var(--muted); font-size: 12px; }
+.date-range-reset { white-space: nowrap; }
+@media (max-width: 640px) { .date-range-picker { flex-wrap: wrap; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
