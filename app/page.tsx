@@ -333,6 +333,7 @@ export default async function Home() {
         myAssignedCodes={myAssignedCodes}
         newLeadCodes={Array.from(newLeadCodes)}
         workedLeadCodes={Array.from(workedLeadCodes)}
+        viewerRole={roleKey}
       />
     </AppShell>
   )

@@ -46,6 +46,7 @@ type Props = {
   myAssignedCodes?: string[]
   newLeadCodes?: string[]      // practices from the most recent upload batch
   workedLeadCodes?: string[]   // practices with any lead_activity entries
+  viewerRole?: string
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -104,7 +105,7 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 type ZoneKey = typeof ZONE_KEYS[number]
 
-export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false }: Props) {
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '' }: Props) {
   const router = useRouter()
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -228,7 +229,36 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       : !!p.assignedAwayTo).length,
     worked: practices.filter((p) => workedLeadSet.has(p.practiceCode)).length,
     qualified: practices.filter((p) => (p.status ?? '').toLowerCase().includes('qualif')).length,
-  }), [practices, isSuperAdmin, workedLeadSet])
+    new: practices.filter((p) => newLeadSet.has(p.practiceCode)).length,
+    followUp: practices.filter((p) => {
+      const status = (p.status ?? '').toLowerCase()
+      return status.includes('follow') || status.includes('call back') || status.includes('callback')
+    }).length,
+  }), [practices, isSuperAdmin, workedLeadSet, newLeadSet])
+
+  const summaryCards = useMemo(() => {
+    if (isSuperAdmin) return [
+      { label: 'Platform Leads', value: summaryCounts.total, tone: 'blue' },
+      { label: 'Unallocated', value: summaryCounts.unassigned, tone: 'amber' },
+      { label: 'Allocated', value: summaryCounts.assigned, tone: 'purple' },
+      { label: 'Worked', value: summaryCounts.worked, tone: 'cyan' },
+      { label: 'Qualified', value: summaryCounts.qualified, tone: 'green' },
+    ]
+    if (viewerRole === 'agent' || viewerRole === 'closer') return [
+      { label: viewerRole === 'closer' ? 'My Closer Queue' : 'My Lead Queue', value: summaryCounts.total, tone: 'blue' },
+      { label: 'New Leads', value: summaryCounts.new, tone: 'amber' },
+      { label: 'Worked', value: summaryCounts.worked, tone: 'purple' },
+      { label: 'Follow-ups', value: summaryCounts.followUp, tone: 'cyan' },
+      { label: 'Qualified', value: summaryCounts.qualified, tone: 'green' },
+    ]
+    return [
+      { label: 'Company Leads', value: summaryCounts.total, tone: 'blue' },
+      { label: 'Ready to Assign', value: summaryCounts.unassigned, tone: 'amber' },
+      { label: 'Assigned by Me', value: summaryCounts.assigned, tone: 'purple' },
+      { label: 'Worked', value: summaryCounts.worked, tone: 'cyan' },
+      { label: 'Qualified', value: summaryCounts.qualified, tone: 'green' },
+    ]
+  }, [isSuperAdmin, summaryCounts, viewerRole])
 
   const toggleSignal = (key: string) => {
     setActiveSignals((prev) => {
@@ -421,13 +451,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   return (
     <div className="leads-engine" style={{ color: C.text, fontFamily: 'var(--font-sans), ui-sans-serif, system-ui, sans-serif' }}>
       <section className="lead-summary-grid" aria-label="Lead pool summary">
-        {[
-          { label: 'Total Leads', value: summaryCounts.total, tone: 'blue' },
-          { label: 'Unassigned', value: summaryCounts.unassigned, tone: 'amber' },
-          { label: 'Assigned', value: summaryCounts.assigned, tone: 'purple' },
-          { label: 'Worked', value: summaryCounts.worked, tone: 'cyan' },
-          { label: 'Qualified', value: summaryCounts.qualified, tone: 'green' },
-        ].map((item) => (
+        {summaryCards.map((item) => (
           <div className={`lead-summary-card tone-${item.tone}`} key={item.label}>
             <span className="lead-summary-icon" aria-hidden="true" />
             <span>

@@ -158,6 +158,7 @@ for (const [role, codes] of Object.entries(expected)) {
       'next/navigation': { redirect: () => { throw Error('unexpected redirect') } },
     })
     const view = await Home(), props = view.props.children.props
+    assert.equal(props.viewerRole, role)
     assert.deepEqual(props.practices.map((p) => p.practiceCode), codes)
     assert.equal(props.practices.find((p) => p.practiceCode === 'PR-p1').lastDialed, '2026-09-21T01:00:00Z')
     assert.deepEqual(props.workedLeadCodes, ['PR-p1'])
