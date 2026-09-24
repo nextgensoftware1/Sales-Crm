@@ -28,6 +28,7 @@ function loadTs(file, mocks = {}) {
 }
 
 const { mapConcurrent, chunks } = loadTs('lib/query-utils.ts')
+const { classifyReminderAttention, getReminderNotificationSlot } = loadTs('lib/reminder-utils.ts')
 test('database batches preserve order and bound concurrent work', async () => {
   let active = 0, peak = 0
   const result = await mapConcurrent([0, 1, 2, 3, 4, 5], 2, async (n) => {
@@ -42,6 +43,22 @@ test('database batches preserve order and bound concurrent work', async () => {
   assert.deepEqual(chunks([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
   await assert.rejects(mapConcurrent([1], 0, async () => 1), RangeError)
   await assert.rejects(mapConcurrent([1], 1, async () => { throw Error('query failed') }), /query failed/)
+})
+
+test('reminder attention starts eight hours before and creates one slot per remaining hour', () => {
+  const now = Date.parse('2026-09-24T12:00:00Z')
+  const reminder = (id, minutes, done = false) => ({ id, done, remindAt: new Date(now + minutes * 60000).toISOString() })
+  const result = classifyReminderAttention([
+    reminder('overdue', -1), reminder('boundary', 480), reminder('later', 481), reminder('complete', 5, true),
+  ], now)
+  assert.deepEqual(result.overdue.map(r => r.id), ['overdue'])
+  assert.deepEqual(result.nearDue.map(r => r.id), ['boundary'])
+  assert.deepEqual(result.upcoming.map(r => r.id), ['complete', 'boundary', 'later'].filter(id => id !== 'complete'))
+  assert.equal(getReminderNotificationSlot(new Date(now + 8 * 3600000).toISOString(), now), 'hour-8')
+  assert.equal(getReminderNotificationSlot(new Date(now + 7 * 3600000).toISOString(), now), 'hour-7')
+  assert.equal(getReminderNotificationSlot(new Date(now + 3600000).toISOString(), now), 'hour-1')
+  assert.equal(getReminderNotificationSlot(new Date(now + 8 * 3600000 + 1).toISOString(), now), null)
+  assert.equal(getReminderNotificationSlot(new Date(now - 1).toISOString(), now), null)
 })
 
 test('proxy refreshes cookies without a duplicate user lookup or trusting an identity', async () => {
@@ -83,6 +100,8 @@ test('identity helper verifies with Auth and ignores arbitrary request headers',
   assert.equal(verified, 2)
   result.data.user = null
   assert.equal(await helper.getVerifiedUserId(), null)
+  result.error = new (require('@supabase/supabase-js').AuthRetryableFetchError)('temporary outage', 503)
+  await assert.rejects(server.getCurrentUser(), /temporary outage/)
 })
 
 function database(tables, calls, failures = {}) {
@@ -159,6 +178,7 @@ for (const [role, codes] of Object.entries(expected)) {
     })
     const view = await Home(), props = view.props.children.props
     assert.equal(props.viewerRole, role)
+    assert.equal(props.completedWorksheetCount, ['agent', 'closer'].includes(role) ? 1 : undefined)
     assert.deepEqual(props.practices.map((p) => p.practiceCode), codes)
     assert.equal(props.practices.find((p) => p.practiceCode === 'PR-p1').lastDialed, '2026-09-21T01:00:00Z')
     assert.deepEqual(props.workedLeadCodes, ['PR-p1'])
@@ -243,7 +263,7 @@ for (const [role, expectedScope] of [['super_admin', 'all'], ['manager', 'compan
   test(`joined reminders preserve ${role} scope and deleted-lead display`, async () => {
     const calls = []
     const row = (id, tenant, agent, practice) => ({ id, tenant_id: tenant, agent_id: agent,
-      remind_at: '2026-09-22T10:00:00Z', done: false, note: 'Call back', master_practices: practice,
+      remind_at: '2026-09-22T10:00:00Z', done: false, completed_at: id === 'mine' ? '2026-09-22T11:00:00Z' : null, note: 'Call back', master_practices: practice,
       users: { full_name: agent }, tenants: { name: tenant } })
     const db = database({ lead_reminders: [
       row('mine', 'a', 'me', {practice_code: 'PR-1', name: 'Practice'}),
@@ -261,6 +281,7 @@ for (const [role, expectedScope] of [['super_admin', 'all'], ['manager', 'compan
     assert.equal(result.reminders.find(r=>r.id==='mine').practiceName, 'Practice')
     assert.equal(result.reminders.find(r=>r.id==='mine').agentName, role === 'agent' ? null : 'me')
     assert.equal(result.reminders.find(r=>r.id==='mine').companyName, role === 'super_admin' ? 'a' : null)
+    assert.equal(result.reminders.find(r=>r.id==='mine').completedAt, '2026-09-22T11:00:00Z')
     assert.deepEqual(calls.map(c=>c.table), ['lead_reminders'])
   })
 }
@@ -290,6 +311,22 @@ for (const [role, expectedCodes] of Object.entries(expected)) {
     assert.deepEqual([...codes].sort(), [...expectedCodes].sort())
   })
 }
+
+test('marking a reminder done persists and returns its completion time', async () => {
+  const calls = []
+  const db = database({ lead_reminders: [{ id: 'r1', tenant_id: 'a', agent_id: 'me', done: false }] }, calls)
+  const actions = loadTs('app/reminders-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => db,
+    getCurrentUser: async () => ({ data: { user: {id: 'auth-me'} } }),
+    getCurrentProfile: async () => ({ data: {id: 'me', tenant_id: 'a', roles: {key: 'agent'}} }),
+  } })
+  const result = await actions.markReminderDone('r1')
+  assert.equal(result.ok, true)
+  assert.ok(Number.isFinite(Date.parse(result.completedAt)))
+  const update = calls.find(call => call.table === 'lead_reminders' && call.operation === 'update')
+  assert.equal(update.payload.done, true)
+  assert.equal(update.payload.completed_at, result.completedAt)
+})
 test('practice counter includes assigned leads beyond the first 1000 rows', async () => {
   const records = Array.from({length:1205}, (_, i)=>({id:String(i),practice_code:'PR-'+i,name:String(i).padStart(5,'0'),is_roster:false}))
   const db = database({master_practices:records,lead_assignments:records.map(p=>({practice_id:p.id,assigned_to:'me',status:'active'}))},[])

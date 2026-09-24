@@ -41,7 +41,7 @@ function ReportTable({
               {showCompanyColumn && <th>Company</th>}
               <th>State</th>
               <th>Specialty</th>
-              <th>Agent</th>
+              <th>Filled By</th>
               <th>Closer</th>
               <th>Disposition</th>
               <th>Callback</th>
@@ -69,7 +69,7 @@ function ReportTable({
                     {showCompanyColumn && <td>{r.companyName ?? '—'}</td>}
                     <td>{r.state ?? '—'}</td>
                     <td>{r.specialty ?? '—'}</td>
-                    <td>{r.assignedAgent ?? '—'}</td>
+                    <td>{r.filledBy ?? '—'}</td>
                     <td>{r.assignedCloser ?? '—'}</td>
                     <td>{r.disposition ? <span className="badge badge-blue">{r.disposition}</span> : '—'}</td>
                     <td>{fmtDate(r.callbackAt)}{r.timezone ? ` ${r.timezone}` : ''}</td>

@@ -10,7 +10,7 @@ export type WorksheetReportRow = {
   state: string | null
   specialty: string | null
   companyName: string | null
-  assignedAgent: string | null
+  filledBy: string | null
   assignedCloser: string | null
   callDetails: string | null
   additionalPhone: string | null
@@ -36,7 +36,6 @@ export type WorksheetReportsResult =
 const REPORT_LIMIT = 300
 
 type CompanyUserRow = { id: string }
-type AssignmentRow = { practice_id: string; assigned_to: string; current_status: string | null }
 type TransferRow = { practice_id: string; to_user_id: string | null; from_user_id: string | null; note: string | null }
 type ReportUserRow = {
   id: string
@@ -130,28 +129,14 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   const page = (truncated ? practices.slice(0, REPORT_LIMIT) : practices) as unknown as PracticeRow[]
   const practiceIds = page.map((p) => p.id)
 
-  // These three are all independent of each other — only dependent on the
-  // practice ids above — so they run together instead of one after another.
-  const [{ data: assignments }, { data: transfers }] = await Promise.all([
-    supabase.from('lead_assignments').select('practice_id, assigned_to, current_status').in('practice_id', practiceIds),
-    supabase.from('lead_transfers').select('practice_id, to_user_id, from_user_id, note').in('practice_id', practiceIds),
-  ])
+  const { data: transfers } = await supabase.from('lead_transfers')
+    .select('practice_id, to_user_id, from_user_id, note').in('practice_id', practiceIds)
 
   const transferByPractice: Record<string, { toUserId: string | null; fromUserId: string | null; note: string | null }> = {}
   for (const t of (transfers ?? []) as TransferRow[]) transferByPractice[t.practice_id] = { toUserId: t.to_user_id, fromUserId: t.from_user_id, note: t.note }
 
-  const agentAssignmentByPractice: Record<string, string> = {}
-  for (const a of (assignments ?? []) as AssignmentRow[]) {
-    // A transferred lead can have more than one lead_assignments row (the
-    // original agent's, plus one for the closer). The one that isn't the
-    // transfer's recipient is the original agent's.
-    const t = transferByPractice[a.practice_id]
-    if (!t || a.assigned_to !== t.toUserId) agentAssignmentByPractice[a.practice_id] = a.assigned_to
-  }
-
   const userIds = new Set<string>()
   for (const p of page) if (p.ws_updated_by) userIds.add(p.ws_updated_by)
-  for (const id of Object.values(agentAssignmentByPractice)) userIds.add(id)
   for (const t of Object.values(transferByPractice)) { if (t.toUserId) userIds.add(t.toUserId) }
 
   const { data: userRows } = userIds.size
@@ -177,7 +162,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       companyName: isSuperAdmin
         ? (p.ws_updated_by ? companyByUserId[p.ws_updated_by] ?? 'Unknown company' : 'Unknown company')
         : myCompanyName,
-      assignedAgent: agentAssignmentByPractice[p.id] ? (nameById[agentAssignmentByPractice[p.id]] ?? null) : null,
+      filledBy: p.ws_updated_by ? (nameById[p.ws_updated_by] ?? null) : null,
       assignedCloser: transfer?.toUserId ? (nameById[transfer.toUserId] ?? null) : null,
       callDetails: p.ws_call_details,
       additionalPhone: p.ws_additional_phone,

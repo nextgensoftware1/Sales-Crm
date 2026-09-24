@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { cache } from 'react'
 import { timedSupabaseFetch } from './supabase-fetch'
@@ -34,7 +35,12 @@ export const createSupabaseServer = cache(async () => {
 // a caller-supplied identity header. Nested page/action reads share this check.
 export const getCurrentUser = cache(async () => {
   const supabase = await createSupabaseServer()
-  return supabase.auth.getUser()
+  const result = await supabase.auth.getUser()
+  // A short Auth/network outage is not proof that the user signed out.
+  // Supabase preserves the refresh cookie for retryable failures; surface the
+  // outage so Next can retry instead of letting every page redirect to login.
+  if (result.error && isAuthRetryableFetchError(result.error)) throw result.error
+  return result
 })
 
 export type CurrentProfile = {

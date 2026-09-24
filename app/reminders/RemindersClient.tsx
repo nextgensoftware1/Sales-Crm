@@ -39,7 +39,8 @@ export default function RemindersClient({ initialData, initialMessage }: {
     setBusyId(id)
     const res = await markReminderDone(id)
     if (res.ok) {
-      setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, done: true } : r)))
+      setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, done: true, completedAt: res.completedAt ?? new Date().toISOString() } : r)))
+      window.dispatchEvent(new CustomEvent('reminders:changed'))
     } else {
       setMsg(res.message ?? 'Could not update reminder.')
     }
@@ -56,8 +57,12 @@ export default function RemindersClient({ initialData, initialMessage }: {
   const active = reminders.filter((r) => !r.done)
   const overdue = active.filter((r) => new Date(r.remindAt) < now)
   const upcoming = active.filter((r) => new Date(r.remindAt) >= now)
+  const completedOverdue = reminders.filter((r) => r.done && r.completedAt && +new Date(r.completedAt) > +new Date(r.remindAt))
+    .sort((a, b) => +new Date(b.completedAt ?? b.remindAt) - +new Date(a.completedAt ?? a.remindAt))
+  const completed = reminders.filter((r) => r.done && (!r.completedAt || +new Date(r.completedAt) <= +new Date(r.remindAt)))
+    .sort((a, b) => +new Date(b.completedAt ?? b.remindAt) - +new Date(a.completedAt ?? a.remindAt))
 
-  const renderTable = (rows: Reminder[], emptyMsg: string) => (
+  const renderTable = (rows: Reminder[], emptyMsg: string, completedView = false) => (
     rows.length === 0 ? <p className="subtle">{emptyMsg}</p> : (
       <div className="tbl-wrap">
         <table className="tbl">
@@ -68,6 +73,7 @@ export default function RemindersClient({ initialData, initialMessage }: {
               {showAgentCol && <th>Set By</th>}
               {showCompanyCol && <th>Company</th>}
               <th>Note</th>
+              {completedView && <th>Completed At</th>}
               <th></th>
             </tr>
           </thead>
@@ -85,8 +91,9 @@ export default function RemindersClient({ initialData, initialMessage }: {
                 {showAgentCol && <td>{r.agentName ?? '—'}</td>}
                 {showCompanyCol && <td>{r.companyName ?? '—'}</td>}
                 <td>{r.note ?? '—'}</td>
+                {completedView && <td style={{ fontSize: 12 }}>{r.completedAt ? new Date(r.completedAt).toLocaleString() : 'Completed previously'}</td>}
                 <td>
-                  <button
+                  {completedView ? <span className="badge badge-green">✓ Complete</span> : <button
                     onClick={() => handleDone(r.id)}
                     disabled={busyId === r.id}
                     className="lead-quickbtn"
@@ -94,7 +101,7 @@ export default function RemindersClient({ initialData, initialMessage }: {
                     title="Mark this reminder done"
                   >
                     ✓ Done
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}
@@ -116,6 +123,14 @@ export default function RemindersClient({ initialData, initialMessage }: {
       <div className="card">
         <h2 className="h-section" style={{ color: 'var(--warn)' }}>Upcoming ({upcoming.length})</h2>
         {renderTable(upcoming, 'No upcoming reminders.')}
+      </div>
+      <div className="card">
+        <h2 className="h-section" style={{ color: 'var(--ok)' }}>Completed ({completed.length})</h2>
+        {renderTable(completed, 'No completed reminders yet.', true)}
+      </div>
+      <div className="card">
+        <h2 className="h-section" style={{ color: 'var(--danger)' }}>Completed Overdue ({completedOverdue.length})</h2>
+        {renderTable(completedOverdue, 'No overdue reminders have been completed yet.', true)}
       </div>
     </div>
   )

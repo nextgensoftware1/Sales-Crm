@@ -47,6 +47,7 @@ type Props = {
   newLeadCodes?: string[]      // practices from the most recent upload batch
   workedLeadCodes?: string[]   // practices with any lead_activity entries
   viewerRole?: string
+  completedWorksheetCount?: number
 }
 
 // ---- palette (dark, matches the sample) ----
@@ -105,7 +106,7 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 type ZoneKey = typeof ZONE_KEYS[number]
 
-export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '' }: Props) {
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount }: Props) {
   const router = useRouter()
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -227,14 +228,14 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     assigned: practices.filter((p) => isSuperAdmin
       ? (p.allocatedCompanies?.length ?? 0) > 0
       : !!p.assignedAwayTo).length,
-    worked: practices.filter((p) => workedLeadSet.has(p.practiceCode)).length,
+    worked: completedWorksheetCount ?? practices.filter((p) => workedLeadSet.has(p.practiceCode)).length,
     qualified: practices.filter((p) => (p.status ?? '').toLowerCase().includes('qualif')).length,
     new: practices.filter((p) => newLeadSet.has(p.practiceCode)).length,
     followUp: practices.filter((p) => {
       const status = (p.status ?? '').toLowerCase()
       return status.includes('follow') || status.includes('call back') || status.includes('callback')
     }).length,
-  }), [practices, isSuperAdmin, workedLeadSet, newLeadSet])
+  }), [practices, isSuperAdmin, workedLeadSet, newLeadSet, completedWorksheetCount])
 
   const summaryCards = useMemo(() => {
     if (isSuperAdmin) return [

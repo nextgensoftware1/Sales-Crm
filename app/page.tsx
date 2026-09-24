@@ -209,6 +209,11 @@ export default async function Home() {
 
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
   const isCompanyAdmin = roleKey === 'company_admin'
+  // Count completed worksheets before removing them from the personal active
+  // queue. Otherwise the Worked card always drops back to zero after save.
+  const completedWorksheetCount = isAgentOrCloser
+    ? new Set(data.filter(p => p.ws_updated_by === myUserId).map(p => p.practice_code)).size
+    : undefined
   // Saving a worksheet completes the lead for that Agent/Closer. Keep it in
   // management views and Worksheet Reports, but remove it from the saver’s
   // active queue. A later assignee can still work the lead because the saved
@@ -334,6 +339,7 @@ export default async function Home() {
         newLeadCodes={Array.from(newLeadCodes)}
         workedLeadCodes={Array.from(workedLeadCodes)}
         viewerRole={roleKey}
+        completedWorksheetCount={completedWorksheetCount}
       />
     </AppShell>
   )

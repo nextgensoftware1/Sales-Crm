@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getReminders, type Reminder } from './reminders-actions'
+import { classifyReminderAttention, getReminderNotificationSlot } from '../lib/reminder-utils'
 
 // Keep the bell quiet after its first successful load. A full browser reload
 // starts a fresh cache, while route changes reuse this in-memory result.
@@ -13,8 +14,8 @@ function primeReminderCache(reminders: Reminder[]) {
   reminderCache = { reminders }
 }
 
-async function getCachedReminders(): Promise<Reminder[] | null> {
-  if (reminderCache) return reminderCache.reminders
+async function getCachedReminders(force = false): Promise<Reminder[] | null> {
+  if (!force && reminderCache) return reminderCache.reminders
   if (reminderRequest) return reminderRequest
 
   reminderRequest = getReminders()
@@ -42,13 +43,15 @@ export default function NotificationBell({ initialReminders }: { initialReminder
   const [reminders, setReminders] = useState<Reminder[]>(initialReminders ?? [])
   const [open, setOpen] = useState(false)
   const [loaded, setLoaded] = useState(initialReminders !== undefined)
+  const [clock, setClock] = useState(() => Date.now())
+  const [toast, setToast] = useState<{ reminder: Reminder; slot: string } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const loadingRef = useRef<Promise<void> | null>(null)
 
-  const load = async () => {
+  const load = async (force = false) => {
     if (loadingRef.current) return loadingRef.current
     loadingRef.current = (async () => {
-      const nextReminders = await getCachedReminders()
+      const nextReminders = await getCachedReminders(force)
       if (nextReminders) setReminders(nextReminders)
       setLoaded(true)
     })().finally(() => { loadingRef.current = null })
@@ -59,6 +62,24 @@ export default function NotificationBell({ initialReminders }: { initialReminder
     if (initialReminders !== undefined) primeReminderCache(initialReminders)
   }, [initialReminders])
 
+  // Load without waiting for the bell to be clicked, then refresh at a low
+  // frequency so newly scheduled callbacks can notify an already-open app.
+  useEffect(() => {
+    if (initialReminders === undefined) void load()
+    const poll = window.setInterval(() => { void load(true) }, 5 * 60 * 1000)
+    const tick = window.setInterval(() => setClock(Date.now()), 30 * 1000)
+    const refresh = () => { void load(true) }
+    window.addEventListener('reminders:changed', refresh)
+    return () => {
+      window.clearInterval(poll)
+      window.clearInterval(tick)
+      window.removeEventListener('reminders:changed', refresh)
+    }
+    // The loader is stable for this mounted header; interval cleanup happens
+    // when the shell unmounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Close the dropdown on an outside click.
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -68,19 +89,30 @@ export default function NotificationBell({ initialReminders }: { initialReminder
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
 
-  const now = new Date()
-  const active = reminders.filter((r) => !r.done)
-  const overdue = active.filter((r) => new Date(r.remindAt) < now).sort((a, b) => +new Date(a.remindAt) - +new Date(b.remindAt))
-  const upcoming = active.filter((r) => new Date(r.remindAt) >= now).sort((a, b) => +new Date(a.remindAt) - +new Date(b.remindAt))
+  const now = new Date(clock)
+  const { overdue, upcoming, nearDue } = useMemo(() => classifyReminderAttention(reminders, clock), [clock, reminders])
   const preview = [...overdue, ...upcoming].slice(0, 6)
-  const badgeCount = overdue.length
+  const badgeCount = overdue.length + nearDue.length
+
+  useEffect(() => {
+    const next = nearDue[0]
+    if (!next) return
+    const slot = getReminderNotificationSlot(next.remindAt, clock)
+    if (!slot) return
+    const key = `reminder-notified:${next.id}:${next.remindAt}:${slot}`
+    if (sessionStorage.getItem(key)) return
+    sessionStorage.setItem(key, '1')
+    const show = window.setTimeout(() => setToast({ reminder: next, slot }), 0)
+    const close = window.setTimeout(() => setToast(null), 12000)
+    return () => { window.clearTimeout(show); window.clearTimeout(close) }
+  }, [nearDue, clock])
 
   return (
     <div ref={boxRef} style={{ position: 'relative' }}>
       <button
         className="topbar-bell"
         onClick={() => { setOpen((v) => !v); if (!loaded) load() }}
-        aria-label={badgeCount > 0 ? `${badgeCount} overdue reminder${badgeCount === 1 ? '' : 's'}` : 'Reminders'}
+        aria-label={badgeCount > 0 ? `${badgeCount} reminder${badgeCount === 1 ? '' : 's'} due soon or overdue` : 'Reminders'}
         title="Reminders"
         type="button"
       >
@@ -95,7 +127,10 @@ export default function NotificationBell({ initialReminders }: { initialReminder
         <div className="topbar-bell-panel">
           <div className="topbar-bell-panel-head">
             Reminders
-            {overdue.length > 0 && <span className="badge badge-red">{overdue.length} overdue</span>}
+            <span style={{ display: 'flex', gap: 5 }}>
+              {nearDue.length > 0 && <span className="badge badge-amber">{nearDue.length} due soon</span>}
+              {overdue.length > 0 && <span className="badge badge-red">{overdue.length} overdue</span>}
+            </span>
           </div>
           {preview.length === 0 ? (
             <p className="subtle" style={{ padding: '12px 14px', margin: 0 }}>Nothing scheduled.</p>
@@ -127,6 +162,15 @@ export default function NotificationBell({ initialReminders }: { initialReminder
           <Link prefetch={false} href="/reminders" className="topbar-bell-viewall" onClick={() => setOpen(false)}>
             View all reminders →
           </Link>
+        </div>
+      )}
+      {toast && (
+        <div className="reminder-toast" role="status" aria-live="polite">
+          <button type="button" className="reminder-toast-close" onClick={() => setToast(null)} aria-label="Dismiss reminder">×</button>
+          <strong>{toast.slot === 'due-now' ? 'Reminder due now' : `Reminder due in ${toast.slot.replace('hour-', '')} hour${toast.slot === 'hour-1' ? '' : 's'}`}</strong>
+          <span>{toast.reminder.practiceName}</span>
+          <small>{fmtWhen(toast.reminder.remindAt)}{toast.reminder.note ? ` · ${toast.reminder.note}` : ''}</small>
+          {!toast.reminder.practiceDeleted && <Link prefetch={false} href={`/practice/${toast.reminder.practiceCode}`} onClick={() => setToast(null)}>Open lead →</Link>}
         </div>
       )}
     </div>
