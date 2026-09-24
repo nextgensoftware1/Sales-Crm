@@ -24,7 +24,7 @@ export default async function Home() {
   const myUserId = (me as any)?.id
 
   const SELECT = `
-    id, practice_code, name, state, specialty, owner_tenant_id, created_at, lead_activity(created_at),
+    id, practice_code, name, state, specialty, owner_tenant_id, created_at, ws_updated_by, lead_activity(created_at),
     ${canAssign ? 'assigned_away:lead_assignments(users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
     practice_providers (
       providers (
@@ -209,6 +209,13 @@ export default async function Home() {
 
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
   const isCompanyAdmin = roleKey === 'company_admin'
+  // Saving a worksheet completes the lead for that Agent/Closer. Keep it in
+  // management views and Worksheet Reports, but remove it from the saver’s
+  // active queue. A later assignee can still work the lead because the saved
+  // user id is compared with the current viewer rather than treated globally.
+  if (isAgentOrCloser) {
+    data = data.filter(p => p.ws_updated_by !== myUserId)
+  }
   if (!isSuperAdmin && !isAgentOrCloser && !isCompanyAdmin) {
     if (engagedElsewhere.size) {
       data = data.filter((p: any) => !engagedElsewhere.has(p.id))

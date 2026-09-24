@@ -124,7 +124,8 @@ function homeFixture(role) {
     lead_activity: id === 'p1' ? [{ created_at: '2026-09-21T01:00:00Z' }] : [],
     assigned_away: id === 'p1' ? [{ users: {full_name:'Junior',roles:{key:'agent'}} }] : [], ...extra })
   const practices = [practice('p1', 'a'), practice('p2', 'platform'), practice('p3', 'platform'),
-    practice('p4', 'a', { is_roster: true }), practice('p5', 'a')]
+    practice('p4', 'a', { is_roster: true }), practice('p5', 'a'),
+    practice('p6', 'a', { ws_updated_by: 'me' })]
   const assignment = (pid, user, tenant = 'a', by = 'boss') => ({ practice_id: pid, assigned_to: user,
     tenant_id: tenant, assigned_by: by, status: 'active', assigned_at: '2026-09-20T00:00:00Z', current_status: 'Interested',
     master_practices: { practice_code: `PR-${pid}` }, users: { full_name: 'Junior', roles: { key: 'agent' } } })
@@ -132,7 +133,7 @@ function homeFixture(role) {
     users: [me, { id: 'junior', full_name: 'Junior', tenant_id: 'a', roles: { key: 'agent', level: 4 } }],
     tenants: [{ id: 'a', name: 'A', slug: 'a', is_platform: false }],
     master_practices: practices,
-    lead_assignments: [assignment('p1', 'me'), assignment('p5', 'me'), assignment('p5', 'other', 'b'), assignment('p1', 'junior', 'a', 'me')],
+    lead_assignments: [assignment('p1', 'me'), assignment('p5', 'me'), assignment('p6', 'me'), assignment('p5', 'other', 'b'), assignment('p1', 'junior', 'a', 'me')],
     lead_allocations: [{ practice_id: 'p2', tenant_id: 'a', status: 'active', master_practices: { practice_code: 'PR-p2' }, tenants: { name: 'A' } },
       { practice_id: 'p3', tenant_id: 'b', status: 'active', master_practices: { practice_code: 'PR-p3' }, tenants: { name: 'B' } }],
     lead_transfers: [{ practice_id: 'p2', to_user_id: 'me', created_at: '2026-09-20T01:00:00Z' }],
@@ -141,9 +142,9 @@ function homeFixture(role) {
 }
 
 const expected = {
-  super_admin: ['PR-p1', 'PR-p2', 'PR-p3', 'PR-p5'],
-  company_admin: ['PR-p1', 'PR-p5', 'PR-p2'],
-  manager: ['PR-p1'], team_lead: ['PR-p1'], agent: ['PR-p1', 'PR-p5'], closer: ['PR-p1', 'PR-p2', 'PR-p5'],
+  super_admin: ['PR-p1', 'PR-p2', 'PR-p3', 'PR-p5', 'PR-p6'],
+  company_admin: ['PR-p1', 'PR-p5', 'PR-p6', 'PR-p2'],
+  manager: ['PR-p1', 'PR-p6'], team_lead: ['PR-p1', 'PR-p6'], agent: ['PR-p1', 'PR-p5'], closer: ['PR-p1', 'PR-p2', 'PR-p5'],
 }
 for (const [role, codes] of Object.entries(expected)) {
   test(`lead batching preserves ${role} scope, metadata and assignments`, async () => {
@@ -166,7 +167,7 @@ for (const [role, codes] of Object.entries(expected)) {
     if (role === 'closer') assert.equal(props.practices.find((p) => p.practiceCode === 'PR-p2').status, 'Transferred')
     if (['manager', 'team_lead', 'company_admin'].includes(role)) {
       assert.equal(props.practices.find((p) => p.practiceCode === 'PR-p1').assignedAwayTo.name, 'Junior')
-      assert.deepEqual(props.myAssignedCodes, ['PR-p1', 'PR-p5'])
+      assert.deepEqual(props.myAssignedCodes, ['PR-p1', 'PR-p5', 'PR-p6'])
     }
   })
 }

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { chunks, mapConcurrent } from './query-utils'
 
-type Lead = { id: string; practice_code: string; name: string }
+type Lead = { id: string; practice_code: string; name: string; ws_updated_by: string | null }
 type Scope = { role: string; userId: string | null; tenantId: string | null; personalIds?: string[] }
 
 // Fetch every page: PostgREST's default row cap is not a total-count API.
@@ -16,7 +16,7 @@ export async function allRows<T>(makeQuery: () => PromiseLike<{ data: T[] | null
 }
 
 export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): Promise<string[]> {
-  const projection = 'id, practice_code, name'
+  const projection = 'id, practice_code, name, ws_updated_by'
   const byIds = async (ids: string[]) => (await mapConcurrent(chunks([...new Set(ids)], 300), 4, part =>
     allRows<Lead>(() => db.from('master_practices').select(projection).in('id', part)
       .eq('is_roster', false).order('name').order('id')))).flat()
@@ -43,6 +43,9 @@ export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): P
       ids = ids.filter(id => !excluded.has(id))
     }
     leads = await byIds(ids)
+    if (scope.role === 'agent' || scope.role === 'closer') {
+      leads = leads.filter(lead => lead.ws_updated_by !== scope.userId)
+    }
   } else if (scope.role === 'company_admin' && scope.tenantId) {
     const [owned, allocations] = await Promise.all([
       allRows<Lead>(() => db.from('master_practices').select(projection)
