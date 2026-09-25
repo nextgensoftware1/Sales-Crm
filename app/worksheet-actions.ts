@@ -14,7 +14,9 @@ export type WorksheetData = {
   disposition: string
 }
 
-// Save the shared per-practice worksheet. Anyone signed in may save (latest wins).
+// Save the worksheet for the caller's company. The database function performs
+// the worksheet write, optional claim, reminder, activity and status update in
+// one transaction so two companies cannot claim the same lead concurrently.
 // Call details are required — this is the core record of what happened on the
 // call, so it can't be skipped. If a callback date is provided, also create a
 // reminder for the caller.
@@ -52,56 +54,34 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     }
   }
 
-  const callbackIso = ws.callbackAt ? new Date(ws.callbackAt).toISOString() : null
-
-  const { error } = await supabase
-    .from('master_practices')
-    .update({
-      ws_call_details: ws.callDetails || null,
-      ws_additional_phone: ws.additionalPhone || null,
-      ws_email: ws.email || null,
-      ws_concerned_person: ws.concernedPerson || null,
-      ws_direct_line: ws.directLine || null,
-      ws_callback_at: callbackIso,
-      ws_timezone: ws.timezone || null,
-      ws_disposition: ws.disposition || null,
-      ws_updated_at: new Date().toISOString(),
-      ws_updated_by: (me as any).id,
-    })
-    .eq('id', (practice as any).id)
-
-  if (error) return { ok: false, message: `Save failed: ${error.message}` }
-
-  // Save the activity in this same authenticated request. The client used to
-  // dispatch a second Server Action, repeating auth/profile/practice reads.
-  const shouldLog = !!ws.disposition && ws.disposition !== 'New'
-  const [reminderResult, activityResult] = await Promise.all([
-    callbackIso ? supabase.from('lead_reminders').insert({
-      practice_id: (practice as any).id,
-      tenant_id: (me as any).tenant_id,
-      agent_id: (me as any).id,
-      remind_at: callbackIso,
-      note: ws.disposition ? `Callback (${ws.disposition})` : 'Worksheet callback',
-    }) : Promise.resolve({ error: null }),
-    shouldLog ? supabase.from('lead_activity').insert({
-      practice_id: practice.id,
-      tenant_id: me.tenant_id,
-      agent_id: me.id,
-      type: 'call',
-      disposition: ws.disposition,
-      note: ws.callDetails,
-    }) : Promise.resolve({ error: null }),
-  ])
-  const warnings: string[] = []
-  if (reminderResult.error) warnings.push('the callback reminder could not be created')
-  if (activityResult.error) warnings.push('the activity log could not be saved')
-  if (shouldLog && !activityResult.error) {
-    const { error: statusError } = await supabase.from('lead_assignments')
-      .update({ current_status: ws.disposition, last_activity_at: new Date().toISOString() })
-      .eq('practice_id', practice.id).eq('assigned_to', me.id)
-    if (statusError) warnings.push('the assignment status could not be updated')
+  let callbackIso: string | null = null
+  if (ws.callbackAt) {
+    const parsed = new Date(ws.callbackAt)
+    if (Number.isNaN(parsed.getTime())) return { ok: false, message: 'Choose a valid callback date and time.' }
+    callbackIso = parsed.toISOString()
   }
 
-  return { ok: true, message: warnings.length
-    ? `Worksheet saved, but ${warnings.join('; ')}.` : 'Worksheet saved.' }
+  const { data, error } = await supabase.rpc('save_company_worksheet', {
+    p_practice_id: practice.id,
+    p_call_details: ws.callDetails.trim(),
+    p_additional_phone: ws.additionalPhone,
+    p_email: ws.email,
+    p_concerned_person: ws.concernedPerson,
+    p_direct_line: ws.directLine,
+    p_callback_at: callbackIso,
+    p_timezone: ws.timezone,
+    p_disposition: ws.disposition || 'New',
+  })
+
+  if (error) {
+    const claimedElsewhere = error.message.toLowerCase().includes('claimed by another company')
+    return { ok: false, message: claimedElsewhere
+      ? 'This lead was just claimed by another company. Refresh the lead list; your typed details remain on this screen.'
+      : `Save failed: ${error.message}` }
+  }
+
+  const claimed = Boolean((data as { claimed?: boolean } | null)?.claimed)
+  return { ok: true, message: claimed
+    ? 'Worksheet saved. This lead is now reserved for your company.'
+    : 'Worksheet saved.' }
 }

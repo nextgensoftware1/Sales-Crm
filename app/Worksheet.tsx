@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
 import { getClosers, transferToCloser, markAsSold } from './actions'
 
-const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow up', 'Proposal', 'Contract', 'Sold']
+const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Meeting', 'Qualified', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow Up', 'Proposal', 'Contract', 'Sold']
 const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 

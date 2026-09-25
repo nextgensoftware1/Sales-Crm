@@ -83,7 +83,15 @@ export async function assignLeadsToAgent(
     .filter((p: any) => p.owner_tenant_id === myTenantId || allocatedIds.has(p.id))
     .map((p: any) => p.id)
 
-  if (ids.length === 0) {
+  // A company cannot assign a lead after another company has claimed it.
+  const { data: activeClaims } = ids.length ? await supabase.from('lead_company_claims')
+    .select('practice_id, tenant_id').in('practice_id', ids).eq('status', 'active') : { data: [] }
+  const blockedIds = new Set((activeClaims ?? [])
+    .filter((claim: any) => claim.tenant_id !== myTenantId)
+    .map((claim: any) => claim.practice_id))
+  const assignableIds = ids.filter((id: string) => !blockedIds.has(id))
+
+  if (assignableIds.length === 0) {
     return { ok: false, message: 'None of those leads belong to your company.' }
   }
 
@@ -92,7 +100,7 @@ export async function assignLeadsToAgent(
   const { data: existingRows } = await supabase
     .from('lead_assignments')
     .select('practice_id, origin_user_id')
-    .in('practice_id', ids)
+    .in('practice_id', assignableIds)
   const originByPractice = new Map<string, string | null>()
   for (const r of (existingRows ?? []) as any[]) {
     originByPractice.set(r.practice_id, r.origin_user_id ?? null)
@@ -101,7 +109,7 @@ export async function assignLeadsToAgent(
   // 3) Upsert assignments. If a practice is already assigned to someone,
   //    re-point it to this agent (assigned_to) and keep it active.
   const now = new Date().toISOString()
-  const rows = ids.map((pid: string) => ({
+  const rows = assignableIds.map((pid: string) => ({
     practice_id: pid,
     assigned_to: agentUserId,
     assigned_by: myId,
@@ -122,5 +130,6 @@ export async function assignLeadsToAgent(
     return { ok: false, message: `Assign failed: ${error.message}` }
   }
 
-  return { ok: true, message: `Assigned ${ids.length} lead(s).`, assigned: ids.length }
+  const skipped = ids.length - assignableIds.length
+  return { ok: true, message: `Assigned ${assignableIds.length} lead(s).${skipped ? ` Skipped ${skipped} claimed by another company.` : ''}`, assigned: assignableIds.length }
 }

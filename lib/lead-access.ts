@@ -13,6 +13,12 @@ export type AuthorizedPractice = { id: string; practiceCode: string }
 
 const COMPANY_ROLES = ['company_admin', 'manager', 'team_lead']
 
+async function claimAllows(db: SupabaseClient, practiceIds: string[], tenantId: string): Promise<boolean> {
+  const { data } = await db.from('lead_company_claims').select('tenant_id')
+    .in('practice_id', practiceIds).eq('status', 'active').limit(1).maybeSingle()
+  return !data || (data as { tenant_id: string }).tenant_id === tenantId
+}
+
 async function organizationPracticeIds(db: SupabaseClient, candidates: PracticeCandidate[]): Promise<string[]> {
   const orgIds = [...new Set(candidates.flatMap((practice) =>
     (practice.practice_providers ?? []).map((link) => link.providers?.org_pac_id).filter((id): id is string => Boolean(id))
@@ -62,7 +68,7 @@ export async function authorizePractice(
       ...((assignments ?? []) as Array<{ practice_id: string }>).map((row) => row.practice_id),
       ...((transfers ?? []) as Array<{ practice_id: string }>).map((row) => row.practice_id),
     ])
-    if (allowedIds.size === 0) return null
+    if (allowedIds.size === 0 || !(await claimAllows(db, accessibleIds, profile.tenant_id))) return null
     return { id: candidates[0].id, practiceCode: candidates[0].practice_code }
   }
 
@@ -77,7 +83,8 @@ export async function authorizePractice(
       db.from('lead_allocations').select('practice_id')
         .eq('tenant_id', profile.tenant_id).eq('status', 'active').in('practice_id', accessibleIds),
     ])
-    if ((organizationOwned ?? []).length > 0 || (allocations ?? []).length > 0) {
+    if (((organizationOwned ?? []).length > 0 || (allocations ?? []).length > 0)
+        && await claimAllows(db, accessibleIds, profile.tenant_id)) {
       return { id: candidates[0].id, practiceCode: candidates[0].practice_code }
     }
   }

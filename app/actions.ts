@@ -622,7 +622,7 @@ export async function transferToCloser(
   // destroys the previous transfer record.
   const { data: previousTransfer } = await supabase.from('lead_transfers')
     .select('id, tenant_id, from_user_id, to_user_id, note')
-    .eq('practice_id', practice.id).limit(1).maybeSingle()
+    .eq('practice_id', practice.id).eq('tenant_id', me.tenant_id).limit(1).maybeSingle()
   const transferValues = {
     tenant_id: me.tenant_id,
     from_user_id: me.id,
@@ -657,7 +657,8 @@ export async function transferToCloser(
       }).eq('id', previousTransfer.id)
     } else {
       await supabase.from('lead_transfers').delete()
-        .eq('practice_id', practice.id).eq('from_user_id', me.id).eq('to_user_id', closerId)
+        .eq('practice_id', practice.id).eq('tenant_id', me.tenant_id)
+        .eq('from_user_id', me.id).eq('to_user_id', closerId)
     }
     return { ok: false, message: aErr.message }
   }
@@ -753,7 +754,19 @@ export async function markAsSold(
     note: `Sold ${serviceSold || ''} — value ${contractValue || '?'}, MRR ${mrr || '?'}. ${note || ''}`,
   })
 
-  return { ok: true, message: 'Marked as SOLD — practice is now a locked client' }
+  // Completing a sale ends this company's exclusive claim. Original Super
+  // Admin allocations remain active, so the other allocated companies can
+  // see and work the lead again while this sale remains in Sold Leads.
+  const { error: releaseError } = await supabase.rpc('release_company_claim', {
+    p_practice_id: practice.id,
+    p_status: 'sold',
+    p_reason: 'Sale completed',
+  })
+  if (releaseError) {
+    return { ok: true, message: 'Marked as SOLD, but the company claim could not be released automatically.' }
+  }
+
+  return { ok: true, message: 'Marked as SOLD. The lead is available again to its other allocated companies.' }
 }
 
 // ============================================================================

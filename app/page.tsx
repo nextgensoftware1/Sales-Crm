@@ -4,7 +4,7 @@ import PracticesTable from './PracticesTable'
 import UploadLeadsButton from './UploadLeadsButton'
 import { redirect } from 'next/navigation'
 import AppShell from './AppShell'
-import { chunks, mapConcurrent } from '../lib/query-utils'
+import { mapConcurrent } from '../lib/query-utils'
 
 export default async function Home() {
   const supabase = await createSupabaseServer()
@@ -24,7 +24,7 @@ export default async function Home() {
   const myUserId = (me as any)?.id
 
   const SELECT = `
-    id, practice_code, name, state, specialty, owner_tenant_id, created_at, ws_updated_by, lead_activity(created_at),
+    id, practice_code, name, state, specialty, owner_tenant_id, created_at, lead_activity(created_at),
     ${canAssign ? 'assigned_away:lead_assignments(users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
     practice_providers (
       providers (
@@ -78,7 +78,6 @@ export default async function Home() {
   // These reads depend only on the verified profile, not on each other.
   // Reuse assignment/allocation results instead of fetching the same rows twice.
   const assignmentScoped = ['agent', 'closer', 'manager', 'team_lead'].includes(roleKey)
-  const excludeEngagedElsewhere = ['manager', 'team_lead'].includes(roleKey)
   const empty = { data: [] }
   const assignmentsRead = Promise.resolve(assignmentScoped || canAssign ? supabase.from('lead_assignments')
     .select('practice_id, assigned_at, current_status, master_practices(practice_code)')
@@ -93,16 +92,6 @@ export default async function Home() {
   const scopedLeadRead = assignmentScoped
     ? scopeIdsRead.then(fetchByIds).then(data => ({ data, error: null }), error => ({ data: [], error }))
     : null
-  // Only these assigned practices can appear on this page. Avoid scanning
-  // every active assignment in every company to exclude engaged leads.
-  const engagedRead = excludeEngagedElsewhere && myTenantId
-    ? scopeIdsRead.then(async ids => {
-        const results = await mapConcurrent(chunks(ids, CHUNK_IDS), 4, part =>
-          supabase.from('lead_assignments').select('practice_id, tenant_id')
-            .eq('status', 'active').neq('tenant_id', myTenantId).in('practice_id', part)
-        )
-        return { data: results.flatMap(result => result.data ?? []) }
-      }) : Promise.resolve(empty)
   const readAllocations = async () => {
     const rows = []
     for (let offset = 0; ; offset += PAGE) {
@@ -118,8 +107,15 @@ export default async function Home() {
     }
   }
 
-  const [assignmentsResult, transfersResult, allocationsResult, engagedResult] = await Promise.all([
-    assignmentsRead, transfersRead, readAllocations(), engagedRead,
+  const claimsRead = !isSuperAdmin && myTenantId
+    ? supabase.from('lead_company_claims').select('practice_id, tenant_id').eq('status', 'active')
+    : Promise.resolve(empty)
+  const worksheetsRead = !isSuperAdmin && myTenantId
+    ? supabase.from('lead_worksheets').select('practice_id, updated_by, disposition, updated_at').eq('tenant_id', myTenantId)
+    : Promise.resolve(empty)
+
+  const [assignmentsResult, transfersResult, allocationsResult, claimsResult, worksheetsResult] = await Promise.all([
+    assignmentsRead, transfersRead, readAllocations(), claimsRead, worksheetsRead,
   ])
   const currentUser = me ? {
     full_name: me.full_name,
@@ -159,9 +155,13 @@ export default async function Home() {
       }
     }
   }
-  const engagedElsewhere = new Set<string>()
-  for (const a of (engagedResult.data ?? []) as any[]) {
-    if (a.tenant_id && a.tenant_id !== myTenantId) engagedElsewhere.add(a.practice_id)
+  const claimedByOtherCompany = new Set<string>()
+  for (const claim of (claimsResult.data ?? []) as any[]) {
+    if (claim.tenant_id !== myTenantId) claimedByOtherCompany.add(claim.practice_id)
+  }
+  const myWorksheetByPractice = new Map<string, any>()
+  for (const worksheet of (worksheetsResult.data ?? []) as any[]) {
+    myWorksheetByPractice.set(worksheet.practice_id, worksheet)
   }
 
   let data: any[] = []
@@ -208,25 +208,21 @@ export default async function Home() {
   }
 
   const isAgentOrCloser = roleKey === 'agent' || roleKey === 'closer'
-  const isCompanyAdmin = roleKey === 'company_admin'
+  if (!isSuperAdmin && claimedByOtherCompany.size) {
+    data = data.filter((p: any) => !claimedByOtherCompany.has(p.id))
+  }
   // Count completed worksheets before removing them from the personal active
   // queue. Otherwise the Worked card always drops back to zero after save.
   const completedWorksheetCount = isAgentOrCloser
-    ? new Set(data.filter(p => p.ws_updated_by === myUserId).map(p => p.practice_code)).size
+    ? new Set(data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by === myUserId).map(p => p.practice_code)).size
     : undefined
   // Saving a worksheet completes the lead for that Agent/Closer. Keep it in
   // management views and Worksheet Reports, but remove it from the saver’s
   // active queue. A later assignee can still work the lead because the saved
   // user id is compared with the current viewer rather than treated globally.
   if (isAgentOrCloser) {
-    data = data.filter(p => p.ws_updated_by !== myUserId)
+    data = data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by !== myUserId)
   }
-  if (!isSuperAdmin && !isAgentOrCloser && !isCompanyAdmin) {
-    if (engagedElsewhere.size) {
-      data = data.filter((p: any) => !engagedElsewhere.has(p.id))
-    }
-  }
-
   const seen = new Set<string>()
   data = data.filter((p: any) => {
     if (seen.has(p.practice_code)) return false

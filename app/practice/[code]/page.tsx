@@ -89,9 +89,6 @@ export default async function PracticeDetail({
     .select(`
       id, practice_code, name, state, city, postal, specialty, phone,
       owner_tenant_id, deleted_at,
-      ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
-      ws_direct_line, ws_callback_at, ws_timezone, ws_disposition,
-      ws_updated_at, ws_updated_by,
       practice_providers (
         providers (
           npi, name, org_name, credential, taxonomy_code, taxonomy_desc,
@@ -217,6 +214,15 @@ export default async function PracticeDetail({
 
   if (!authorized) practice = null
 
+  // A qualifying worksheet save reserves the lead for one company. Enforce
+  // that on direct URLs as well as in the lead list.
+  if (practice && !isSuperAdmin && myTenantId) {
+    const { data: activeClaim } = await supabase.from('lead_company_claims')
+      .select('tenant_id').eq('practice_id', practice.id).eq('status', 'active')
+      .limit(1).maybeSingle()
+    if (activeClaim && (activeClaim as any).tenant_id !== myTenantId) practice = null
+  }
+
   if (error || !practice) {
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
@@ -238,28 +244,34 @@ export default async function PracticeDetail({
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
 
-  const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: editor }] = await Promise.all([
+  let worksheetQuery = supabase.from('lead_worksheets').select(`
+    call_details, additional_phone, email, concerned_person, direct_line,
+    callback_at, timezone, disposition, updated_at, updated_by, users!lead_worksheets_updated_by_fkey(full_name)
+  `).eq('practice_id', practice.id).order('updated_at', { ascending: false }).limit(1)
+  if (!isSuperAdmin && myTenantId) worksheetQuery = worksheetQuery.eq('tenant_id', myTenantId)
+  let activityQuery = supabase.from('lead_activity')
+    .select('disposition, note, created_at, users(full_name)')
+    .eq('practice_id', practice.id)
+  if (!isSuperAdmin && myTenantId) activityQuery = activityQuery.eq('tenant_id', myTenantId)
+  let transferQuery = supabase.from('lead_transfers')
+    .select('to_user_id, note, created_at, users!lead_transfers_to_user_id_fkey(full_name)')
+    .eq('practice_id', practice.id)
+  if (!isSuperAdmin && myTenantId) transferQuery = transferQuery.eq('tenant_id', myTenantId)
+
+  const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: worksheetRow }] = await Promise.all([
     getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
       personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined })
       .catch(() => null),
-    supabase
-      .from('lead_activity')
-      .select('disposition, note, created_at, users(full_name)')
-      .eq('practice_id', practice.id)
-      .order('created_at', { ascending: false })
-      .limit(20),
+    activityQuery.order('created_at', { ascending: false }).limit(20),
     primaryProvider?.org_pac_id
       ? supabase
           .from('providers')
           .select('id', { count: 'exact', head: true })
           .eq('org_pac_id', primaryProvider.org_pac_id)
       : Promise.resolve({ count: null }),
-    supabase.from('lead_transfers').select('to_user_id, note, created_at, users!lead_transfers_to_user_id_fkey(full_name)')
-      .eq('practice_id', practice.id).order('created_at', { ascending: false })
+    transferQuery.order('created_at', { ascending: false })
       .limit(1).maybeSingle(),
-    pr.ws_updated_by
-      ? supabase.from('users').select('full_name').eq('id', pr.ws_updated_by).maybeSingle()
-      : Promise.resolve({ data: null }),
+    worksheetQuery.maybeSingle(),
   ])
   const codesList = navigationCodes ?? []
   const currentIndex = codesList.indexOf(code)
@@ -340,9 +352,10 @@ export default async function PracticeDetail({
   if (rosterClinicianCount === 0) rosterClinicianCount = providersList.length
 
   const zone = practice.state ? (ZONE_BY_STATE[practice.state] ?? 'Other') : null
-  const statusLabel = pr.ws_disposition || 'New'
+  const companyWorksheet = worksheetRow as any
+  const statusLabel = companyWorksheet?.disposition || 'New'
 
-  const updatedByName: string | null = editor?.full_name ?? null
+  const updatedByName: string | null = companyWorksheet?.users?.full_name ?? null
 
   // Has this lead already been transferred once? If so, the Worksheet's
   // transfer section shows that history. But whether it's actually LOCKED
@@ -373,16 +386,16 @@ export default async function PracticeDetail({
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
   const worksheetInitial = {
-    callDetails: pr.ws_call_details ?? '',
-    additionalPhone: pr.ws_additional_phone ?? '',
-    email: pr.ws_email ?? '',
-    concernedPerson: pr.ws_concerned_person ?? '',
-    directLine: pr.ws_direct_line ?? '',
-    callbackAt: toLocalInput(pr.ws_callback_at ?? null),
-    timezone: pr.ws_timezone ?? 'Eastern',
-    disposition: pr.ws_disposition ?? 'New',
+    callDetails: companyWorksheet?.call_details ?? '',
+    additionalPhone: companyWorksheet?.additional_phone ?? '',
+    email: companyWorksheet?.email ?? '',
+    concernedPerson: companyWorksheet?.concerned_person ?? '',
+    directLine: companyWorksheet?.direct_line ?? '',
+    callbackAt: toLocalInput(companyWorksheet?.callback_at ?? null),
+    timezone: companyWorksheet?.timezone ?? 'Eastern',
+    disposition: companyWorksheet?.disposition ?? 'New',
     updatedByName,
-    updatedAt: pr.ws_updated_at ?? null,
+    updatedAt: companyWorksheet?.updated_at ?? null,
   }
 
   return (

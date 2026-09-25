@@ -5,9 +5,8 @@ import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/
 // ---------------------------------------------------------------------------
 // allocatePracticesExclusive(practiceCodes, tenantSlug)
 //
-// Super Admin only. Allocates Platform-owned leads to ONE company. Exclusive:
-// if a practice is already actively allocated to a DIFFERENT company, it is
-// skipped and reported — it cannot be given to two companies at once.
+// Super Admin only. A lead may be allocated to several companies; the
+// worksheet claim decides which company may actively work it later.
 // ---------------------------------------------------------------------------
 
 export async function allocatePracticesExclusive(
@@ -47,34 +46,27 @@ export async function allocatePracticesExclusive(
   const ids = Array.from(idByCode.values())
   if (ids.length === 0) return { ok: false, message: 'No matching leads found.' }
 
-  // Which of these are already actively allocated to a DIFFERENT company?
+  // Existing rows for this company are idempotent. Allocations to other
+  // companies deliberately do not block this allocation.
   const { data: existing } = await supabase
     .from('lead_allocations')
     .select('practice_id, tenant_id')
     .in('practice_id', ids)
     .eq('status', 'active')
-  const blockedIds = new Set(
-    (existing ?? [])
-      .filter((a: any) => a.tenant_id !== targetId)
-      .map((a: any) => a.practice_id)
-  )
   const alreadyHere = new Set(
     (existing ?? [])
       .filter((a: any) => a.tenant_id === targetId)
       .map((a: any) => a.practice_id)
   )
 
-  const toAllocate = ids.filter((id) => !blockedIds.has(id) && !alreadyHere.has(id))
-  const blocked = blockedIds.size
+  const toAllocate = ids.filter((id) => !alreadyHere.has(id))
 
   if (toAllocate.length === 0) {
     return {
       ok: true,
-      message: blocked
-        ? `Nothing allocated — ${blocked} lead(s) already belong to another company.`
-        : 'Those leads are already allocated to this company.',
+      message: 'Those leads are already allocated to this company.',
       allocated: 0,
-      blocked,
+      blocked: 0,
     }
   }
 
@@ -87,14 +79,14 @@ export async function allocatePracticesExclusive(
     status: 'active',
   }))
 
-  const { error } = await supabase.from('lead_allocations').insert(rows)
+  const { error } = await supabase.from('lead_allocations')
+    .upsert(rows, { onConflict: 'practice_id,tenant_id', ignoreDuplicates: true })
   if (error) return { ok: false, message: `Allocation failed: ${error.message}` }
 
   return {
     ok: true,
-    message: `Allocated ${toAllocate.length} lead(s) to ${(target as any).name}` +
-      (blocked ? `; skipped ${blocked} already owned by another company.` : '.'),
+    message: `Allocated ${toAllocate.length} lead(s) to ${(target as any).name}.`,
     allocated: toAllocate.length,
-    blocked,
+    blocked: 0,
   }
 }

@@ -105,7 +105,11 @@ test('identity helper verifies with Auth and ignores arbitrary request headers',
 })
 
 function database(tables, calls, failures = {}) {
-  return { from(table) {
+  return { rpc(name, payload) {
+    calls.push({ table: `rpc:${name}`, operation: 'rpc', payload })
+    return Promise.resolve({ data: name === 'save_company_worksheet' ? { claimed: ['Interested','Meeting','Qualified','Follow Up','Proposal','Sold'].includes(payload.p_disposition) } : true,
+      error: failures[`rpc:${name}`] ?? null })
+  }, from(table) {
     const filters = []
     let operation = 'select', payload, single = false, range, sort, limit
     const query = {
@@ -157,13 +161,15 @@ function homeFixture(role) {
       { practice_id: 'p3', tenant_id: 'b', status: 'active', master_practices: { practice_code: 'PR-p3' }, tenants: { name: 'B' } }],
     lead_transfers: [{ practice_id: 'p2', to_user_id: 'me', created_at: '2026-09-20T01:00:00Z' }],
     lead_activity: [{ practice_id: 'p1', created_at: '2026-09-21T01:00:00Z' }],
+    lead_company_claims: [],
+    lead_worksheets: [{ practice_id: 'p6', tenant_id: 'a', updated_by: 'me', disposition: 'Interested', updated_at: '2026-09-21T02:00:00Z' }],
   } }
 }
 
 const expected = {
   super_admin: ['PR-p1', 'PR-p2', 'PR-p3', 'PR-p5', 'PR-p6'],
   company_admin: ['PR-p1', 'PR-p5', 'PR-p6', 'PR-p2'],
-  manager: ['PR-p1', 'PR-p6'], team_lead: ['PR-p1', 'PR-p6'], agent: ['PR-p1', 'PR-p5'], closer: ['PR-p1', 'PR-p2', 'PR-p5'],
+  manager: ['PR-p1', 'PR-p5', 'PR-p6'], team_lead: ['PR-p1', 'PR-p5', 'PR-p6'], agent: ['PR-p1', 'PR-p5'], closer: ['PR-p1', 'PR-p2', 'PR-p5'],
 }
 for (const [role, codes] of Object.entries(expected)) {
   test(`lead batching preserves ${role} scope, metadata and assignments`, async () => {
@@ -207,13 +213,12 @@ function loadWorksheet({ recipient = null, signedIn = true, failures = {} } = {}
   } })
   return { calls, save: actions.saveWorksheet, authCalls: () => authCalls }
 }
-test('one worksheet request logs one activity with one auth verification', async () => {
+test('one worksheet request uses one atomic RPC with one auth verification', async () => {
   const run = loadWorksheet()
   assert.equal((await run.save('PR-p1', worksheet)).ok, true)
   assert.equal(run.authCalls(), 1)
-  assert.equal(run.calls.filter((c) => c.table === 'lead_activity' && c.operation === 'insert').length, 1)
-  assert.equal(run.calls.find((c) => c.table === 'lead_activity').payload.agent_id, 'me')
-  assert.equal(run.calls.filter((c) => c.table === 'lead_reminders').length, 0)
+  assert.equal(run.calls.filter((c) => c.table === 'rpc:save_company_worksheet').length, 1)
+  assert.equal(run.calls.find((c) => c.table === 'rpc:save_company_worksheet').payload.p_disposition, 'Interested')
 })
 test('worksheet transfer lock and signed-out rejection still prevent writes', async () => {
   for (const options of [{ recipient: 'someone-else' }, { signedIn: false }]) {
@@ -222,17 +227,18 @@ test('worksheet transfer lock and signed-out rejection still prevent writes', as
     assert.equal(run.calls.filter((c) => c.operation !== 'select').length, 0)
   }
 })
-test('New disposition does not create activity; callback is created once', async () => {
+test('New disposition and callback are sent through the atomic worksheet RPC', async () => {
   const run = loadWorksheet()
   await run.save('PR-p1', { ...worksheet, disposition: 'New', callbackAt: '2026-09-22T12:00:00Z' })
-  assert.equal(run.calls.filter((c) => c.table === 'lead_activity').length, 0)
-  assert.equal(run.calls.filter((c) => c.table === 'lead_reminders').length, 1)
+  const call = run.calls.find((c) => c.table === 'rpc:save_company_worksheet')
+  assert.equal(call.payload.p_disposition, 'New')
+  assert.equal(call.payload.p_callback_at, '2026-09-22T12:00:00.000Z')
 })
-test('activity failure is reported and does not write a misleading assignment status', async () => {
-  const run = loadWorksheet({ failures: { 'lead_activity:insert': { message: 'unavailable' } } })
+test('atomic worksheet failure is reported without partial client writes', async () => {
+  const run = loadWorksheet({ failures: { 'rpc:save_company_worksheet': { message: 'unavailable' } } })
   const result = await run.save('PR-p1', worksheet)
-  assert.match(result.message, /activity log could not be saved/)
-  assert.equal(run.calls.filter((c) => c.table === 'lead_assignments' && c.operation === 'update').length, 0)
+  assert.match(result.message, /Save failed: unavailable/)
+  assert.equal(run.calls.filter((c) => c.operation === 'update' || c.operation === 'insert').length, 0)
 })
 
 for (const [role, assigned, transferred, allowed] of [
@@ -289,8 +295,8 @@ for (const [role, expectedScope] of [['super_admin', 'all'], ['manager', 'compan
 test('roster gets editor names without a separate users query', async () => {
   const calls = []
   const db = database({ master_practices: [
-    {practice_code:'PR-1',users:{full_name:'Editor'}}, {practice_code:'PR-2',users:null},
-  ] }, calls)
+    {id:'p1',practice_code:'PR-1'}, {id:'p2',practice_code:'PR-2'},
+  ], lead_worksheets: [{practice_id:'p1',updated_at:'2026-09-22',users:{full_name:'Editor'}}] }, calls)
   db.rpc = async () => ({ data: [
     {npi:'1',org_pac_id:'org',org_name:'Organization',is_clicked:true},
     {npi:'2',org_pac_id:'org',org_name:'Organization',is_clicked:false},
@@ -300,7 +306,7 @@ test('roster gets editor names without a separate users query', async () => {
   assert.equal(result.hasOrg,true)
   assert.equal(result.members[0].workedBy,'Editor')
   assert.equal(result.members[1].workedBy,null)
-  assert.deepEqual(calls.map(c=>c.table),['master_practices'])
+  assert.deepEqual(calls.map(c=>c.table),['master_practices','lead_worksheets'])
 })
 
 for (const [role, expectedCodes] of Object.entries(expected)) {

@@ -73,12 +73,16 @@ export async function getTransfers(): Promise<{
   ].filter(Boolean)))
   const tenantIds = Array.from(new Set(rows.map((r: any) => r.tenant_id).filter(Boolean)))
 
-  const [{ data: practices }, { data: users }, { data: tenantRows }] = await Promise.all([
+  let worksheetQ = supabase.from('lead_worksheets').select(`
+    practice_id, tenant_id, call_details, additional_phone, email,
+    concerned_person, direct_line, timezone, disposition, updated_at
+  `).in('practice_id', practiceIds)
+  if (!isSuperAdmin) worksheetQ = worksheetQ.eq('tenant_id', myTenantId)
+
+  const [{ data: practices }, { data: users }, { data: tenantRows }, { data: worksheets }] = await Promise.all([
     practiceIds.length
       ? supabase.from('master_practices').select(`
           id, practice_code, name, state, specialty, is_roster,
-          ws_call_details, ws_additional_phone, ws_email, ws_concerned_person,
-          ws_direct_line, ws_timezone, ws_disposition, ws_updated_at,
           practice_providers ( providers ( org_name ) )
         `).in('id', practiceIds)
       : Promise.resolve({ data: [] }),
@@ -88,6 +92,7 @@ export async function getTransfers(): Promise<{
     isSuperAdmin ? Promise.resolve({ data: companyTenants ?? [] }) : isAgentOrCloser && tenantIds.length
       ? supabase.from('tenants').select('id, name').in('id', tenantIds)
       : Promise.resolve({ data: [] }),
+    worksheetQ,
   ])
 
   const practiceById: Record<string, any> = {}
@@ -98,10 +103,15 @@ export async function getTransfers(): Promise<{
 
   const nameByTenantId: Record<string, string> = {}
   for (const t of (tenantRows ?? []) as any[]) nameByTenantId[t.id] = t.name
+  const worksheetByKey = new Map<string, any>()
+  for (const worksheet of (worksheets ?? []) as any[]) {
+    worksheetByKey.set(`${worksheet.practice_id}:${worksheet.tenant_id}`, worksheet)
+  }
 
   const transfers: Transfer[] = rows
     .map((r: any) => {
       const p = practiceById[r.practice_id]
+      const worksheet = worksheetByKey.get(`${r.practice_id}:${r.tenant_id}`)
       if (!p) {
         return {
           id: r.id,
@@ -135,14 +145,14 @@ export async function getTransfers(): Promise<{
         handoffStatus: r.note ?? null,
         createdAt: r.created_at ?? null,
         practiceDeleted: false,
-        wsCallDetails: p.ws_call_details ?? null,
-        wsAdditionalPhone: p.ws_additional_phone ?? null,
-        wsEmail: p.ws_email ?? null,
-        wsConcernedPerson: p.ws_concerned_person ?? null,
-        wsDirectLine: p.ws_direct_line ?? null,
-        wsTimezone: p.ws_timezone ?? null,
-        wsDisposition: p.ws_disposition ?? null,
-        wsUpdatedAt: p.ws_updated_at ?? null,
+        wsCallDetails: worksheet?.call_details ?? null,
+        wsAdditionalPhone: worksheet?.additional_phone ?? null,
+        wsEmail: worksheet?.email ?? null,
+        wsConcernedPerson: worksheet?.concerned_person ?? null,
+        wsDirectLine: worksheet?.direct_line ?? null,
+        wsTimezone: worksheet?.timezone ?? null,
+        wsDisposition: worksheet?.disposition ?? null,
+        wsUpdatedAt: worksheet?.updated_at ?? null,
       }
     })
 
