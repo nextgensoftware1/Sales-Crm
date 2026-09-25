@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
 
@@ -451,6 +452,82 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
   return (
     <div className="leads-engine" style={{ color: C.text, fontFamily: 'var(--font-sans), ui-sans-serif, system-ui, sans-serif' }}>
+      <div className="lead-engine-workspace">
+        <aside className="lead-engine-subnav" aria-label="Lead views and timezone filters">
+          <div className="lead-engine-subnav-head">
+            <span className="lead-engine-subnav-kicker">Workspace</span>
+            <h2>Leads</h2>
+            <p>Find the right queue quickly.</p>
+          </div>
+
+          <label className="lead-engine-subnav-search">
+            <Search size={15} strokeWidth={2} aria-hidden="true" />
+            <input
+              aria-label="Search leads from sidebar"
+              placeholder="Search leads…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+
+          <div className="lead-engine-subnav-tabs" aria-label="Lead status views">
+            {([
+              { key: 'All Leads', label: 'All', count: practices.length, icon: Inbox },
+              { key: 'New Leads', label: 'New', count: newLeadSet.size, icon: Sparkles },
+              { key: 'Worked Leads', label: 'Worked', count: workedLeadSet.size, icon: TimerReset },
+            ] as const).map((item) => {
+              const Icon = item.icon
+              const active = poolTab === item.key
+              return (
+                <button
+                  type="button"
+                  key={item.key}
+                  className={active ? 'active' : ''}
+                  aria-pressed={active}
+                  onClick={() => setPoolTab(item.key)}
+                >
+                  <Icon size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>{item.label}</span>
+                  <strong>{item.count}</strong>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="lead-engine-subnav-section">
+            <div className="lead-engine-subnav-label">
+              <span>Timezone queues</span>
+              {zoneFilter && <button type="button" onClick={() => setZoneFilter('')}>Clear</button>}
+            </div>
+            <div className="lead-engine-zone-list">
+              {ZONE_KEYS.map((zone) => {
+                const active = zoneFilter === zone
+                const count = zoneCounts[zone]
+                return (
+                  <button
+                    type="button"
+                    key={zone}
+                    className={active ? 'active' : ''}
+                    aria-pressed={active}
+                    disabled={count === 0 && !active}
+                    onClick={() => setZoneFilter(active ? '' : zone)}
+                  >
+                    <span className="lead-engine-zone-dot" aria-hidden="true" />
+                    <span>{zone === 'Other' ? 'Other zones' : `${zone} zone`}</span>
+                    <strong>{count}</strong>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="lead-engine-subnav-tip">
+            <strong>Quick tip</strong>
+            <span>Choose a queue here, then refine it with the filters beside it.</span>
+          </div>
+        </aside>
+
+        <div className="lead-engine-stage">
       <section className="lead-summary-grid" aria-label="Lead pool summary">
         {summaryCards.map((item) => (
           <div className={`lead-summary-card tone-${item.tone}`} key={item.label}>
@@ -468,7 +545,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
           <div style={{ minWidth: 0 }}>
             <h2 className="leads-section-title">Leads Distribution Console</h2>
-            <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Select an agent/closer and timezone counts to assign and export leads from the main pool.</div>
+            <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Choose assignment details here. Use the workspace sidebar for search, status queues, and timezones.</div>
           </div>
           {/* <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
@@ -476,28 +553,6 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             ))}
             <SampleTag />
           </div> */}
-        </div>
-        <div className="grid-zones" style={{ marginBottom: 14 }}>
-          {ZONE_KEYS.map((z) => {
-            const active = zoneFilter === z
-            const empty = zoneCounts[z] === 0
-            return (
-            <button
-              key={z}
-              type="button"
-              className={`zone-filter-card${active ? ' active' : ''}`}
-              aria-pressed={active}
-              aria-label={`${active ? 'Clear' : 'Filter by'} ${z} zone, ${zoneCounts[z]} lead${zoneCounts[z] === 1 ? '' : 's'}`}
-              disabled={empty && !active}
-              onClick={() => setZoneFilter(active ? '' : z)}
-            >
-              <span className="zone-filter-head">
-                <span style={{ letterSpacing: 0.5, fontWeight: 700 }}>{z} ZONE</span>
-                <span className="zone-filter-count">{zoneCounts[z]}</span>
-              </span>
-              <span className="zone-filter-value">{zoneCounts[z]}</span>
-            </button>
-          )})}
         </div>
         <div className="grid-console">
           {!isSuperAdmin && (
@@ -530,18 +585,6 @@ export default function PracticesTable({ practices, companies: initialCompanies 
         <div>
           <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filtered.length} leads)</span></h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {(['All Leads', 'New Leads', 'Worked Leads'] as const).map((t) => {
-            let count: number | null = null
-            if (t === 'New Leads')    count = newLeadSet.size
-            if (t === 'Worked Leads') count = workedLeadSet.size
-            return (
-              <button type="button" aria-pressed={poolTab === t} key={t} onClick={() => setPoolTab(t)} style={{ ...pill(poolTab === t), cursor: 'pointer' }}>
-                {t}{count !== null ? ` (${count})` : ''}
-              </button>
-            )
-          })}
         </div>
         {hasPriority && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -583,13 +626,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       <section style={{ ...panel, marginBottom: 14 }}>
         <div className="filter-section-head">
           <div>
-            <h2 className="leads-section-title">Find Leads</h2>
-            <p>Search the pool and narrow results with the most-used filters.</p>
+            <h2 className="leads-section-title">Refine Leads</h2>
+            <p>Narrow the selected queue by state, specialty, disposition, or advanced criteria.</p>
           </div>
           <span className="filter-result-count">{filtered.length} result{filtered.length === 1 ? '' : 's'}</span>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label className="filter-control filter-search"><span>Search</span><input aria-label="Search practices" placeholder="Practice name or ID…" value={search} onChange={(e) => setSearch(e.target.value)} style={input} /></label>
+        <div className="quick-filter-row">
           <label className="filter-control"><span>State</span><select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -856,6 +898,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           >
             Next
           </button>
+        </div>
+      </div>
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/
 
 export type Reminder = {
   id: string
+  companyId: string | null
   practiceCode: string | null
   practiceName: string
   remindAt: string
@@ -81,6 +82,7 @@ export async function getReminders(): Promise<{
     const p = r.master_practices
     return {
       id: r.id,
+      companyId: r.tenant_id ?? null,
       practiceCode: p?.practice_code ?? null,
       practiceName: p?.name ?? '(deleted lead)',
       remindAt: r.remind_at,

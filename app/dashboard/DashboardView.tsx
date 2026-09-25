@@ -71,7 +71,7 @@ export default function DashboardView(p: Props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         {/* ---- Hero stats: the headline numbers, given real visual weight
              instead of sitting equal-sized next to nine other cards ---- */}
-        <div className="hero-stats-row">
+        <div className="hero-stats-row page-anchor" id="overview">
           <HeroStat label="Total Contract Value" value={money(p.totalValue)} sub="All-time · not scoped to the date range yet" accent="var(--accent)" />
           <div className="hero-stats-divider" />
           <HeroStat label="Activities Logged" value={p.activityCount} sub="Outbound dialing activity, in range" accent="var(--c-calls)" />
@@ -88,7 +88,7 @@ export default function DashboardView(p: Props) {
         </div>
 
         {/* ---- Charts row ---- */}
-        <div className="grid-dash-a">
+        <div className="grid-dash-a page-anchor" id="pipeline">
           {/* Conversion funnel (REAL) */}
           <Panel title="Conversion funnel" subtitle="Activities → transfers → sales">
             <SalesFunnel rows={funnel} />
@@ -99,13 +99,13 @@ export default function DashboardView(p: Props) {
           </Panel>
         </div>
 
-        <div className="kpi-cards-grid kpi-cards-grid-secondary dashboard-secondary">
+        <div className="kpi-cards-grid kpi-cards-grid-secondary dashboard-secondary page-anchor" id="revenue">
           <Kpi label="Total MRR" value={money(p.totalMrr)} sub="All-time · not scoped to the date range yet" color="calls" icon={<IconTrendingUp />} />
           <Kpi label="Total Incentives Paid" value={money(0)} sub="Agent commissions calculated" color="incentives" icon={<IconWallet />} sample />
         </div>
 
         {/* ---- Ratios + incentive splits ---- */}
-        <div className="grid-dash-b">
+        <div className="grid-dash-b page-anchor" id="conversion">
           {/* Conversion ratios (REAL from funnel) */}
           <Panel title="Conversion ratios" subtitle="Lead progression efficiency">
             {[

@@ -19,7 +19,8 @@ export type WorksheetData = {
 // one transaction so two companies cannot claim the same lead concurrently.
 // Call details are required — this is the core record of what happened on the
 // call, so it can't be skipped. If a callback date is provided, also create a
-// reminder for the caller.
+// reminder for the caller. The database reminder trigger updates the existing
+// incomplete reminder for this company/lead instead of creating duplicates.
 export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Promise<{ ok: boolean; message: string }> {
   if (!ws.callDetails || !ws.callDetails.trim()) {
     return { ok: false, message: 'Call details are required before saving.' }

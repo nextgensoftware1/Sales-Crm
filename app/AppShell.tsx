@@ -8,6 +8,11 @@ import ThemeToggle from './ThemeToggle'
 import SignOutButton from './SignOutButton'
 import NotificationBell from './NotificationBell'
 import type { Reminder } from './reminders-actions'
+import {
+  Activity, AlertTriangle, BadgeDollarSign, BarChart3, Building2, CalendarClock,
+  ChartNoAxesCombined, CircleCheckBig, FileCheck2, FileText, Gauge, History,
+  ListChecks, RotateCcw, ShieldCheck, UserRoundCheck, UsersRound,
+} from 'lucide-react'
 
 // Hand-authored, stroke-based icons (matches the style already used
 // elsewhere in this app, e.g. DashboardView's icon set) rather than adding
@@ -30,6 +35,7 @@ const IconReport = () => <svg {...iconProps}><path d="M15 2H6a2 2 0 0 0-2 2v16a2
 type NavItem = { href: string; label: string; icon: React.ReactNode; admin?: boolean }
 const NAV: NavItem[] = [
   { href: '/',              label: 'Leads Engine',   icon: <IconLeads /> },
+  { href: '/assignments',   label: 'Assigned Leads', icon: <UsersRound aria-hidden="true" /> },
   { href: '/dashboard',     label: 'Dashboard',      icon: <IconDashboard /> },
   { href: '/reminders',     label: 'My Reminders',   icon: <IconClock /> },
   { href: '/clients',       label: 'Active Clients', icon: <IconUsers /> },
@@ -43,6 +49,77 @@ const NAV: NavItem[] = [
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: <IconTrash />, admin: true },
 ]
 
+type ContextItem = { href: string; label: string; description: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }
+type ContextNav = { kicker: string; title: string; description: string; items: ContextItem[] }
+const CONTEXT_NAV: Record<string, ContextNav> = {
+  '/dashboard': {
+    kicker: 'Analytics', title: 'Dashboard', description: 'Move through the key performance views.',
+    items: [
+      { href: '/dashboard#overview', label: 'Overview', description: 'Headline KPIs', icon: Gauge },
+      { href: '/dashboard#pipeline', label: 'Pipeline', description: 'Funnel and outcomes', icon: ChartNoAxesCombined },
+      { href: '/dashboard#conversion', label: 'Conversion', description: 'Progression ratios', icon: Activity },
+      { href: '/dashboard#revenue', label: 'Revenue', description: 'MRR and incentives', icon: BadgeDollarSign },
+    ],
+  },
+  '/reminders': {
+    kicker: 'Follow-ups', title: 'Reminders', description: 'Jump directly to the queue that needs attention.',
+    items: [
+      { href: '/reminders#overdue', label: 'Overdue', description: 'Needs attention now', icon: AlertTriangle },
+      { href: '/reminders#upcoming', label: 'Upcoming', description: 'Scheduled callbacks', icon: CalendarClock },
+      { href: '/reminders#completed', label: 'Completed', description: 'Finished on time', icon: CircleCheckBig },
+      { href: '/reminders#completed-overdue', label: 'Completed overdue', description: 'Finished after due time', icon: History },
+    ],
+  },
+  '/clients': {
+    kicker: 'Relationships', title: 'Clients', description: 'Review active and completed customer work.',
+    items: [
+      { href: '/clients', label: 'Active clients', description: 'Current ownership', icon: UserRoundCheck },
+      { href: '/sold-leads', label: 'Sold leads', description: 'Completed sales', icon: BadgeDollarSign },
+      { href: '/transfers', label: 'Transfers', description: 'Qualified handoffs', icon: FileCheck2 },
+    ],
+  },
+  '/sold-leads': {
+    kicker: 'Revenue', title: 'Sales', description: 'Review closed work and related client records.',
+    items: [
+      { href: '/sold-leads', label: 'Closed sales', description: 'Contract details', icon: BadgeDollarSign },
+      { href: '/clients', label: 'Active clients', description: 'Current ownership', icon: UserRoundCheck },
+      { href: '/dashboard', label: 'Performance', description: 'Sales analytics', icon: BarChart3 },
+    ],
+  },
+  '/transfers': {
+    kicker: 'Handoffs', title: 'Transfers', description: 'Track qualified leads across the closing workflow.',
+    items: [
+      { href: '/transfers', label: 'Transfer queue', description: 'Current handoffs', icon: FileCheck2 },
+      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved call context', icon: FileText },
+      { href: '/clients', label: 'Active clients', description: 'Converted accounts', icon: UserRoundCheck },
+    ],
+  },
+  '/worksheet-reports': {
+    kicker: 'Reporting', title: 'Worksheets', description: 'Review the latest saved call details.',
+    items: [
+      { href: '/worksheet-reports', label: 'Saved worksheets', description: 'Latest per lead', icon: FileText },
+      { href: '/', label: 'Leads Engine', description: 'Return to lead work', icon: ListChecks },
+      { href: '/reminders', label: 'Reminders', description: 'Follow-up schedule', icon: CalendarClock },
+    ],
+  },
+  '/admin': {
+    kicker: 'Management', title: 'Administration', description: 'Manage access, teams, and platform records.',
+    items: [
+      { href: '/admin', label: 'Companies & users', description: 'Accounts and roles', icon: Building2 },
+      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Team activity', icon: FileText },
+      { href: '/deleted-leads', label: 'Deleted leads', description: 'Recovery and cleanup', icon: RotateCcw },
+    ],
+  },
+  '/deleted-leads': {
+    kicker: 'Recovery', title: 'Deleted leads', description: 'Restore records or complete permanent cleanup.',
+    items: [
+      { href: '/deleted-leads', label: 'Recovery queue', description: 'Soft-deleted leads', icon: RotateCcw },
+      { href: '/', label: 'Leads Engine', description: 'Active lead pool', icon: ListChecks },
+      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved activity', icon: ShieldCheck },
+    ],
+  },
+}
+
 // First letter of the first two words, e.g. "Hired Billing Support" -> "HB".
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -52,7 +129,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, initialReminders,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, contextExtra = null, initialReminders,
 }: {
   title: string
   subtitle?: string
@@ -63,6 +140,7 @@ export default function AppShell({
   showTransfers?: boolean
   canManageUsers?: boolean
   headerRight?: React.ReactNode
+  contextExtra?: React.ReactNode
   initialReminders?: Reminder[]
 }) {
   // Deleted Leads is Super Admin only. Admin (user management) is visible to
@@ -83,8 +161,13 @@ export default function AppShell({
   const mainItems = items.filter((n) => !n.admin || (n.href === '/worksheet-reports' && !hasManagementAccess))
   const adminItems = items.filter((n) => n.admin && (n.href !== '/worksheet-reports' || hasManagementAccess))
   const [menuOpen, setMenuOpen] = useState(false)
-  const [sidebarExpanded, setSidebarExpanded] = useState(true)
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const pathname = usePathname()
+  const rawContextNav = CONTEXT_NAV[active]
+  const contextNav = rawContextNav ? {
+    ...rawContextNav,
+    items: rawContextNav.items.filter((item) => item.href !== '/deleted-leads' || showAdmin),
+  } : undefined
 
   // Close the mobile drawer whenever the route changes (adjust state during
   // render rather than in an effect, per React's guidance for derived state).
@@ -96,12 +179,24 @@ export default function AppShell({
 
   // Prevent background scroll while the mobile drawer is open.
   useEffect(() => {
+    setSidebarExpanded(window.localStorage.getItem('hbs-sidebar-expanded') === 'true')
+  }, [])
+
+  useEffect(() => {
     if (menuOpen) {
       const prev = document.body.style.overflow
       document.body.style.overflow = 'hidden'
       return () => { document.body.style.overflow = prev }
     }
   }, [menuOpen])
+
+  const toggleSidebar = () => {
+    setSidebarExpanded((expanded) => {
+      const next = !expanded
+      window.localStorage.setItem('hbs-sidebar-expanded', String(next))
+      return next
+    })
+  }
 
   return (
     <div className={'app-shell' + (sidebarExpanded ? '' : ' sidebar-collapsed')}>
@@ -126,7 +221,7 @@ export default function AppShell({
         </div>
         <nav className="sidebar-nav">
           {mainItems.map((n) => (
-            <Link key={n.href} href={n.href} className={'nav-item' + (active === n.href ? ' active' : '')} title={n.label}>
+            <Link key={n.href} href={n.href} data-label={n.label} className={'nav-item' + (active === n.href ? ' active' : '')} title={n.label}>
               <span className="ico">{n.icon}</span><span className="nav-label">{n.label}</span>
             </Link>
           ))}
@@ -134,7 +229,7 @@ export default function AppShell({
             <>
               <div className="nav-section-label">Admin</div>
               {adminItems.map((n) => (
-                <Link key={n.href} href={n.href} className={'nav-item' + (active === n.href ? ' active' : '')} title={n.label}>
+                <Link key={n.href} href={n.href} data-label={n.label} className={'nav-item' + (active === n.href ? ' active' : '')} title={n.label}>
                   <span className="ico">{n.icon}</span><span className="nav-label">{n.label}</span>
                 </Link>
               ))}
@@ -167,7 +262,7 @@ export default function AppShell({
             </button>
             <button
               className="desktop-collapse"
-              onClick={() => setSidebarExpanded((v) => !v)}
+              onClick={toggleSidebar}
               aria-label={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
               title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
               type="button"
@@ -195,7 +290,39 @@ export default function AppShell({
             <SignOutButton variant="icon" />
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className={'content' + (contextNav ? ' has-context-nav' : '')}>
+          {contextNav ? (
+            <div className="page-context-workspace">
+              <aside className="page-context-nav" aria-label={`${contextNav.title} navigation`}>
+                <div className="page-context-head">
+                  <span>{contextNav.kicker}</span>
+                  <h2>{contextNav.title}</h2>
+                  <p>{contextNav.description}</p>
+                </div>
+                {contextExtra}
+                <nav>
+                  {contextNav.items.map((item, index) => {
+                    const itemPath = item.href.split('#')[0]
+                    const selected = index === 0 && itemPath === active
+                    const ItemIcon = item.icon
+                    return (
+                      <Link key={item.href} href={item.href} className={selected ? 'active' : ''}>
+                        <span className="page-context-icon" aria-hidden="true"><ItemIcon size={16} strokeWidth={2} /></span>
+                        <span><strong>{item.label}</strong><small>{item.description}</small></span>
+                        <span className="page-context-arrow" aria-hidden="true">›</span>
+                      </Link>
+                    )
+                  })}
+                </nav>
+                <div className="page-context-help">
+                  <strong>Workspace guide</strong>
+                  <span>Use these shortcuts to move through this workflow without losing context.</span>
+                </div>
+              </aside>
+              <div className="page-context-stage">{children}</div>
+            </div>
+          ) : children}
+        </main>
       </div>
     </div>
   )

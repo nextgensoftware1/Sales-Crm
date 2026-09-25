@@ -555,7 +555,7 @@ export async function setReminder(
   })
   if (error) return { ok: false, message: error.message }
 
-  return { ok: true, message: 'Reminder set' }
+  return { ok: true, message: 'Follow-up scheduled. Any previous incomplete reminder for this lead was updated.' }
 }
 
 // List closers in the current user's company (for the transfer dropdown),

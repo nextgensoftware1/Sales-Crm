@@ -4,6 +4,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AssignmentsClient from './AssignmentsClient'
+import CompanyAllocationsClient from './CompanyAllocationsClient'
 
 export default async function ManageAssignmentsPage() {
 
@@ -25,10 +26,10 @@ export default async function ManageAssignmentsPage() {
 
   return (
     <AppShell
-      title="Manage Assignments"
-      subtitle="Leads you assigned. Remove one to send it back to the unassigned pool."
+      title="Assigned Leads"
+      subtitle={isSuperAdmin ? 'Review leads successfully allocated to each company.' : 'Review leads assigned to your team.'}
       currentUser={currentUser}
-      active="/dashboard"
+      active="/assignments"
       showAdmin={isSuperAdmin}
       showTransfers={showTransfers}
       canManageUsers={canManageUsers}
@@ -36,7 +37,7 @@ export default async function ManageAssignmentsPage() {
         <Link prefetch={false} href="/dashboard" className="btn" style={{ textDecoration: 'none' }}>← Back to dashboard</Link>
       }
     >
-      <AssignmentsClient />
+      {isSuperAdmin ? <CompanyAllocationsClient /> : <AssignmentsClient />}
     </AppShell>
   )
 }

@@ -127,7 +127,7 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
   letter-spacing: 0.1em; margin-top: 2px; white-space: normal; text-transform: uppercase; }
 .sidebar-close { display: none; background: none; border: none; color: var(--sidebar-ink-dim);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 4px; flex-shrink: 0; }
-.sidebar-nav { padding: 24px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-y: auto; min-height: 0; }
+.sidebar-nav { padding: 24px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-x: hidden; overflow-y: auto; min-height: 0; }
 .nav-item { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 14px; border-radius: 0;
   color: var(--sidebar-ink); text-decoration: none; font-size: 13.5px; font-weight: 600;
   position: relative; overflow: hidden; transition: background .15s, color .15s; }
@@ -233,6 +233,7 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
   .app-shell.sidebar-collapsed .sidebar-user-text { display: none; }
   .app-shell.sidebar-collapsed .sidebar-signout { justify-content: center; gap: 0; padding: 14px 0; }
   .app-shell.sidebar-collapsed .sidebar-signout span { display: none; }
+  .app-shell.sidebar-collapsed .nav-section-label { height: 1px; margin: 9px 13px; padding: 0; overflow: hidden; color: transparent; background: var(--sidebar-border); }
 }
 
 /* ---- Responsive: tablet & mobile ---- */
@@ -419,7 +420,7 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 @media (max-width: 900px) { .grid-zones { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .grid-zones { grid-template-columns: repeat(2, 1fr); } }
 
-.grid-console { display: grid; grid-template-columns: 2fr 1.4fr 1fr; gap: 10px; min-width: 0; }
+.grid-console { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; min-width: 0; }
 .grid-console > * { min-width: 0; }
 @media (max-width: 720px) { .grid-console { grid-template-columns: 1fr; } }
 

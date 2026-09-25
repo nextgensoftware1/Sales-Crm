@@ -2,6 +2,7 @@
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { roleLabel } from '../lib/roles'
+import { allRows } from '../lib/practice-navigation'
 
 // ---------------------------------------------------------------------------
 // Manage the assignments I personally made (assigned_by = me).
@@ -52,6 +53,81 @@ export async function getMyIncomingCodes(): Promise<string[]> {
 }
 
 const CAN_MANAGE = ['company_admin', 'manager', 'team_lead']
+
+export async function getCompanyAllocationSummary(): Promise<{
+  ok: boolean
+  message?: string
+  companies?: { id: string; name: string; count: number }[]
+}> {
+  const supabase = await createSupabaseServer()
+  const me = await whoAmI()
+  if (!me) return { ok: false, message: 'Not signed in.' }
+  if (me.roleKey !== 'super_admin') return { ok: false, message: 'Only Super Admin can view company allocations.' }
+
+  const { data: tenants, error: tenantError } = await supabase
+    .from('tenants')
+    .select('id, name')
+    .eq('is_platform', false)
+    .eq('status', 'active')
+    .order('name')
+  if (tenantError) return { ok: false, message: tenantError.message }
+
+  let allocations: Array<{ tenant_id: string }>
+  try {
+    allocations = await allRows<{ tenant_id: string }>(() => supabase
+      .from('lead_allocations')
+      .select('tenant_id')
+      .eq('status', 'active')
+      .order('tenant_id'))
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Could not load company allocation totals.' }
+  }
+
+  const counts = new Map<string, number>()
+  for (const allocation of allocations ?? []) {
+    counts.set(allocation.tenant_id, (counts.get(allocation.tenant_id) ?? 0) + 1)
+  }
+
+  return {
+    ok: true,
+    companies: (tenants ?? []).map((tenant) => ({ id: tenant.id, name: tenant.name, count: counts.get(tenant.id) ?? 0 })),
+  }
+}
+
+export async function getCompanyAllocatedLeads(companyId: string): Promise<{
+  ok: boolean
+  message?: string
+  leads?: { practiceCode: string; name: string; state: string | null; specialty: string | null; allocatedAt: string; status: string }[]
+}> {
+  const supabase = await createSupabaseServer()
+  const me = await whoAmI()
+  if (!me) return { ok: false, message: 'Not signed in.' }
+  if (me.roleKey !== 'super_admin') return { ok: false, message: 'Only Super Admin can view company allocations.' }
+  if (!companyId) return { ok: false, message: 'Choose a company.' }
+
+  let data: any[]
+  try {
+    data = await allRows<any>(() => supabase
+      .from('lead_allocations')
+      .select('allocated_at, status, master_practices(practice_code, name, state, specialty)')
+      .eq('tenant_id', companyId)
+      .eq('status', 'active')
+      .order('allocated_at', { ascending: false }))
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Could not load allocated leads.' }
+  }
+
+  const leads = (data ?? []).map((row: any) => ({
+    practiceCode: row.master_practices?.practice_code,
+    name: row.master_practices?.name ?? 'Unnamed practice',
+    state: row.master_practices?.state ?? null,
+    specialty: row.master_practices?.specialty ?? null,
+    allocatedAt: row.allocated_at,
+    status: row.status,
+  })).filter((lead) => lead.practiceCode)
+
+  return { ok: true, leads }
+}
 
 // People I assigned leads to, with a count.
 export async function getMyAssignmentSummary(): Promise<{
