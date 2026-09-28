@@ -1,32 +1,94 @@
 'use client'
 
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, type KeyboardEvent } from 'react'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 
 const PAGE_SIZE = 10
+
+type SelectedSheetCell = {
+  rowId: string
+  rowNumber: number
+  column: string
+  value: string
+  company: string
+  agent: string
+  practice: string
+  practiceCode: string
+}
 
 function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
   const imported = rows.filter(row => row.importData)
   const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
   const [query, setQuery] = useState('')
+  const [selectedCell, setSelectedCell] = useState<SelectedSheetCell | null>(null)
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return imported
     return imported.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
       ...Object.values(row.importData ?? {})].some(value => String(value ?? '').toLowerCase().includes(needle)))
   }, [imported, query])
+
+  const selectCell = (row: WorksheetReportRow, rowNumber: number, column: string, rawValue: string | null | undefined) => {
+    setSelectedCell({
+      rowId: row.practiceId,
+      rowNumber,
+      column,
+      value: rawValue == null || rawValue === '' ? '—' : String(rawValue),
+      company: row.companyName ?? '—',
+      agent: row.filledBy ?? '—',
+      practice: row.practiceName || '—',
+      practiceCode: row.practiceCode || '—',
+    })
+  }
+
+  const selectableCellProps = (row: WorksheetReportRow, rowNumber: number, column: string, value: string | null | undefined) => ({
+    role: 'button' as const,
+    tabIndex: 0,
+    'aria-label': `View full ${column} value for row ${rowNumber}`,
+    onClick: () => selectCell(row, rowNumber, column, value),
+    onKeyDown: (event: KeyboardEvent<HTMLTableCellElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        selectCell(row, rowNumber, column, value)
+      }
+    },
+  })
+
   if (!imported.length) return <div className="sheet-empty">No imported worksheet rows are available.</div>
   return <div className="worksheet-sheet">
     <div className="sheet-toolbar">
       <div><strong>Imported worksheet data</strong><span>{visible.length} of {imported.length} rows · {columns.length} source columns</span></div>
       <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search every column…" /></label>
     </div>
+    <div className={`sheet-cell-inspector${selectedCell ? ' is-active' : ''}`} aria-live="polite">
+      {selectedCell ? <>
+        <div className="sheet-cell-inspector-head">
+          <div>
+            <span className="sheet-cell-address">Row {selectedCell.rowNumber}</span>
+            <strong>{selectedCell.column}</strong>
+          </div>
+          <button type="button" className="sheet-cell-close" onClick={() => setSelectedCell(null)} aria-label="Close cell details">×</button>
+        </div>
+        <div className="sheet-cell-context">
+          <span><small>Company</small>{selectedCell.company}</span>
+          <span><small>Worksheet agent</small>{selectedCell.agent}</span>
+          <span><small>Practice</small>{selectedCell.practice}</span>
+          <span><small>Practice ID</small>{selectedCell.practiceCode}</span>
+        </div>
+        <div className="sheet-cell-value"><small>Complete cell value</small><div>{selectedCell.value}</div></div>
+      </> : <div className="sheet-cell-hint"><strong>Cell details</strong><span>Select any spreadsheet cell to see its complete value and row information.</span></div>}
+    </div>
     <div className="sheet-grid-wrap">
       <table className="sheet-grid">
         <thead><tr><th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
         <tbody>{visible.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
-          <th className="sheet-row-number">{index + 1}</th><td className="sheet-frozen"><strong>{row.companyName ?? '—'}</strong></td><td>{row.filledBy ?? '—'}</td>
-          {columns.map(column => <td key={column} title={row.importData?.[column] || ''}>{row.importData?.[column] || '—'}</td>)}
+          <th className="sheet-row-number">{index + 1}</th>
+          <td className={`sheet-frozen${selectedCell?.rowId === row.practiceId && selectedCell.column === 'Company' ? ' is-selected' : ''}`} {...selectableCellProps(row, index + 1, 'Company', row.companyName)}><strong>{row.companyName ?? '—'}</strong></td>
+          <td className={selectedCell?.rowId === row.practiceId && selectedCell.column === 'Worksheet agent' ? 'is-selected' : ''} {...selectableCellProps(row, index + 1, 'Worksheet agent', row.filledBy)}>{row.filledBy ?? '—'}</td>
+          {columns.map(column => {
+            const value = row.importData?.[column]
+            return <td key={column} className={selectedCell?.rowId === row.practiceId && selectedCell.column === column ? 'is-selected' : ''} {...selectableCellProps(row, index + 1, column, value)}>{value || '—'}</td>
+          })}
         </tr>)}</tbody>
       </table>
     </div>
