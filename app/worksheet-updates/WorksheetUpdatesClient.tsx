@@ -56,9 +56,13 @@ export default function WorksheetUpdatesClient({ rows, showCompany, truncated }:
               <td>{new Date(row.createdAt).toLocaleString()}</td>
             </tr>
             {open && <tr className="worksheet-update-details-row"><td></td><td colSpan={showCompany ? 5 : 4}>
-              <div className="worksheet-change-grid">{Object.entries(row.changedFields).map(([field, change]) => <div key={field} className="worksheet-change-item">
-                <strong>{field}</strong><div><span>Updated value</span><p>{change.after || '—'}</p></div>
-              </div>)}</div>
+              <div className="worksheet-change-grid">{Object.entries(row.changedFields).map(([field, change]) => {
+                const longValue = change.after.length > 120 || /note|detail|comment|address|description/i.test(field)
+                return <div key={field} className={`worksheet-change-item${longValue ? ' is-long' : ''}`}>
+                  <div className="worksheet-change-head"><strong>{field}</strong><span>Updated</span></div>
+                  <div className="worksheet-change-value"><p>{change.after || '—'}</p></div>
+                </div>
+              })}</div>
             </td></tr>}
           </Fragment>
         })}</tbody>

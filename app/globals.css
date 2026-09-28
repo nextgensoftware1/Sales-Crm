@@ -368,20 +368,27 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 .worksheet-updates-toolbar .input { width:220px; height:34px; font-size:11px; }
 .worksheet-updates-toolbar select.input { width:180px; }
 .worksheet-updates-table td { vertical-align:middle; }
+.worksheet-updates-table th,.worksheet-updates-table td { padding-left:14px; padding-right:14px; }
+.worksheet-updates-table th:first-child,.worksheet-updates-table td:first-child { width:46px; padding-left:12px; padding-right:6px; text-align:center; }
+.worksheet-updates-table th:last-child,.worksheet-updates-table td:last-child { min-width:165px; white-space:nowrap; }
 .worksheet-updates-table td>a { color:inherit; text-decoration:none; }
 .worksheet-updates-table td>a:hover strong { color:var(--accent-strong); text-decoration:underline; text-underline-offset:2px; }
 .worksheet-updates-table td>a .subtle { display:block; margin-top:2px; font-size:10px; }
 .worksheet-updates-table .report-row-toggle { transition:transform .15s ease; }
 .worksheet-updates-table .report-row-toggle[aria-expanded="true"] { transform:rotate(90deg); }
 .worksheet-update-details-row>td { padding:0!important; background:var(--surface-2)!important; }
-.worksheet-change-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; padding:12px; }
+.worksheet-change-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; gap:12px; padding:14px; }
 .worksheet-change-item { min-width:0; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
-.worksheet-change-item>strong { display:block; padding:7px 9px; border-bottom:1px solid var(--border); color:var(--ink-strong); font-size:11px; }
-.worksheet-change-item>div { display:grid; grid-template-columns:92px minmax(0,1fr); gap:8px; padding:9px; background:rgba(var(--accent-rgb),.045); }
-.worksheet-change-item span { color:var(--muted); font-size:8.5px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
-.worksheet-change-item p { margin:0; color:var(--ink); font:500 11px/1.45 var(--font-mono),monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.worksheet-change-item.is-long,.worksheet-change-item:only-child { grid-column:1 / -1; }
+.worksheet-change-head { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:38px; padding:8px 11px; border-bottom:1px solid var(--border); background:linear-gradient(180deg,var(--surface),var(--surface-2)); }
+.worksheet-change-head strong { color:var(--ink-strong); font-size:11.5px; }
+.worksheet-change-head span { flex:none; padding:3px 7px; border-radius:999px; background:rgba(var(--accent-rgb),.1); color:var(--accent-strong); font-size:8px; font-weight:850; text-transform:uppercase; letter-spacing:.05em; }
+.worksheet-change-value { padding:10px 11px; background:rgba(var(--accent-rgb),.025); }
+.worksheet-change-item.is-long .worksheet-change-value { max-height:330px; overflow:auto; padding:13px 15px; scrollbar-width:thin; }
+.worksheet-change-item p { margin:0; color:var(--ink); font:500 11.5px/1.65 var(--font-mono),monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.worksheet-change-item.is-long p { max-width:110ch; font-family:var(--font-sans),sans-serif; font-size:12px; line-height:1.7; }
 @media(max-width:1050px){.worksheet-change-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:800px){.worksheet-updates-toolbar{align-items:stretch;flex-direction:column}.worksheet-updates-toolbar .input,.worksheet-updates-toolbar select.input{width:100%}.worksheet-change-grid{grid-template-columns:1fr}.worksheet-change-item>div{grid-template-columns:1fr}.worksheet-change-item span{margin-bottom:-3px}}
+@media(max-width:800px){.worksheet-updates-toolbar{align-items:stretch;flex-direction:column}.worksheet-updates-toolbar .input,.worksheet-updates-toolbar select.input{width:100%}.worksheet-change-grid{grid-template-columns:1fr;padding:10px}.worksheet-change-item.is-long .worksheet-change-value{max-height:280px}.worksheet-updates-table th,.worksheet-updates-table td{padding-left:10px;padding-right:10px}}
 
 /* Theme toggle button */
 .theme-toggle { background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
