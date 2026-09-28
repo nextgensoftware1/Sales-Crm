@@ -10,6 +10,7 @@ export type WorksheetReportRow = {
   directLine: string | null; callbackAt: string | null; timezone: string | null
   disposition: string | null; lastUpdatedBy: string | null; lastUpdatedAt: string | null
   handoffStatus: string | null
+  importData: Record<string, string> | null
 }
 
 export type WorksheetReportsResult =
@@ -36,7 +37,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   let query = supabase.from('lead_worksheets').select(`
     practice_id, tenant_id, call_details, additional_phone, email,
     concerned_person, direct_line, callback_at, timezone, disposition,
-    updated_by, updated_at,
+    updated_by, updated_at, import_data,
     users!lead_worksheets_updated_by_fkey(full_name, tenants(name)),
     master_practices!inner(
       practice_code, name, state, specialty, deleted_at,
@@ -89,6 +90,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       lastUpdatedBy: editor?.full_name ?? null,
       lastUpdatedAt: worksheet.updated_at,
       handoffStatus: transfer?.note ?? null,
+      importData: worksheet.import_data && typeof worksheet.import_data === 'object' ? worksheet.import_data : null,
     }
   })
 

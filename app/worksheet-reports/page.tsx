@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import WorksheetReportsClient from './WorksheetReportsClient'
 import { getWorksheetReports } from '../worksheet-reports-actions'
+import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
 
 export default async function WorksheetReportsPage() {
 
@@ -51,6 +52,7 @@ export default async function WorksheetReportsPage() {
       active="/worksheet-reports"
       showAdmin={isSuperAdmin}
       canManageUsers={canManageUsers}
+      headerRight={isSuperAdmin ? <UploadWorksheetCsvButton /> : null}
     >
       <div className="card">
         {worksheetReports.ok ? (

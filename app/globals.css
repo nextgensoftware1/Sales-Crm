@@ -261,6 +261,53 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
   .content { padding: 16px; }
 }
 
+/* 2026 CRM workspace polish: shared density and hierarchy across every route. */
+:root { --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px; }
+[data-theme="light"] { --bg: #f7fafc; --surface-2: #f3f7fa; --border: #dce7ee; --border-dim: #cfdee7; --accent: #00aa8d; --accent-dark: #008f78; --accent-rgb: 0,170,141; --row-hover: #f1fbf8; }
+.sidebar { width: 208px; background: linear-gradient(180deg,#031d2a 0%,#061724 100%); }
+.main-col { margin-left: 208px; }
+.sidebar-brand { height: 60px; padding: 0 14px; }
+.sidebar-nav { padding: 14px 8px; gap: 3px; }
+.nav-item { height: 40px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; }
+.nav-item.active { background: rgba(0,196,164,.16); color: #63f0d5; }
+.nav-item.active::before { top: 7px; bottom: 7px; width: 3px; border-radius: 0 3px 3px 0; background: #00c7a5; }
+.topbar { min-height: 52px; padding: 7px 18px; box-shadow: 0 2px 10px rgba(14,47,64,.04); }
+.topbar-context { font-size: 11.5px; }
+.content { padding: 18px 22px 28px; }
+.page-heading { margin-bottom: 14px; }
+.page-heading h1 { font-size: 25px; line-height: 1.1; }
+.page-heading p { font-size: 12px; margin-top: 3px; }
+.card,.kpi,.kpi-card { border-radius: 10px; box-shadow: 0 4px 18px rgba(26,69,89,.045); }
+.card { padding: 16px; }
+.btn,.input,.theme-toggle,.topbar-bell,.topbar-avatar,.desktop-collapse,.menu-toggle { border-radius: 7px; }
+.tbl { font-size: 11.5px; }
+.tbl th { height: 36px; padding: 8px 10px; background: #edf8f7; color: #28536b; font-size: 10px; letter-spacing: .025em; }
+.tbl td { padding: 9px 10px; }
+@media (min-width:901px){.app-shell.sidebar-collapsed .sidebar{width:56px}.app-shell.sidebar-collapsed .main-col{margin-left:56px}}
+
+/* Worksheet Reports: dense CRM report plus a true spreadsheet surface. */
+.report-commandbar { display:flex; align-items:center; gap:12px; justify-content:space-between; flex-wrap:wrap; margin-bottom:6px; }
+.report-commandbar>div:first-child span { display:block; color:var(--muted); font-size:11px; margin-top:2px; }
+.view-switch { display:inline-flex; padding:3px; gap:2px; border:1px solid var(--border); background:var(--surface-2); border-radius:8px; }
+.view-switch button { border:0; background:transparent; color:var(--muted); padding:6px 10px; border-radius:6px; font-size:11.5px; font-weight:700; cursor:pointer; }
+.view-switch button.active { background:var(--surface); color:var(--accent-dark); box-shadow:0 1px 4px rgba(15,45,60,.12); }
+.worksheet-sheet { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); }
+.sheet-toolbar { min-height:54px; padding:9px 12px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--border); background:linear-gradient(180deg,var(--surface),var(--surface-2)); }
+.sheet-toolbar strong { display:block; color:var(--ink-strong); font-size:13px; }
+.sheet-toolbar>div span { display:block; color:var(--muted); font-size:10.5px; margin-top:2px; }
+.sheet-search { display:flex; align-items:center; gap:6px; width:min(300px,100%); height:32px; padding:0 9px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--muted); }
+.sheet-search input { min-width:0; width:100%; border:0; outline:0; background:transparent; color:var(--ink); font:inherit; font-size:11.5px; }
+.sheet-grid-wrap { width:100%; overflow:auto; max-height:68vh; scrollbar-width:thin; }
+.sheet-grid { border-collapse:separate; border-spacing:0; min-width:max-content; width:100%; font-size:11px; }
+.sheet-grid th,.sheet-grid td { height:34px; max-width:260px; padding:7px 10px; border-right:1px solid var(--border); border-bottom:1px solid var(--border); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
+.sheet-grid thead th { position:sticky; top:0; z-index:3; background:#e8f6f5; color:#17465e; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; }
+.sheet-grid tbody tr:nth-child(even) td,.sheet-grid tbody tr:nth-child(even) th { background:rgba(var(--accent-rgb),.025); }
+.sheet-grid tbody tr:hover td { background:var(--row-hover); }
+.sheet-row-number { position:sticky!important; left:0; z-index:4!important; width:44px; min-width:44px; text-align:center!important; color:var(--muted)!important; background:var(--surface-2)!important; }
+.sheet-frozen { position:sticky; left:44px; z-index:2; min-width:150px; background:var(--surface); box-shadow:1px 0 0 var(--border); }
+.sheet-empty { padding:36px; text-align:center; color:var(--muted); border:1px dashed var(--border); border-radius:10px; }
+@media(max-width:900px){.main-col{margin-left:0}.sheet-toolbar{align-items:stretch;flex-direction:column}.sheet-search{width:100%}}
+
 /* Theme toggle button */
 .theme-toggle { background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
   border-radius: 0; padding: 7px 12px; font-size: 13px; cursor: pointer; }

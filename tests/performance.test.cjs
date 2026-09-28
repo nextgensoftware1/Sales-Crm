@@ -29,6 +29,28 @@ function loadTs(file, mocks = {}) {
 
 const { mapConcurrent, chunks } = loadTs('lib/query-utils.ts')
 const { classifyReminderAttention, getReminderNotificationSlot } = loadTs('lib/reminder-utils.ts')
+const { parseCsv } = loadTs('lib/csv.ts')
+const { normalizeWorksheetImportRows } = loadTs('lib/worksheet-import.ts')
+test('worksheet CSV import preserves source columns and normalizes identity fields', () => {
+  const source = '\uFEFFCompany Name,Agent Name ,T-Z,NPI,Follow up,Latest call,Notes,Provider\'s Name,Custom Field\r\n"A1 Healthcare"," Subhan ",EST,1234567890,9/24/2026,9/23/2026,"Called, follow up",Dr Test,keep me\r\n'
+  const parsed = parseCsv(source)
+  const result = normalizeWorksheetImportRows(parsed)
+  assert.deepEqual(result.errors, [])
+  assert.equal(result.rows[0].company_name, 'A1 Healthcare')
+  assert.equal(result.rows[0].agent_name, 'Subhan')
+  assert.equal(result.rows[0].timezone, 'Eastern')
+  assert.equal(result.rows[0].callback_date, '2026-09-24')
+  assert.equal(result.rows[0].notes, 'Called, follow up')
+  assert.equal(result.rows[0].raw_data['Custom Field'], 'keep me')
+})
+
+test('worksheet CSV validation rejects the whole file for invalid rows and duplicates', () => {
+  const rows = parseCsv('Company Name,Agent Name,NPI,Notes\nA,User,1234567890,ok\nA,User,1234567890,ok\nA,,bad,\n')
+  const result = normalizeWorksheetImportRows(rows)
+  assert.ok(result.errors.some(error => /duplicate/.test(error)))
+  assert.ok(result.errors.some(error => /Agent Name/.test(error)))
+  assert.ok(result.errors.some(error => /exactly 10 digits/.test(error)))
+})
 test('database batches preserve order and bound concurrent work', async () => {
   let active = 0, peak = 0
   const result = await mapConcurrent([0, 1, 2, 3, 4, 5], 2, async (n) => {

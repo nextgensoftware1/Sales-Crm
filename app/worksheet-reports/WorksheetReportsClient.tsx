@@ -5,6 +5,34 @@ import type { WorksheetReportRow } from '../worksheet-reports-actions'
 
 const PAGE_SIZE = 10
 
+function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
+  const imported = rows.filter(row => row.importData)
+  const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
+  const [query, setQuery] = useState('')
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return imported
+    return imported.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
+      ...Object.values(row.importData ?? {})].some(value => String(value ?? '').toLowerCase().includes(needle)))
+  }, [imported, query])
+  if (!imported.length) return <div className="sheet-empty">No imported worksheet rows are available.</div>
+  return <div className="worksheet-sheet">
+    <div className="sheet-toolbar">
+      <div><strong>Imported worksheet data</strong><span>{visible.length} of {imported.length} rows · {columns.length} source columns</span></div>
+      <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search every column…" /></label>
+    </div>
+    <div className="sheet-grid-wrap">
+      <table className="sheet-grid">
+        <thead><tr><th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <tbody>{visible.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
+          <th className="sheet-row-number">{index + 1}</th><td className="sheet-frozen"><strong>{row.companyName ?? '—'}</strong></td><td>{row.filledBy ?? '—'}</td>
+          {columns.map(column => <td key={column} title={row.importData?.[column] || ''}>{row.importData?.[column] || '—'}</td>)}
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </div>
+}
+
 function fmtDate(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -103,6 +131,14 @@ function ReportTable({
                               <div style={{ fontSize: 12.5 }}>{r.handoffStatus}</div>
                             </div>
                           )}
+                          {r.importData && (
+                            <div style={{ gridColumn: '1 / -1' }}>
+                              <div className="subtle" style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', marginBottom: 6 }}>Imported CSV fields</div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '6px 14px' }}>
+                                {Object.entries(r.importData).map(([label, value]) => <div key={label} style={{ fontSize: 12 }}><strong>{label}:</strong> {value || '—'}</div>)}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -175,6 +211,7 @@ export default function WorksheetReportsClient({
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [companyFilter, setCompanyFilter] = useState<string>('__all__')
+  const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
@@ -202,11 +239,16 @@ export default function WorksheetReportsClient({
 
   const companyNames = useMemo(() => groups.map(([name]) => name), [groups])
   const visibleGroups = companyFilter === '__all__' ? groups : groups.filter(([name]) => name === companyFilter)
+  const filteredRows = companyFilter === '__all__' ? rows : rows.filter(row => row.companyName === companyFilter)
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
-        <h2 className="h-section" style={{ margin: 0 }}>Worksheet Reports ({rows.length}{truncated ? '+' : ''})</h2>
+      <div className="report-commandbar">
+        <div><h2 className="h-section" style={{ margin: 0 }}>Worksheet Reports</h2><span>{rows.length}{truncated ? '+' : ''} saved worksheets</span></div>
+        <div className="view-switch" role="group" aria-label="Worksheet report view">
+          <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Report view</button>
+          <button className={view === 'sheet' ? 'active' : ''} onClick={() => setView('sheet')}>Spreadsheet view</button>
+        </div>
         {scope === 'all' && companyNames.length > 1 && (
           <select className="input" style={{ width: 'auto', fontSize: 12 }} value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
             <option value="__all__">All companies ({companyNames.length})</option>
@@ -228,7 +270,7 @@ export default function WorksheetReportsClient({
         </p>
       )}
 
-      {rows.length === 0 ? (
+      {view === 'sheet' ? <ImportedSheet rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : scope === 'all' ? (
         visibleGroups.map(([company, companyRows], i) => (
