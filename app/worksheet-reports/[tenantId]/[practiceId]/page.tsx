@@ -20,10 +20,12 @@ export default async function ImportedWorksheetPage({
   const canManageUsers = ['super_admin', 'company_admin', 'manager', 'team_lead'].includes(roleKey)
   const currentUser = me ? { full_name: me.full_name, role: roleLabel(roleKey), company: me.tenants?.name ?? '' } : null
   const result = await getWorksheetReportDetail(tenantId, practiceId)
+  const providerName = result.ok ? result.row.providerName ?? result.row.practiceName : null
+  const npi = result.ok ? result.row.practiceCode.replace(/^PR-/, '') : null
 
   return <AppShell
     title="Imported Worksheet"
-    subtitle={result.ok ? `${result.row.practiceName} · ${result.row.practiceCode}` : 'Worksheet details'}
+    subtitle={result.ok ? `${providerName} · NPI ${npi}` : 'Worksheet details'}
     currentUser={currentUser}
     active="/worksheet-reports"
     showAdmin={isSuperAdmin}
@@ -40,8 +42,8 @@ export default async function ImportedWorksheetPage({
         </Link>
         <div>
           <div className="worksheet-detail-title-row">
-            <h1>{result.row.practiceName}</h1>
-            <span className="lead-code">{result.row.practiceCode}</span>
+            <h1>{providerName}</h1>
+            <span className="lead-code">NPI {npi}</span>
             <span className="badge badge-blue">Imported worksheet</span>
           </div>
           <p>{[result.row.companyName, result.row.state, result.row.specialty].filter(Boolean).join(' · ')}</p>

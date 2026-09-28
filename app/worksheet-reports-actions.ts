@@ -3,7 +3,7 @@
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 
 export type WorksheetReportRow = {
-  practiceId: string; tenantId: string; practiceCode: string; practiceName: string; orgName: string | null
+  practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null
   state: string | null; specialty: string | null; companyName: string | null
   filledBy: string | null; assignedCloser: string | null; callDetails: string | null
   additionalPhone: string | null; email: string | null; concernedPerson: string | null
@@ -16,6 +16,16 @@ export type WorksheetReportRow = {
 export type WorksheetReportsResult =
   | { ok: true; scope: 'all' | 'company' | 'personal'; companyName: string | null; rows: WorksheetReportRow[]; truncated: boolean }
   | { ok: false; message: string }
+
+function getImportedProviderName(importData: Record<string, unknown> | null) {
+  if (!importData) return null
+  const entry = Object.entries(importData).find(([label]) => {
+    const normalized = label.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ')
+    return /^(provider'?s? name|nppes name|practice name|name)$/.test(normalized)
+  })
+  const name = String(entry?.[1] ?? '').trim()
+  return name && !/^Practice\s*\(/i.test(name) ? name : null
+}
 
 const REPORT_LIMIT = 300
 
@@ -39,7 +49,7 @@ type RawWorksheet = {
     name: string
     state: string | null
     specialty: string | null
-    practice_providers: Array<{ providers: { org_name: string | null } | null }>
+    practice_providers: Array<{ providers: { name: string | null; org_name: string | null } | null }>
   }
 }
 
@@ -73,7 +83,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     users!lead_worksheets_updated_by_fkey(full_name, tenants(name)),
     master_practices!inner(
       practice_code, name, state, specialty, deleted_at,
-      practice_providers(providers(org_name))
+      practice_providers(providers(name, org_name))
     )
   `).is('master_practices.deleted_at', null)
     .order('updated_at', { ascending: false }).limit(REPORT_LIMIT + 1)
@@ -101,12 +111,14 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     const practice = worksheet.master_practices
     const transfer = transferByKey.get(`${worksheet.practice_id}:${worksheet.tenant_id}`)
     const editor = worksheet.users
+    const provider = practice.practice_providers?.[0]?.providers
     return {
       practiceId: worksheet.practice_id,
       tenantId: worksheet.tenant_id,
       practiceCode: practice.practice_code,
       practiceName: practice.name,
-      orgName: practice.practice_providers?.[0]?.providers?.org_name ?? null,
+      providerName: getImportedProviderName(worksheet.import_data) ?? worksheet.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
+      orgName: provider?.org_name ?? null,
       state: practice.state,
       specialty: practice.specialty,
       companyName: worksheet.tenants?.name ?? editor?.tenants?.name ?? (isSuperAdmin ? 'Unknown company' : me.tenants?.name ?? null),
@@ -160,7 +172,7 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     users!lead_worksheets_updated_by_fkey(full_name, tenants(name)),
     master_practices!inner(
       practice_code, name, state, specialty, deleted_at,
-      practice_providers(providers(org_name))
+      practice_providers(providers(name, org_name))
     )
   `).eq('tenant_id', tenantId).eq('practice_id', practiceId).is('master_practices.deleted_at', null)
   if (roleKey === 'agent' || roleKey === 'closer') query = query.eq('updated_by', me.id)
@@ -174,12 +186,14 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     return { ok: false, message: 'This is not an uploaded worksheet.' }
   }
   const practice = item.master_practices
+  const provider = practice.practice_providers?.[0]?.providers
   return { ok: true, row: {
     practiceId: item.practice_id,
     tenantId: item.tenant_id,
     practiceCode: practice.practice_code,
     practiceName: practice.name,
-    orgName: practice.practice_providers?.[0]?.providers?.org_name ?? null,
+    providerName: getImportedProviderName(item.import_data) ?? item.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
+    orgName: provider?.org_name ?? null,
     state: practice.state,
     specialty: practice.specialty,
     companyName: item.tenants?.name ?? item.users?.tenants?.name ?? me.tenants?.name ?? null,

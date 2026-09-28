@@ -114,9 +114,9 @@ function ReportTable({
                     </td>
                     <td>
                       <strong>{r.importData
-                        ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.practiceName}</Link>
+                        ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.providerName ?? r.practiceName}</Link>
                         : r.practiceName}</strong>
-                      <div className="subtle mono" style={{ fontSize: 10.5 }}>{r.practiceCode}{r.orgName ? ` · ${r.orgName}` : ''}</div>
+                      <div className="subtle mono" style={{ fontSize: 10.5 }}>{r.importData ? `NPI ${r.practiceCode.replace(/^PR-/, '')}` : r.practiceCode}</div>
                     </td>
                     {showCompanyColumn && <td>{r.companyName ?? '—'}</td>}
                     <td>{r.state ?? '—'}</td>
