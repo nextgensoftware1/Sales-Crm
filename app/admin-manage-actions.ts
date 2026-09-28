@@ -236,9 +236,10 @@ export async function deleteCompany(tenantId: string): Promise<{ ok: boolean; me
 
   let removedUsers = 0
   let deletedLogins = 0
+  let removedRecords = 0
   const failed = (message: string) => ({ ok: false, message: message +
-    (removedUsers || deletedLogins
-      ? ' Deletion is incomplete: ' + removedUsers + ' user profiles and ' + deletedLogins + ' logins were removed. Refresh and retry after resolving the error.'
+    (removedUsers || deletedLogins || removedRecords
+      ? ' Deletion is incomplete: ' + removedRecords + ' business record(s), ' + removedUsers + ' user profiles, and ' + deletedLogins + ' logins were removed. Refresh and retry after resolving the error.'
       : ' Nothing was deleted.') })
   try {
     const admin = createSupabaseAdmin()
@@ -270,6 +271,50 @@ export async function deleteCompany(tenantId: string): Promise<{ ok: boolean; me
       if (error) return failed(error.message)
       if (data?.length) return failed('A company user shares a login with another profile.')
     }
+    // Remove this company's own business data before deleting its users.
+    // Several tables record who did something via a user-id column that
+    // has no ON DELETE rule (confirmed for lead_assignments — the exact
+    // error this fixes — and for lead_company_claims.claimed_by/
+    // released_by and lead_worksheets.updated_by, per their migration;
+    // the rest were created directly in Supabase without a checked-in
+    // migration, so the same pattern is assumed rather than risked).
+    // Scoped strictly to tenant_id/owner_tenant_id = this company, so it
+    // only ever touches this company's own records.
+    // Deliberately NOT deleting master_practices/providers this company
+    // OWNS (as opposed to having users) — those may be allocated to and
+    // actively worked by a different company, so removing them is a
+    // separate, bigger decision, not bundled into this fix.
+    const tenantScopedTables = [
+      'lead_activity', 'lead_reminders', 'lead_transfers', 'lead_assignments',
+      'lead_worksheets', 'lead_company_claims', 'lead_allocations', 'sales',
+    ] as const
+    for (const table of tenantScopedTables) {
+      const { count, error } = await admin.from(table).delete({ count: 'exact' }).eq('tenant_id', tenantId)
+      if (error) return failed(`Could not remove ${table} records: ${error.message}`)
+      removedRecords += count ?? 0
+    }
+    {
+      const { count, error } = await admin.from('client_ownership').delete({ count: 'exact' }).eq('owner_tenant_id', tenantId)
+      if (error) return failed('Could not remove client_ownership records: ' + error.message)
+      removedRecords += count ?? 0
+    }
+    // Safety net: clear the audit-trail reference on any practice one of
+    // this company's members happened to soft-delete, or whose legacy
+    // (pre-lead_worksheets) ws_updated_by still points at them — both are
+    // nullable columns; neither touches the practice itself, which may
+    // belong to a different company entirely.
+    if (members.length > 0) {
+      const memberIds = members.map(member => member.id)
+      const { error: deletedByError } = await admin.from('master_practices')
+        .update({ deleted_by: null })
+        .in('deleted_by', memberIds)
+      if (deletedByError) return failed('Could not clear deleted-by references: ' + deletedByError.message)
+      const { error: wsUpdatedByError } = await admin.from('master_practices')
+        .update({ ws_updated_by: null })
+        .in('ws_updated_by', memberIds)
+      if (wsUpdatedByError) return failed('Could not clear legacy worksheet references: ' + wsUpdatedByError.message)
+    }
+
     for (const member of members) {
       // Recheck membership before using the privileged Auth API.
       const { data: current, error: readError } = await admin.from('users')

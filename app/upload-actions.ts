@@ -241,6 +241,7 @@
 'use server'
 
 import { createSupabaseServer } from '../lib/supabase-server'
+import { mapConcurrent } from '../lib/query-utils'
 
 type CsvRow = Record<string, string>
 
@@ -342,13 +343,119 @@ export async function uploadLeadsCsv(
     return npi ? !existingNpis.has(npi) : true
   })
   const skipped = allCodes.length - toInsert.length
+
+  // Re-uploading a lead you already have is normally a no-op — except when
+  // NPPES has since matched an NPI that previously had no match (or is
+  // simply fresher data). That row now carries real enrichment data worth
+  // keeping, so its descriptive fields are refreshed instead of the row
+  // being silently discarded. Rows without a "Found" match (e.g. still
+  // "NPPES - Not Found", which per the source data carries no other
+  // populated fields anyway) are left alone, unchanged from before.
+  // Ownership/structural fields — org_pac_id, is_anchor, owner_tenant_id,
+  // num_org_members, pecos_asct_cntl_id, enrlmt_id — are deliberately NOT
+  // touched here: this only refreshes descriptive data, it never
+  // reclassifies or reassigns an existing lead.
+  const isNppesFound = (row: CsvRow) => {
+    const v = col(row, 'Record_Source').toLowerCase()
+    return v.includes('found') && !v.includes('not found')
+  }
+  const toInsertSet = new Set(toInsert)
+  const codesToEnrich = allCodes.filter((c) => !toInsertSet.has(c) && isNppesFound(byCode.get(c)!))
+
+  let enrichedCount = 0
+  let enrichError: string | null = null
+  const notMatchedCodes: string[] = []
+  if (codesToEnrich.length > 0) {
+    await mapConcurrent(codesToEnrich, 4, async (code) => {
+      if (enrichError) return // one failure is enough to report; stop piling on more work
+      const row = byCode.get(code)!
+      const npi = clean(row[npiKey])
+      const enrichment: Record<string, string> = {
+        name: col(row, 'NPPES_Name') || col(row, 'Name') || '',
+        state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || '',
+        city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || '',
+        postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || '',
+        taxonomy_desc: col(row, 'NPPES_PrimaryTaxonomyDesc') || col(row, 'NPPES_Taxonomy_Desc') || col(row, 'Specialty') || '',
+        phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || '',
+        nppes_sex: col(row, 'NPPES_Sex') || '',
+        nppes_last_updated: col(row, 'NPPES_LastUpdated') || '',
+        payment_adj_pct: col(row, 'Payment_Adj_%') || col(row, 'Payment_Adj_Pct') || col(row, 'Payment Adjustment Percentage') || '',
+        at_risk: col(row, 'At_Risk') || '',
+        penalty: col(row, 'Panelty') || col(row, 'Penalty') || '',
+        status: col(row, 'NPPES_Status') || '',
+        taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || '',
+        mailing_phone: col(row, 'NPPES_MailingPhone') || col(row, 'NPPES_ContactPhone') || '',
+        entity_type: col(row, 'NPPES_EnumerationType') || '',
+        enumeration_date: col(row, 'NPPES_EnumerationDate') || '',
+        record_source: col(row, 'Record_Source') || '',
+      }
+      // Only patch fields this row actually has a value for — a blank
+      // cell in the enrichment file shouldn't blank out data the lead
+      // already had.
+      const providerPatch = Object.fromEntries(Object.entries(enrichment).filter(([, v]) => v !== ''))
+      let providerMatched = true
+      if (Object.keys(providerPatch).length > 0) {
+        // .select() after .update() is required here — without it, Supabase
+        // returns 204 success even when the WHERE clause matched zero rows,
+        // which would silently count a no-op as "enriched".
+        const { data, error } = await supabase.from('providers').update(providerPatch).eq('npi', npi).eq('owner_tenant_id', tenantId).select('id')
+        if (error) { enrichError = `Enrichment update failed: ${error.message}`; return }
+        providerMatched = (data ?? []).length > 0
+      }
+      // Kept in sync with master_practices too — the leads list reads
+      // name/state/specialty directly from there, not from providers.
+      // is_roster is unconditionally set to false here: every code in
+      // codesToEnrich was already filtered to isNppesFound() rows only, so
+      // reaching this point means NPPES confirmed a match — the explicit
+      // request is that these always surface in the Lead Pool and under
+      // the Credentialing filter, regardless of their prior roster status.
+      const practicePatch: Record<string, string | boolean> = { is_roster: false }
+      if (providerPatch.name) practicePatch.name = providerPatch.name as string
+      if (providerPatch.state) practicePatch.state = providerPatch.state as string
+      if (providerPatch.city) practicePatch.city = providerPatch.city as string
+      if (providerPatch.postal) practicePatch.postal = providerPatch.postal as string
+      if (providerPatch.taxonomy_desc) practicePatch.specialty = providerPatch.taxonomy_desc as string
+      if (providerPatch.phone) practicePatch.phone = providerPatch.phone as string
+      if (Object.keys(practicePatch).length > 0) {
+        const { data, error } = await supabase.from('master_practices').update(practicePatch).eq('practice_code', code).eq('owner_tenant_id', tenantId).select('id')
+        if (error) { enrichError = `Enrichment update failed: ${error.message}`; return }
+        if ((data ?? []).length === 0) providerMatched = false
+      }
+      if (!providerMatched) { notMatchedCodes.push(code); return }
+      enrichedCount++
+    })
+  }
+  // A failed update was previously counted as "enriched" anyway, since
+  // nothing checked whether these calls actually succeeded — that made the
+  // reported count wrong without any visible error. Surface it instead.
+  if (enrichError) return { ok: false, message: enrichError }
+
   if (toInsert.length === 0) {
+    if (enrichedCount > 0 || notMatchedCodes.length > 0) {
+      const untouched = skipped - enrichedCount - notMatchedCodes.length
+      const parts: string[] = []
+      if (enrichedCount > 0) parts.push(`Enriched ${enrichedCount} existing lead(s) with new NPPES data`)
+      if (notMatchedCodes.length > 0) {
+        parts.push(
+          `${notMatchedCodes.length} lead(s) had "Found" data but no matching record under your company to update ` +
+          `(e.g. ${notMatchedCodes.slice(0, 5).join(', ')}${notMatchedCodes.length > 5 ? ', …' : ''}) — ` +
+          `they may be owned by a different company or the practice/provider link is out of sync`
+        )
+      }
+      if (untouched > 0) parts.push(`${untouched} other duplicate(s) had no new match to add`)
+      return { ok: true, message: parts.join('. ') + '.', inserted: 0, skipped }
+    }
     return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
   }
 
-  // Anchor detection: Source='uploaded' OR (PECOS + ENRLMT present).
+  // Anchor detection: Source='uploaded' OR (PECOS + ENRLMT present) OR
+  // NPPES has matched this NPI ("NPPES - Found") — a confirmed NPPES match
+  // means this is a real, workable lead regardless of what the Source
+  // column says (or whether it's present at all), so it always belongs in
+  // the visible Lead Pool, not hidden as a roster member.
   const isAnchorRow = (code: string) => {
     const row = byCode.get(code)!
+    if (isNppesFound(row)) return true
     const source = col(row, 'Source').toLowerCase()
     if (source === 'uploaded') return true
     if (source.startsWith('roster')) return false
@@ -392,6 +499,10 @@ export async function uploadLeadsCsv(
       taxonomy_code: col(row, 'NPPES_PrimaryTaxonomyCode') || null,
       mailing_phone: col(row, 'NPPES_MailingPhone') || col(row, 'NPPES_ContactPhone') || null,
       entity_type: col(row, 'NPPES_EnumerationType') || null,
+      enumeration_date: col(row, 'NPPES_EnumerationDate') || null,
+      // Whether NPPES found a match for this NPI (e.g. "NPPES - Found" /
+      // "NPPES - Not Found") — drives the new "NPI Found" category filter.
+      record_source: col(row, 'Record_Source') || null,
       is_anchor: isAnchorRow(code),
       owner_tenant_id: tenantId,
     }
@@ -483,11 +594,14 @@ export async function uploadLeadsCsv(
   }
 
   const rosterCount = toInsert.length - anchorCodes.length
+  const plainSkipped = skipped - enrichedCount - notMatchedCodes.length
   return {
     ok: true,
     message: `Uploaded ${anchorCodes.length} lead(s)` +
       (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
-      (skipped ? `, skipped ${skipped} duplicate(s)` : '') + '.',
+      (enrichedCount ? `, enriched ${enrichedCount} existing lead(s) with new NPPES data` : '') +
+      (notMatchedCodes.length ? `, ${notMatchedCodes.length} had "Found" data but no matching record to update` : '') +
+      (plainSkipped ? `, skipped ${plainSkipped} duplicate(s)` : '') + '.',
     inserted: anchorCodes.length,
     skipped,
   }

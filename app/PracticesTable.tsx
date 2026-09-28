@@ -19,6 +19,10 @@ type Practice = {
   bhi: boolean
   rpm: boolean
   rcmFit: boolean
+  npiFound?: boolean
+  entityType?: string | null
+  enumerationDate?: string | null
+  lastUpdated?: string | null
   mips?: Record<number, string> | null
   mipsByYear?: Record<number, string> | null
   allocatedOn?: string | null
@@ -69,6 +73,15 @@ const C = {
 
 // Each signal pill has a key (for toggle state) and a test(p) => boolean.
 // Booleans (CCM/PCM/…) test their flag; MIPS tests for real MIPS data.
+// Compares only the calendar date (year-month-day) as a plain string —
+// these NPPES fields are stored as bare date strings (e.g. "2026-09-14"),
+// so a direct string comparison avoids the off-by-one-day risk that
+// parsing through a Date object (and its timezone conversion) would add.
+function sameCalendarDate(value: string | null | undefined, ymd: string): boolean {
+  if (!value) return false
+  return value.trim().slice(0, 10) === ymd
+}
+
 const hasRealMips = (p: Practice) => {
   const v = (p.mipsByYear?.[2026] ?? '').toString().trim().toLowerCase()
   if (!v) return false
@@ -194,6 +207,10 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const [poolTab, setPoolTab] = useState('All Leads')
   const [sourceTab, setSourceTab] = useState<'All' | 'Allocated' | 'Uploaded'>('All')
   const [catTab, setCatTab] = useState('All Categories')
+  // Only meaningful — and only shown — when catTab === 'Credentialing'.
+  const [enumTypeFilter, setEnumTypeFilter] = useState('')
+  const [lastUpdatedFilter, setLastUpdatedFilter] = useState('') // YYYY-MM-DD
+  const [enumDateFilter, setEnumDateFilter] = useState('')       // YYYY-MM-DD
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -286,10 +303,18 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       }
       if (specialtyFilter && p.specialty !== specialtyFilter) return false
 
-      // Category tab filter (All / MIPS / RCM / CCM)
+      // Category tab filter (All / MIPS / RCM / CCM / Credentialing)
       if (catTab === 'MIPS' && !hasRealMips(p)) return false
       if (catTab === 'RCM' && !p.rcmFit) return false
       if (catTab === 'CCM' && !p.ccm) return false
+      if (catTab === 'Credentialing' && !p.npiFound) return false
+      // Credentialing sub-filters — only applied once Credentialing itself
+      // is selected, since these fields only mean anything for NPPES data.
+      if (catTab === 'Credentialing') {
+        if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
+        if (lastUpdatedFilter && !sameCalendarDate(p.lastUpdated, lastUpdatedFilter)) return false
+        if (enumDateFilter && !sameCalendarDate(p.enumerationDate, enumDateFilter)) return false
+      }
       if (dispositionFilter && p.status !== dispositionFilter) return false
 
       // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
@@ -326,7 +351,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       })
     }
     return rows
-  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter])
+  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFilter, enumDateFilter])
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -339,7 +364,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const pageRows = filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFilter, enumDateFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -441,7 +466,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFilter(''); setEnumDateFilter('')
   }
 
   const activeFilterCount = [
@@ -616,10 +641,27 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {['All Categories', 'MIPS', 'RCM', 'CCM'].map((t) => (
+          {['All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing'].map((t) => (
             <button type="button" aria-pressed={catTab === t} key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</button>
           ))}
         </div>
+        {catTab === 'Credentialing' && (
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+            <label className="filter-control"><span>Enumeration Type</span>
+              <select value={enumTypeFilter} onChange={(e) => setEnumTypeFilter(e.target.value)} style={input}>
+                <option value="">All Types</option>
+                <option value="NPI-1">NPI-1</option>
+                <option value="NPI-2">NPI-2</option>
+              </select>
+            </label>
+            <label className="filter-control"><span>NPPES Last Updated</span>
+              <input type="date" value={lastUpdatedFilter} onChange={(e) => setLastUpdatedFilter(e.target.value)} style={input} />
+            </label>
+            <label className="filter-control"><span>NPPES Enumeration Date</span>
+              <input type="date" value={enumDateFilter} onChange={(e) => setEnumDateFilter(e.target.value)} style={input} />
+            </label>
+          </div>
+        )}
       </section>
 
       {/* ---- Quick and advanced filters ---- */}

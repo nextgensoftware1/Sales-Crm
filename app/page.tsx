@@ -28,7 +28,7 @@ export default async function Home() {
     ${canAssign ? 'assigned_away:lead_assignments(users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
     practice_providers (
       providers (
-        npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk,
+        npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk, record_source, entity_type, enumeration_date,
         provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit ),
         provider_mips ( performance_year, status, reporting_option )
       )
@@ -267,6 +267,11 @@ export default async function Home() {
     const provider = p.practice_providers?.[0]?.providers
     const s = provider?.provider_signals ?? {}
     const mipsRows = Array.isArray(provider?.provider_mips) ? provider.provider_mips : []
+    // Both "NPPES - Found" and "NPPES - Not Found" count as having
+    // credentialing data — only a genuinely blank Record_Source (no NPPES
+    // lookup attempted at all) is excluded from the Credentialing filter.
+    const recordSourceLower = (provider?.record_source ?? '').toString().trim().toLowerCase()
+    const npiFound = recordSourceLower.length > 0
     const mipsByYear: Record<number, string> = {}
     for (const m of mipsRows) {
       const raw = (m.reporting_option ?? m.status ?? '').toString().trim()
@@ -299,6 +304,10 @@ export default async function Home() {
       sex: provider?.nppes_sex ?? null,
       orgName: provider?.org_name ?? null,
       risk: provider?.at_risk ?? null,
+      npiFound,
+      entityType: provider?.entity_type ?? null,
+      enumerationDate: provider?.enumeration_date ?? null,
+      lastUpdated: provider?.nppes_last_updated ?? null,
       paymentAdj: provider?.payment_adj_pct ?? null,
       lastDialed: lastDialed[p.id] ?? null,
       ccm: s.ccm ?? false,

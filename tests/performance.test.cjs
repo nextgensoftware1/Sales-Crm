@@ -405,7 +405,7 @@ for (const role of ['super_admin', 'company_admin', 'agent', null]) {
 }
 
 
-function deletionFixture({ role = 'super_admin', platform = false, authFailure = null, profileFailure = null, tenantFailure = null, memberRole = 'agent', size = 1, shared = false } = {}) {
+function deletionFixture({ role = 'super_admin', platform = false, authFailure = null, profileFailure = null, tenantFailure = null, businessDataFailure = null, memberRole = 'agent', size = 1, shared = false } = {}) {
   const calls = []
   let members = Array.from({ length: size }, (_, i) => ({ id: `member-${i}`, auth_id: `login-${i}`, tenant_id: 'target', roles: { key: memberRole } }))
   if (shared) members.push({ id: 'outside', auth_id: 'login-0', tenant_id: 'other', roles: { key: 'agent' } })
@@ -417,15 +417,23 @@ function deletionFixture({ role = 'super_admin', platform = false, authFailure =
         select(_fields, options) { countOnly = options?.head; return query },
         eq(key, value) { filters.push(row => row[key] === value); return query },
         neq(key, value) { filters.push(row => row[key] !== value); return query },
+        in(key, values) { filters.push(row => values.includes(row[key])); return query },
         order() { return query }, range(from, to) { range = [from, to]; return query },
         limit(n) { max = n; return query }, overrideTypes() { return query },
         maybeSingle() { single = true; return query }, delete() { operation = 'delete'; return query },
+        update() { operation = 'update'; return query },
         then(resolve, reject) {
-          let rows = (table === 'users' ? members : [{ id: 'target', is_platform: platform }]).filter(row => filters.every(fn => fn(row)))
+          let rows
+          if (table === 'users') rows = members
+          else if (table === 'tenants') rows = [{ id: 'target', is_platform: platform }]
+          else rows = [] // business-data cleanup tables: nothing to clean up in these fixtures by default
+          rows = rows.filter(row => filters.every(fn => fn(row)))
           let error = null
           if (operation === 'delete') {
             calls.push(`delete:${table}`)
-            error = table === 'users' ? profileFailure : tenantFailure
+            if (table === 'users') error = profileFailure
+            else if (table === 'tenants') error = tenantFailure
+            else error = businessDataFailure
             if (!error && table === 'users') members = members.filter(row => !rows.includes(row))
           }
           const count = rows.length
@@ -450,7 +458,11 @@ function deletionFixture({ role = 'super_admin', platform = false, authFailure =
 test('company and users delete through APIs without a SQL function', async () => {
   const run = deletionFixture()
   assert.equal((await run.run()).ok, true)
-  assert.deepEqual(run.calls, ['auth:login-0', 'delete:users', 'delete:tenants'])
+  assert.deepEqual(run.calls, [
+    'delete:lead_activity', 'delete:lead_reminders', 'delete:lead_transfers', 'delete:lead_assignments',
+    'delete:lead_worksheets', 'delete:lead_company_claims', 'delete:lead_allocations', 'delete:sales',
+    'delete:client_ownership', 'auth:login-0', 'delete:users', 'delete:tenants',
+  ])
 })
 test('company deletion protects roles, platform and shared logins', async () => {
   for (const options of [{ role: null }, { role: 'company_admin' }, { platform: true }, { memberRole: 'super_admin' }, { shared: true }]) {
@@ -462,7 +474,11 @@ test('company deletion protects roles, platform and shared logins', async () => 
 test('Auth failure preserves the profile and stops company deletion', async () => {
   const run = deletionFixture({ authFailure: { code: 'bad_key', message: 'Unregistered API key' } })
   assert.equal((await run.run()).ok, false)
-  assert.deepEqual(run.calls, ['auth:login-0'])
+  assert.deepEqual(run.calls, [
+    'delete:lead_activity', 'delete:lead_reminders', 'delete:lead_transfers', 'delete:lead_assignments',
+    'delete:lead_worksheets', 'delete:lead_company_claims', 'delete:lead_allocations', 'delete:sales',
+    'delete:client_ownership', 'auth:login-0',
+  ])
 })
 test('already removed login can be retried', async () => {
   const run = deletionFixture({ authFailure: { code: 'user_not_found' } })
@@ -476,6 +492,15 @@ test('partial failure is reported without claiming rollback', async () => {
     assert.match(result.message, /Deletion is incomplete/)
     if (options.profileFailure) assert.ok(!run.calls.includes('delete:tenants'))
   }
+})
+test('company deletion removes tenant-scoped business data before touching users, and stops cleanly if that fails', async () => {
+  const ok = await deletionFixture().run()
+  assert.equal(ok.ok, true)
+  const failedRun = deletionFixture({ businessDataFailure: { message: 'Linked records' } })
+  const failed = await failedRun.run()
+  assert.equal(failed.ok, false)
+  assert.match(failed.message, /Nothing was deleted/) // fails on the very first cleanup table, before anything else ran
+  assert.deepEqual(failedRun.calls, ['delete:lead_activity'])
 })
 test('company deletion loads team members beyond the API row limit', async () => {
   const run = deletionFixture({ size: 1001 })
