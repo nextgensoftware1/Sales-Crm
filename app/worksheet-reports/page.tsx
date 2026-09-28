@@ -1,12 +1,13 @@
-import { getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import WorksheetReportsClient from './WorksheetReportsClient'
 import { getWorksheetReports } from '../worksheet-reports-actions'
 import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
+import WorksheetCompanyFilter, { type WorksheetCompanyOption } from './WorksheetCompanyFilter'
 
-export default async function WorksheetReportsPage() {
+export default async function WorksheetReportsPage({ searchParams }: { searchParams: Promise<{ company?: string }> }) {
 
   const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
@@ -39,12 +40,30 @@ export default async function WorksheetReportsPage() {
   }
 
   const worksheetReports = await getWorksheetReports()
+  const requestedCompany = (await searchParams).company ?? '__all__'
+  let companies: WorksheetCompanyOption[] = []
+  if (worksheetReports.ok) {
+    const countByTenant = new Map<string, number>()
+    for (const row of worksheetReports.rows) countByTenant.set(row.tenantId, (countByTenant.get(row.tenantId) ?? 0) + 1)
+    if (isSuperAdmin) {
+      const supabase = await createSupabaseServer()
+      const { data: tenantRows } = await supabase.from('tenants').select('id, name').eq('status', 'active').order('name')
+      companies = (tenantRows ?? []).map(tenant => ({ id: tenant.id, name: tenant.name, count: countByTenant.get(tenant.id) ?? 0 }))
+    } else if (me?.tenant_id) {
+      companies = [{ id: me.tenant_id, name: me.tenants?.name ?? 'Your company', count: countByTenant.get(me.tenant_id) ?? worksheetReports.rows.length }]
+    }
+  }
+  const selectedCompany = companies.some(company => company.id === requestedCompany) ? requestedCompany : '__all__'
+  const visibleReports = worksheetReports.ok && selectedCompany !== '__all__'
+    ? { ...worksheetReports, rows: worksheetReports.rows.filter(row => row.tenantId === selectedCompany) }
+    : worksheetReports
+  const selectedCompanyName = companies.find(company => company.id === selectedCompany)?.name
 
   return (
     <AppShell
       title="Worksheet Reports"
       subtitle={isSuperAdmin
-        ? 'Platform-wide — every company'
+        ? selectedCompanyName ? `Company — ${selectedCompanyName}` : 'Platform-wide — every company'
         : personalScope
           ? 'Your personally saved worksheets'
           : `Scoped to ${me?.tenants?.name ?? 'your company'}`}
@@ -53,12 +72,15 @@ export default async function WorksheetReportsPage() {
       showAdmin={isSuperAdmin}
       canManageUsers={canManageUsers}
       headerRight={isSuperAdmin ? <UploadWorksheetCsvButton /> : null}
+      contextExtra={worksheetReports.ok ? <WorksheetCompanyFilter companies={companies} selected={selectedCompany} showAll={isSuperAdmin} /> : null}
+      contextItemsHidden
+      contextHelpText="Choose a company to filter both Report View and Spreadsheet View. Row-count controls are available inside each view."
     >
       <div className="card">
-        {worksheetReports.ok ? (
-          <WorksheetReportsClient rows={worksheetReports.rows} scope={worksheetReports.scope} companyName={worksheetReports.companyName} truncated={worksheetReports.truncated} />
+        {visibleReports.ok ? (
+          <WorksheetReportsClient rows={visibleReports.rows} scope={visibleReports.scope} companyName={selectedCompanyName ?? visibleReports.companyName} truncated={visibleReports.truncated} />
         ) : (
-          <p className="subtle">{worksheetReports.message}</p>
+          <p className="subtle">{visibleReports.message}</p>
         )}
       </div>
     </AppShell>

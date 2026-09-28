@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
   ClipboardList, LayoutDashboard, BellRing, Users, ArrowLeftRight, Settings, Trash2,
-  Menu, X, PanelLeftClose, PanelLeft,
+  Menu, X, PanelLeftClose, PanelLeft, History,
 } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 import SignOutButton from './SignOutButton'
@@ -22,6 +22,7 @@ const NAV: NavItem[] = [
   { href: '/clients',       label: 'Active Clients', icon: Users },
   { href: '/transfers',     label: 'Transfers',      icon: ArrowLeftRight },
   { href: '/admin',         label: 'Admin',          icon: Settings },
+  { href: '/worksheet-updates', label: 'Worksheet Updates', icon: History },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: Trash2 },
 ]
 
@@ -52,6 +53,7 @@ function ShellChrome({ user, children }: { user: ShellUser; children: ReactNode 
   const items = NAV.filter((n) => {
     if (n.href === '/deleted-leads') return user.isSuperAdmin
     if (n.href === '/admin') return user.isSuperAdmin || user.canManageUsers
+    if (n.href === '/worksheet-updates') return user.isSuperAdmin || user.canManageUsers
     if (n.href === '/transfers') return user.showTransfers
     return true
   })

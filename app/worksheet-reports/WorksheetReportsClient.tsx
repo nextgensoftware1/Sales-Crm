@@ -1,96 +1,55 @@
 'use client'
 
-import { Fragment, useMemo, useState, type KeyboardEvent } from 'react'
+import Link from 'next/link'
+import { Fragment, useMemo, useState } from 'react'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 
-const PAGE_SIZE = 10
-
-type SelectedSheetCell = {
-  rowId: string
-  rowNumber: number
-  column: string
-  value: string
-  company: string
-  agent: string
-  practice: string
-  practiceCode: string
-}
+const PAGE_SIZES = [8, 15, 20, 100] as const
 
 function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
   const imported = rows.filter(row => row.importData)
   const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
   const [query, setQuery] = useState('')
-  const [selectedCell, setSelectedCell] = useState<SelectedSheetCell | null>(null)
+  const [pageSize, setPageSize] = useState<number>(15)
+  const [page, setPage] = useState(1)
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return imported
     return imported.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
       ...Object.values(row.importData ?? {})].some(value => String(value ?? '').toLowerCase().includes(needle)))
   }, [imported, query])
-
-  const selectCell = (row: WorksheetReportRow, rowNumber: number, column: string, rawValue: string | null | undefined) => {
-    setSelectedCell({
-      rowId: row.practiceId,
-      rowNumber,
-      column,
-      value: rawValue == null || rawValue === '' ? '—' : String(rawValue),
-      company: row.companyName ?? '—',
-      agent: row.filledBy ?? '—',
-      practice: row.practiceName || '—',
-      practiceCode: row.practiceCode || '—',
-    })
-  }
-
-  const selectableCellProps = (row: WorksheetReportRow, rowNumber: number, column: string, value: string | null | undefined) => ({
-    role: 'button' as const,
-    tabIndex: 0,
-    'aria-label': `View full ${column} value for row ${rowNumber}`,
-    onClick: () => selectCell(row, rowNumber, column, value),
-    onKeyDown: (event: KeyboardEvent<HTMLTableCellElement>) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault()
-        selectCell(row, rowNumber, column, value)
-      }
-    },
-  })
+  const totalPages = Math.max(1, Math.ceil(visible.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageStart = (safePage - 1) * pageSize
+  const pageRows = visible.slice(pageStart, pageStart + pageSize)
 
   if (!imported.length) return <div className="sheet-empty">No imported worksheet rows are available.</div>
   return <div className="worksheet-sheet">
     <div className="sheet-toolbar">
       <div><strong>Imported worksheet data</strong><span>{visible.length} of {imported.length} rows · {columns.length} source columns</span></div>
-      <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search every column…" /></label>
+      <div className="sheet-toolbar-controls">
+        <label className="sheet-page-size"><span>Rows</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+        <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} placeholder="Search every column…" /></label>
+      </div>
     </div>
-    <div className={`sheet-cell-inspector${selectedCell ? ' is-active' : ''}`} aria-live="polite">
-      {selectedCell ? <>
-        <div className="sheet-cell-inspector-head">
-          <div>
-            <span className="sheet-cell-address">Row {selectedCell.rowNumber}</span>
-            <strong>{selectedCell.column}</strong>
-          </div>
-          <button type="button" className="sheet-cell-close" onClick={() => setSelectedCell(null)} aria-label="Close cell details">×</button>
-        </div>
-        <div className="sheet-cell-context">
-          <span><small>Company</small>{selectedCell.company}</span>
-          <span><small>Worksheet agent</small>{selectedCell.agent}</span>
-          <span><small>Practice</small>{selectedCell.practice}</span>
-          <span><small>Practice ID</small>{selectedCell.practiceCode}</span>
-        </div>
-        <div className="sheet-cell-value"><small>Complete cell value</small><div>{selectedCell.value}</div></div>
-      </> : <div className="sheet-cell-hint"><strong>Cell details</strong><span>Select any spreadsheet cell to see its complete value and row information.</span></div>}
-    </div>
+    <div className="sheet-open-hint">Select any cell to open the complete worksheet and edit its uploaded fields.</div>
     <div className="sheet-grid-wrap">
       <table className="sheet-grid">
         <thead><tr><th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
-        <tbody>{visible.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
-          <th className="sheet-row-number">{index + 1}</th>
-          <td className={`sheet-frozen${selectedCell?.rowId === row.practiceId && selectedCell.column === 'Company' ? ' is-selected' : ''}`} {...selectableCellProps(row, index + 1, 'Company', row.companyName)}><strong>{row.companyName ?? '—'}</strong></td>
-          <td className={selectedCell?.rowId === row.practiceId && selectedCell.column === 'Worksheet agent' ? 'is-selected' : ''} {...selectableCellProps(row, index + 1, 'Worksheet agent', row.filledBy)}>{row.filledBy ?? '—'}</td>
+        <tbody>{pageRows.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
+          <th className="sheet-row-number">{pageStart + index + 1}</th>
+          <td className="sheet-frozen"><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}><strong>{row.companyName ?? '—'}</strong></Link></td>
+          <td><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{row.filledBy ?? '—'}</Link></td>
           {columns.map(column => {
             const value = row.importData?.[column]
-            return <td key={column} className={selectedCell?.rowId === row.practiceId && selectedCell.column === column ? 'is-selected' : ''} {...selectableCellProps(row, index + 1, column, value)}>{value || '—'}</td>
+            return <td key={column}><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{value || '—'}</Link></td>
           })}
         </tr>)}</tbody>
       </table>
+    </div>
+    <div className="sheet-pagination">
+      <span>{visible.length ? `Showing ${pageStart + 1}–${Math.min(pageStart + pageSize, visible.length)} of ${visible.length}` : 'No matching rows'}</span>
+      <div><button type="button" className="btn" disabled={safePage <= 1} onClick={() => setPage(current => Math.max(1, current - 1))}>Previous</button><span>Page {safePage} of {totalPages}</span><button type="button" className="btn" disabled={safePage >= totalPages} onClick={() => setPage(current => Math.min(totalPages, current + 1))}>Next</button></div>
     </div>
   </div>
 }
@@ -114,10 +73,11 @@ function ReportTable({
   onToggleRow: (id: string) => void
 }) {
   const [page, setPage] = useState(1)
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const [pageSize, setPageSize] = useState<number>(8)
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
   const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * PAGE_SIZE
-  const pageRows = rows.slice(pageStart, pageStart + PAGE_SIZE)
+  const pageStart = (safePage - 1) * pageSize
+  const pageRows = rows.slice(pageStart, pageStart + pageSize)
   const colSpan = showCompanyColumn ? 8 : 7
 
   return (
@@ -153,7 +113,9 @@ function ReportTable({
                       </button>
                     </td>
                     <td>
-                      <strong>{r.practiceName}</strong>
+                      <strong>{r.importData
+                        ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.practiceName}</Link>
+                        : r.practiceName}</strong>
                       <div className="subtle mono" style={{ fontSize: 10.5 }}>{r.practiceCode}{r.orgName ? ` · ${r.orgName}` : ''}</div>
                     </td>
                     {showCompanyColumn && <td>{r.companyName ?? '—'}</td>}
@@ -212,15 +174,15 @@ function ReportTable({
         </table>
       </div>
 
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 12, color: 'var(--muted)', flexWrap: 'wrap', gap: 10 }}>
-          <span>Showing {pageStart + 1}-{Math.min(pageStart + PAGE_SIZE, rows.length)} of {rows.length}</span>
-          <div style={{ display: 'flex', gap: 6 }}>
+      <div className="report-pagination">
+          <span>Showing {rows.length ? pageStart + 1 : 0}-{Math.min(pageStart + pageSize, rows.length)} of {rows.length}</span>
+          <label className="report-page-size"><span>Rows per page</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+          <div>
             <button className="btn" disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</button>
+            <span>Page {safePage} of {totalPages}</span>
             <button className="btn" disabled={safePage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
           </div>
-        </div>
-      )}
+      </div>
     </>
   )
 }
@@ -272,7 +234,6 @@ export default function WorksheetReportsClient({
   truncated: boolean
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [companyFilter, setCompanyFilter] = useState<string>('__all__')
   const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
   const toggleRow = (id: string) => {
@@ -299,10 +260,6 @@ export default function WorksheetReportsClient({
     return Array.from(byCompany.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [rows, scope])
 
-  const companyNames = useMemo(() => groups.map(([name]) => name), [groups])
-  const visibleGroups = companyFilter === '__all__' ? groups : groups.filter(([name]) => name === companyFilter)
-  const filteredRows = companyFilter === '__all__' ? rows : rows.filter(row => row.companyName === companyFilter)
-
   return (
     <div>
       <div className="report-commandbar">
@@ -311,17 +268,11 @@ export default function WorksheetReportsClient({
           <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Report view</button>
           <button className={view === 'sheet' ? 'active' : ''} onClick={() => setView('sheet')}>Spreadsheet view</button>
         </div>
-        {scope === 'all' && companyNames.length > 1 && (
-          <select className="input" style={{ width: 'auto', fontSize: 12 }} value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
-            <option value="__all__">All companies ({companyNames.length})</option>
-            {companyNames.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        )}
         {scope === 'company' && <span className="subtle" style={{ fontSize: 12 }}>Scoped to {companyName ?? 'your company'}</span>}
         {scope === 'personal' && <span className="subtle" style={{ fontSize: 12 }}>Your saved worksheets</span>}
       </div>
       <p className="subtle" style={{ marginTop: -2, marginBottom: 14 }}>
-        The latest saved worksheet per lead — not a log of every edit. Click a row to see the full call details.
+        The latest saved worksheet per lead — not a log of every edit. Expand a row for call details, or select an imported practice to open and edit its full uploaded worksheet.
         {scope === 'all' && ' Grouped by company — click a company to expand or collapse it.'}
         {scope === 'personal' && ' Only worksheets most recently saved by you are shown.'}
       </p>
@@ -332,17 +283,17 @@ export default function WorksheetReportsClient({
         </p>
       )}
 
-      {view === 'sheet' ? <ImportedSheet rows={filteredRows} /> : rows.length === 0 ? (
+      {view === 'sheet' ? <ImportedSheet rows={rows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : scope === 'all' ? (
-        visibleGroups.map(([company, companyRows], i) => (
+        groups.map(([company, companyRows], i) => (
           <CompanySection
             key={company}
             companyName={company}
             rows={companyRows}
             expanded={expanded}
             onToggleRow={toggleRow}
-            defaultOpen={companyFilter !== '__all__' || i === 0}
+            defaultOpen={groups.length === 1 || i === 0}
           />
         ))
       ) : (

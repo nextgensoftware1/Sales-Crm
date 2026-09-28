@@ -522,6 +522,13 @@ select:not(:disabled):hover {
 .reminder-company-nav button.active { background: rgba(var(--accent-rgb), .12); color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .reminder-company-nav button span { overflow: hidden; font-size: 10.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .reminder-company-nav button strong { font-size: 9.5px; }
+.worksheet-company-nav { display:grid; gap:3px; padding:10px 9px; border-bottom:1px solid var(--border); }
+.worksheet-company-nav-label { padding:2px 7px 5px; color:var(--muted-2); font-size:8.5px; font-weight:850; letter-spacing:.11em; text-transform:uppercase; }
+.worksheet-company-nav a { display:grid; grid-template-columns:16px minmax(0,1fr) auto; align-items:center; gap:7px; min-height:38px; padding:7px 8px; border-radius:var(--radius); color:var(--muted); text-decoration:none; transition:background .15s ease,color .15s ease,transform .15s ease; }
+.worksheet-company-nav a:hover { background:var(--surface-2); color:var(--ink-strong); transform:translateX(2px); }
+.worksheet-company-nav a.active { background:rgba(var(--accent-rgb),.12); color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); }
+.worksheet-company-nav a span { overflow:hidden; font-size:10.5px; font-weight:750; text-overflow:ellipsis; white-space:nowrap; }
+.worksheet-company-nav a strong { min-width:22px; color:inherit; font-size:9.5px; text-align:right; }
 .page-context-nav nav { display: grid; gap: 3px; padding: 10px 9px; }
 .page-context-nav nav a {
   display: grid;

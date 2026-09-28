@@ -46,6 +46,7 @@ const NAV: NavItem[] = [
   // reference image's sidebar grouping.
   { href: '/admin',         label: 'Admin',          icon: <IconSettings />, admin: true },
   { href: '/worksheet-reports', label: 'Worksheet Reports', icon: <IconReport />, admin: true },
+  { href: '/worksheet-updates', label: 'Worksheet Updates', icon: <History aria-hidden="true" />, admin: true },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: <IconTrash />, admin: true },
 ]
 
@@ -98,8 +99,17 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     kicker: 'Reporting', title: 'Worksheets', description: 'Review the latest saved call details.',
     items: [
       { href: '/worksheet-reports', label: 'Saved worksheets', description: 'Latest per lead', icon: FileText },
+      { href: '/worksheet-updates', label: 'Worksheet updates', description: 'Saved edit history', icon: History },
       { href: '/', label: 'Leads Engine', description: 'Return to lead work', icon: ListChecks },
       { href: '/reminders', label: 'Reminders', description: 'Follow-up schedule', icon: CalendarClock },
+    ],
+  },
+  '/worksheet-updates': {
+    kicker: 'Audit', title: 'Worksheet updates', description: 'Review who changed uploaded worksheet data.',
+    items: [
+      { href: '/worksheet-updates', label: 'Update history', description: 'Before and after values', icon: History },
+      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Open saved worksheets', icon: FileText },
+      { href: '/admin', label: 'Companies & users', description: 'Accounts and roles', icon: Building2 },
     ],
   },
   '/admin': {
@@ -107,6 +117,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     items: [
       { href: '/admin', label: 'Companies & users', description: 'Accounts and roles', icon: Building2 },
       { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Team activity', icon: FileText },
+      { href: '/worksheet-updates', label: 'Worksheet updates', description: 'Edit audit history', icon: History },
       { href: '/deleted-leads', label: 'Deleted leads', description: 'Recovery and cleanup', icon: RotateCcw },
     ],
   },
@@ -129,7 +140,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, contextExtra = null, initialReminders,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, contextExtra = null, contextItemsHidden = false, contextHelpText, initialReminders,
 }: {
   title: string
   subtitle?: string
@@ -141,6 +152,8 @@ export default function AppShell({
   canManageUsers?: boolean
   headerRight?: React.ReactNode
   contextExtra?: React.ReactNode
+  contextItemsHidden?: boolean
+  contextHelpText?: string
   initialReminders?: Reminder[]
 }) {
   // Deleted Leads is Super Admin only. Admin (user management) is visible to
@@ -152,6 +165,7 @@ export default function AppShell({
     // Every authenticated role can open reports; the server action scopes
     // managers to their company and agents/closers to their own saved work.
     if (n.href === '/worksheet-reports') return true
+    if (n.href === '/worksheet-updates') return showAdmin || canManageUsers
     if (n.href === '/transfers') return showTransfers
     return true
   })
@@ -166,7 +180,11 @@ export default function AppShell({
   const rawContextNav = CONTEXT_NAV[active]
   const contextNav = rawContextNav ? {
     ...rawContextNav,
-    items: rawContextNav.items.filter((item) => item.href !== '/deleted-leads' || showAdmin),
+    items: rawContextNav.items.filter((item) => {
+      if (item.href === '/deleted-leads') return showAdmin
+      if (item.href === '/admin' || item.href === '/worksheet-updates') return hasManagementAccess
+      return true
+    }),
   } : undefined
 
   // Close the mobile drawer whenever the route changes (adjust state during
@@ -179,6 +197,8 @@ export default function AppShell({
 
   // Prevent background scroll while the mobile drawer is open.
   useEffect(() => {
+    // Restore a browser-only preference after hydration; the server cannot read localStorage.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSidebarExpanded(window.localStorage.getItem('hbs-sidebar-expanded') === 'true')
   }, [])
 
@@ -300,7 +320,7 @@ export default function AppShell({
                   <p>{contextNav.description}</p>
                 </div>
                 {contextExtra}
-                <nav>
+                {!contextItemsHidden && <nav>
                   {contextNav.items.map((item, index) => {
                     const itemPath = item.href.split('#')[0]
                     const selected = index === 0 && itemPath === active
@@ -313,10 +333,10 @@ export default function AppShell({
                       </Link>
                     )
                   })}
-                </nav>
+                </nav>}
                 <div className="page-context-help">
                   <strong>Workspace guide</strong>
-                  <span>Use these shortcuts to move through this workflow without losing context.</span>
+                  <span>{contextHelpText ?? 'Use these shortcuts to move through this workflow without losing context.'}</span>
                 </div>
               </aside>
               <div className="page-context-stage">{children}</div>

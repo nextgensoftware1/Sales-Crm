@@ -508,3 +508,25 @@ test('company deletion loads team members beyond the API row limit', async () =>
   assert.equal(run.calls.filter(call => call.startsWith('auth:')).length, 1001)
   assert.equal(run.calls.at(-1), 'delete:tenants')
 })
+
+test('worksheet import edits create tenant-scoped before-and-after audit history', () => {
+  const sql = fs.readFileSync(path.join(root, 'database/worksheet-import-edit.sql'), 'utf8')
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.worksheet_import_updates/)
+  assert.match(sql, /changed_fields jsonb NOT NULL/)
+  assert.match(sql, /before_data jsonb NOT NULL/)
+  assert.match(sql, /after_data jsonb NOT NULL/)
+  assert.match(sql, /r\.key IN \('company_admin','manager','team_lead'\).*u\.tenant_id = worksheet_import_updates\.tenant_id/s)
+  assert.match(sql, /INSERT INTO public\.worksheet_import_updates/)
+  const updateBlock = sql.match(/UPDATE public\.lead_worksheets\s+SET([\s\S]*?)WHERE tenant_id = p_tenant_id/)
+  assert.ok(updateBlock)
+  assert.doesNotMatch(updateBlock[1], /updated_by\s*=/)
+})
+
+test('worksheet update history is hidden from agents and available to management roles', () => {
+  const action = fs.readFileSync(path.join(root, 'app/worksheet-updates-actions.ts'), 'utf8')
+  const shell = fs.readFileSync(path.join(root, 'app/AppShell.tsx'), 'utf8')
+  assert.match(action, /\['super_admin', 'company_admin', 'manager', 'team_lead'\]\.includes\(roleKey\)/)
+  assert.match(action, /query = query\.eq\('tenant_id', me\.tenant_id!\)/)
+  assert.match(shell, /n\.href === '\/worksheet-updates'.*showAdmin \|\| canManageUsers/)
+  assert.match(shell, /item\.href === '\/admin' \|\| item\.href === '\/worksheet-updates'/)
+})
