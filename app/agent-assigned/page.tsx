@@ -4,6 +4,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AgentAssignedClient from './AgentAssignedClient'
+import { getAgentAssignedLeads } from '../agent-assigned-actions'
 
 export default async function AgentAssignedLeadsPage() {
 
@@ -11,6 +12,10 @@ export default async function AgentAssignedLeadsPage() {
   if (!user) redirect('/login')
 
   const { data: me } = await getCurrentProfile(user.id)
+  // Fetched here (server-side) instead of the client component fetching
+  // it after mount — same data, same request, just no longer a visible
+  // extra round-trip after the page has already loaded.
+  const agentAssignedData = await getAgentAssignedLeads()
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
   const showTransfers = true // everyone signed in can view transfers (scoped by role inside the page)
@@ -36,7 +41,7 @@ export default async function AgentAssignedLeadsPage() {
         <Link prefetch={false} href="/" className="btn" style={{ textDecoration: 'none' }}>← Back to practices</Link>
       }
     >
-      <AgentAssignedClient />
+      <AgentAssignedClient initialData={agentAssignedData} />
     </AppShell>
   )
 }

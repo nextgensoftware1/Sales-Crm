@@ -11,6 +11,13 @@ export type WorksheetReportRow = {
   disposition: string | null; lastUpdatedBy: string | null; lastUpdatedAt: string | null
   handoffStatus: string | null
   importData: Record<string, string> | null
+  // Same signal/category fields the Leads Engine filters on — joined from
+  // provider_signals/provider_mips/providers so this page can offer the
+  // same category tabs, signal pills, and Credentialing sub-filters.
+  npiFound: boolean
+  entityType: string | null; enumerationDate: string | null; nppesLastUpdated: string | null
+  ccm: boolean; pcm: boolean; awv: boolean; tcm: boolean; bhi: boolean; rpm: boolean; rcmFit: boolean
+  mipsByYear: Record<number, string>
 }
 
 export type WorksheetReportsResult =
@@ -25,6 +32,38 @@ function getImportedProviderName(importData: Record<string, unknown> | null) {
   })
   const name = String(entry?.[1] ?? '').trim()
   return name && !/^Practice\s*\(/i.test(name) ? name : null
+}
+
+// Same derivation the Leads Engine uses (app/page.tsx) — kept identical so
+// the Credentialing/MIPS/RCM/CCM filters here behave exactly the same way
+// they do on the Leads page, from the same underlying provider data.
+function deriveSignals(provider: {
+  record_source: string | null; entity_type: string | null; enumeration_date: string | null; nppes_last_updated: string | null
+  provider_signals: { ccm: boolean | null; pcm: boolean | null; awv: boolean | null; tcm: boolean | null; bhi: boolean | null; rpm: boolean | null; rcm_fit: boolean | null } | null
+  provider_mips: Array<{ performance_year: number | null; status: string | null; reporting_option: string | null }> | null
+} | null | undefined) {
+  const recordSourceLower = (provider?.record_source ?? '').toString().trim().toLowerCase()
+  const s = provider?.provider_signals
+  const mipsRows = Array.isArray(provider?.provider_mips) ? provider!.provider_mips! : []
+  const mipsByYear: Record<number, string> = {}
+  for (const m of mipsRows) {
+    const raw = (m.reporting_option ?? m.status ?? '').toString().trim()
+    let year = m.performance_year
+    if (!year) {
+      const match = raw.match(/^(\d{4})/)
+      if (match) year = parseInt(match[1], 10)
+    }
+    if (year) mipsByYear[year] = raw.replace(/^\d{4}\s*-\s*/, '') || raw
+  }
+  return {
+    npiFound: recordSourceLower.length > 0,
+    entityType: provider?.entity_type ?? null,
+    enumerationDate: provider?.enumeration_date ?? null,
+    nppesLastUpdated: provider?.nppes_last_updated ?? null,
+    ccm: s?.ccm ?? false, pcm: s?.pcm ?? false, awv: s?.awv ?? false, tcm: s?.tcm ?? false,
+    bhi: s?.bhi ?? false, rpm: s?.rpm ?? false, rcmFit: s?.rcm_fit ?? false,
+    mipsByYear,
+  }
 }
 
 const REPORT_LIMIT = 300
@@ -49,7 +88,12 @@ type RawWorksheet = {
     name: string
     state: string | null
     specialty: string | null
-    practice_providers: Array<{ providers: { name: string | null; org_name: string | null } | null }>
+    practice_providers: Array<{ providers: {
+      name: string | null; org_name: string | null
+      record_source: string | null; entity_type: string | null; enumeration_date: string | null; nppes_last_updated: string | null
+      provider_signals: { ccm: boolean | null; pcm: boolean | null; awv: boolean | null; tcm: boolean | null; bhi: boolean | null; rpm: boolean | null; rcm_fit: boolean | null } | null
+      provider_mips: Array<{ performance_year: number | null; status: string | null; reporting_option: string | null }> | null
+    } | null }>
   }
 }
 
@@ -83,7 +127,11 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     users!lead_worksheets_updated_by_fkey(full_name, tenants(name)),
     master_practices!inner(
       practice_code, name, state, specialty, deleted_at,
-      practice_providers(providers(name, org_name))
+      practice_providers(providers(
+        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,
+        provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),
+        provider_mips(performance_year, status, reporting_option)
+      ))
     )
   `).is('master_practices.deleted_at', null)
     .order('updated_at', { ascending: false }).limit(REPORT_LIMIT + 1)
@@ -138,6 +186,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       importData: worksheet.import_data && typeof worksheet.import_data === 'object'
         ? Object.fromEntries(Object.entries(worksheet.import_data).map(([key, value]) => [key, String(value ?? '')]))
         : null,
+      ...deriveSignals(provider),
     }
   })
 
@@ -172,7 +221,11 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     users!lead_worksheets_updated_by_fkey(full_name, tenants(name)),
     master_practices!inner(
       practice_code, name, state, specialty, deleted_at,
-      practice_providers(providers(name, org_name))
+      practice_providers(providers(
+        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,
+        provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),
+        provider_mips(performance_year, status, reporting_option)
+      ))
     )
   `).eq('tenant_id', tenantId).eq('practice_id', practiceId).is('master_practices.deleted_at', null)
   if (roleKey === 'agent' || roleKey === 'closer') query = query.eq('updated_by', me.id)
@@ -211,5 +264,6 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     lastUpdatedAt: item.updated_at,
     handoffStatus: null,
     importData: Object.fromEntries(Object.entries(item.import_data).map(([key, value]) => [key, String(value ?? '')])),
+    ...deriveSignals(provider),
   } }
 }

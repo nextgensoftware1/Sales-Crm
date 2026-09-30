@@ -64,21 +64,26 @@ export async function getCompanyAllocationSummary(): Promise<{
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (me.roleKey !== 'super_admin') return { ok: false, message: 'Only Super Admin can view company allocations.' }
 
-  const { data: tenants, error: tenantError } = await supabase
-    .from('tenants')
-    .select('id, name')
-    .eq('is_platform', false)
-    .eq('status', 'active')
-    .order('name')
+  // Independent of each other — the allocations query doesn't need the
+  // tenant list to run, so run them together instead of tenants finishing
+  // fully before allocations even starts.
+  const [{ data: tenants, error: tenantError }, allocationsSettled] = await Promise.all([
+    supabase.from('tenants').select('id, name').eq('is_platform', false).eq('status', 'active').order('name'),
+    allRows<{ tenant_id: string }>(() => supabase
+      .from('lead_allocations')
+      .select('tenant_id')
+      .eq('status', 'active')
+      .order('tenant_id')).then(
+      (data) => ({ ok: true as const, data }),
+      (error) => ({ ok: false as const, error }),
+    ),
+  ])
   if (tenantError) return { ok: false, message: tenantError.message }
 
   let allocations: Array<{ tenant_id: string }>
   try {
-    allocations = await allRows<{ tenant_id: string }>(() => supabase
-      .from('lead_allocations')
-      .select('tenant_id')
-      .eq('status', 'active')
-      .order('tenant_id'))
+    if (!allocationsSettled.ok) throw allocationsSettled.error
+    allocations = allocationsSettled.data
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'Could not load company allocation totals.' }
   }

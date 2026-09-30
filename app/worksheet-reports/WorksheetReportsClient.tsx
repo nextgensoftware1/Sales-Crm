@@ -6,6 +6,19 @@ import type { WorksheetReportRow } from '../worksheet-reports-actions'
 
 const PAGE_SIZES = [8, 15, 20, 100] as const
 
+// Same date-matching approach used elsewhere in this project (see
+// PracticesTable.tsx's Credentialing date filters) — a direct string
+// comparison on the date portion, not a Date-object parse. These fields
+// come back as plain date/timestamp strings, and parsing them through
+// `new Date()` then reading local getFullYear/getMonth/getDate back out
+// applies the browser's timezone to a value that may have none, which can
+// silently shift the matched day by one. Comparing the strings directly
+// avoids that entirely.
+function sameCalendarDate(value: string | null | undefined, ymd: string): boolean {
+  if (!value) return false
+  return value.trim().slice(0, 10) === ymd
+}
+
 function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
   const imported = rows.filter(row => row.importData)
   const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
@@ -82,6 +95,9 @@ function ReportTable({
 
   return (
     <>
+      <div className="report-table-toolbar" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <label className="report-page-size"><span>Rows per page</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+      </div>
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
@@ -176,7 +192,6 @@ function ReportTable({
 
       <div className="report-pagination">
           <span>Showing {rows.length ? pageStart + 1 : 0}-{Math.min(pageStart + pageSize, rows.length)} of {rows.length}</span>
-          <label className="report-page-size"><span>Rows per page</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
           <div>
             <button className="btn" disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</button>
             <span>Page {safePage} of {totalPages}</span>
@@ -236,6 +251,30 @@ export default function WorksheetReportsClient({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
+  // Filled By only makes sense where a report can show more than one
+  // person's work (company/platform scope) — for an agent's own personal
+  // view every row is already theirs, so the filter is hidden there
+  // rather than shown with one meaningless option.
+  const showFilledBy = scope !== 'personal'
+  const [specialtyFilter, setSpecialtyFilter] = useState('')
+  const [filledByFilter, setFilledByFilter] = useState('')
+  const [callbackFilter, setCallbackFilter] = useState('') // YYYY-MM-DD
+  const [lastUpdateFilter, setLastUpdateFilter] = useState('') // YYYY-MM-DD
+
+  const specialties = useMemo(() => Array.from(new Set(rows.map((r) => r.specialty).filter((v): v is string => !!v))).sort(), [rows])
+  const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
+
+  const filteredRows = useMemo(() => rows.filter((r) => {
+    if (specialtyFilter && r.specialty !== specialtyFilter) return false
+    if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
+    if (callbackFilter && !sameCalendarDate(r.callbackAt, callbackFilter)) return false
+    if (lastUpdateFilter && !sameCalendarDate(r.lastUpdatedAt, lastUpdateFilter)) return false
+    return true
+  }), [rows, specialtyFilter, filledByFilter, showFilledBy, callbackFilter, lastUpdateFilter])
+
+  const resetFilters = () => { setSpecialtyFilter(''); setFilledByFilter(''); setCallbackFilter(''); setLastUpdateFilter('') }
+  const activeFilterCount = [specialtyFilter, showFilledBy ? filledByFilter : '', callbackFilter, lastUpdateFilter].filter(Boolean).length
+
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -252,13 +291,13 @@ export default function WorksheetReportsClient({
   const groups = useMemo(() => {
     if (scope !== 'all') return []
     const byCompany = new Map<string, WorksheetReportRow[]>()
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const key = r.companyName ?? 'Unknown company'
       if (!byCompany.has(key)) byCompany.set(key, [])
       byCompany.get(key)!.push(r)
     }
     return Array.from(byCompany.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [rows, scope])
+  }, [filteredRows, scope])
 
   return (
     <div>
@@ -283,8 +322,37 @@ export default function WorksheetReportsClient({
         </p>
       )}
 
-      {view === 'sheet' ? <ImportedSheet rows={rows} /> : rows.length === 0 ? (
+      {rows.length > 0 && (
+        <div className="report-filters" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16, padding: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)' }}>
+          <label className="filter-control"><span>Specialty</span>
+            <select className="input" value={specialtyFilter} onChange={(e) => setSpecialtyFilter(e.target.value)}>
+              <option value="">All Specialties</option>
+              {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          {showFilledBy && (
+            <label className="filter-control"><span>Filled By</span>
+              <select className="input" value={filledByFilter} onChange={(e) => setFilledByFilter(e.target.value)}>
+                <option value="">All Filled By</option>
+                {filledByOptions.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="filter-control"><span>Callback</span>
+            <input type="date" className="input" value={callbackFilter} onChange={(e) => setCallbackFilter(e.target.value)} />
+          </label>
+          <label className="filter-control"><span>Last Updated</span>
+            <input type="date" className="input" value={lastUpdateFilter} onChange={(e) => setLastUpdateFilter(e.target.value)} />
+          </label>
+          {activeFilterCount > 0 && <button type="button" className="btn" onClick={resetFilters}>Clear filters ({activeFilterCount})</button>}
+          <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }}>{filteredRows.length} of {rows.length} worksheets match</span>
+        </div>
+      )}
+
+      {view === 'sheet' ? <ImportedSheet rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
+      ) : filteredRows.length === 0 ? (
+        <p className="subtle">No worksheets match these filters. <button type="button" className="report-practice-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={resetFilters}>Clear filters</button> to see all {rows.length}.</p>
       ) : scope === 'all' ? (
         groups.map(([company, companyRows], i) => (
           <CompanySection
@@ -297,7 +365,7 @@ export default function WorksheetReportsClient({
           />
         ))
       ) : (
-        <ReportTable rows={rows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} />
+        <ReportTable rows={filteredRows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} />
       )}
     </div>
   )

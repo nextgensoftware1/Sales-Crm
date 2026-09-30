@@ -13,13 +13,21 @@ const fmt = (iso: string | null) => {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
-export default function AgentAssignedClient() {
-  const [groups, setGroups] = useState<AgentGroup[]>([])
-  const [selected, setSelected] = useState<string>('')
-  const [loading, setLoading] = useState(true)
-  const [msg, setMsg] = useState('')
+// When the page already fetched this server-side (the normal case now),
+// initialData arrives pre-populated and the component renders immediately
+// with no loading state and no client-side fetch at all. If it's ever
+// rendered without initialData, it falls back to fetching on mount exactly
+// as before — same request, same loading state, same behavior.
+export default function AgentAssignedClient({ initialData }: { initialData?: { ok: boolean; message?: string; groups?: AgentGroup[] } } = {}) {
+  const initialGroups = initialData?.ok ? (initialData.groups ?? []) : []
+  const initialFirst = initialGroups.find((g) => g.leads.length > 0) ?? initialGroups[0]
+  const [groups, setGroups] = useState<AgentGroup[]>(initialGroups)
+  const [selected, setSelected] = useState<string>(initialFirst?.agentId ?? '')
+  const [loading, setLoading] = useState(!initialData)
+  const [msg, setMsg] = useState(initialData && !initialData.ok ? (initialData.message ?? 'Could not load.') : '')
 
   useEffect(() => {
+    if (initialData) return // already have it — no client-side fetch needed
     (async () => {
       setLoading(true)
       const res = await getAgentAssignedLeads()
@@ -30,6 +38,7 @@ export default function AgentAssignedClient() {
       } else setMsg(res.message ?? 'Could not load.')
       setLoading(false)
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const current = groups.find((g) => g.agentId === selected)

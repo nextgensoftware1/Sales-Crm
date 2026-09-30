@@ -12,25 +12,35 @@ import {
 type Person = { id: string; full_name: string; role: string; count: number }
 type Lead = { practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string }
 
-export default function AssignmentsClient() {
-  const [people, setPeople] = useState<Person[]>([])
+// When the page already fetched this server-side (the normal case now),
+// initialData arrives pre-populated and the component renders immediately
+// — no loading state, no client-side fetch. Falls back to the original
+// client-side fetch (now running its two independent requests together
+// instead of one after another) if ever rendered without initialData.
+export default function AssignmentsClient({ initialData }: {
+  initialData?: { summary: { ok: boolean; message?: string; people?: Person[] }; incomingCodes: string[] }
+} = {}) {
+  const [people, setPeople] = useState<Person[]>(initialData?.summary.ok ? (initialData.summary.people ?? []) : [])
   const [selected, setSelected] = useState<string>('')
   const [leads, setLeads] = useState<Lead[]>([])
-  const [loading, setLoading] = useState(true)
-  const [msg, setMsg] = useState('')
-  const [incoming, setIncoming] = useState<Set<string>>(new Set())
+  const [loading, setLoading] = useState(!initialData)
+  const [msg, setMsg] = useState(initialData && !initialData.summary.ok ? (initialData.summary.message ?? 'Could not load assignments.') : '')
+  const [incoming, setIncoming] = useState<Set<string>>(new Set(initialData?.incomingCodes ?? []))
 
   // load the summary of people I've assigned to + which leads came to me from above
   useEffect(() => {
+    if (initialData) return // already have it — no client-side fetch needed
     (async () => {
       setLoading(true)
-      const res = await getMyAssignmentSummary()
+      // These two are independent of each other — run them together
+      // instead of one waiting on the other.
+      const [res, codes] = await Promise.all([getMyAssignmentSummary(), getMyIncomingCodes()])
       if (res.ok && res.people) setPeople(res.people)
       else setMsg(res.message ?? 'Could not load assignments.')
-      const codes = await getMyIncomingCodes()
       setIncoming(new Set(codes))
       setLoading(false)
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const pickPerson = async (id: string) => {

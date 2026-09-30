@@ -5,6 +5,18 @@ import { useRouter } from 'next/navigation'
 import { updateImportedWorksheet } from '../../../worksheet-import-actions'
 
 const MULTILINE_FIELD = /(note|detail|address|comment|description)/i
+const PRIORITY_FIELDS = [
+  'credential',
+  "provider's name",
+  'specialty',
+  'reporting option',
+  '2026 penalty',
+  'participation option',
+]
+
+function normalizeFieldLabel(label: string) {
+  return label.trim().toLowerCase().replace(/[’_\-]+/g, ' ').replace(/\s+/g, ' ')
+}
 
 export default function ImportedWorksheetEditor({
   tenantId,
@@ -21,7 +33,14 @@ export default function ImportedWorksheetEditor({
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [ok, setOk] = useState(false)
-  const entries = useMemo(() => Object.entries(fields), [fields])
+  const entries = useMemo(() => Object.entries(fields).sort(([firstLabel], [secondLabel]) => {
+    const firstPriority = PRIORITY_FIELDS.indexOf(normalizeFieldLabel(firstLabel))
+    const secondPriority = PRIORITY_FIELDS.indexOf(normalizeFieldLabel(secondLabel))
+    if (firstPriority === -1 && secondPriority === -1) return 0
+    if (firstPriority === -1) return 1
+    if (secondPriority === -1) return -1
+    return firstPriority - secondPriority
+  }), [fields])
   const dirty = JSON.stringify(fields) !== JSON.stringify(savedFields)
 
   const updateField = (label: string, value: string) => {

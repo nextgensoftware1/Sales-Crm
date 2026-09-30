@@ -8,20 +8,28 @@ import { getCompanyAllocatedLeads, getCompanyAllocationSummary } from '../manage
 type Company = { id: string; name: string; count: number }
 type AllocatedLead = { practiceCode: string; name: string; state: string | null; specialty: string | null; allocatedAt: string; status: string }
 
-export default function CompanyAllocationsClient() {
-  const [companies, setCompanies] = useState<Company[]>([])
+// When the page already fetched this server-side (the normal case now),
+// initialData arrives pre-populated and the component renders immediately
+// — no loading state, no client-side fetch. Falls back to the original
+// client-side fetch if ever rendered without initialData.
+export default function CompanyAllocationsClient({ initialData }: {
+  initialData?: { ok: boolean; message?: string; companies?: Company[] }
+} = {}) {
+  const [companies, setCompanies] = useState<Company[]>(initialData?.ok ? (initialData.companies ?? []) : [])
   const [companyId, setCompanyId] = useState('')
   const [leads, setLeads] = useState<AllocatedLead[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!initialData)
   const [loadingLeads, setLoadingLeads] = useState(false)
-  const [msg, setMsg] = useState('')
+  const [msg, setMsg] = useState(initialData && !initialData.ok ? (initialData.message ?? 'Could not load company allocations.') : '')
 
   useEffect(() => {
+    if (initialData) return // already have it — no client-side fetch needed
     getCompanyAllocationSummary().then((result) => {
       if (result.ok) setCompanies(result.companies ?? [])
       else setMsg(result.message ?? 'Could not load company allocations.')
       setLoading(false)
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const pickCompany = async (id: string) => {

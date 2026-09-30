@@ -57,22 +57,17 @@ export async function getLeadsForUser(userId: string): Promise<
   if (roleKey === 'agent' || roleKey === 'closer') {
     const idSet = new Set<string>()
 
-    // Directly assigned.
-    const { data: a } = await supabase
-      .from('lead_assignments')
-      .select('practice_id')
-      .eq('assigned_to', userId)
-      .eq('status', 'active')
+    // Directly assigned, and (for closers) received via transfer —
+    // independent queries, same conditions as before, now run together
+    // instead of the transfer lookup waiting on the assignment lookup.
+    const [{ data: a }, { data: t }] = await Promise.all([
+      supabase.from('lead_assignments').select('practice_id').eq('assigned_to', userId).eq('status', 'active'),
+      roleKey === 'closer'
+        ? supabase.from('lead_transfers').select('practice_id').eq('to_user_id', userId)
+        : Promise.resolve({ data: [] as any[] }),
+    ])
     for (const r of (a ?? []) as any[]) if (r.practice_id) idSet.add(r.practice_id)
-
-    // Closers also receive leads via transfer.
-    if (roleKey === 'closer') {
-      const { data: t } = await supabase
-        .from('lead_transfers')
-        .select('practice_id')
-        .eq('to_user_id', userId)
-      for (const r of (t ?? []) as any[]) if (r.practice_id) idSet.add(r.practice_id)
-    }
+    for (const r of (t ?? []) as any[]) if (r.practice_id) idSet.add(r.practice_id)
 
     ids = Array.from(idSet)
   } else {

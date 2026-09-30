@@ -1,4 +1,5 @@
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
+import { chunks, mapConcurrent } from '../../lib/query-utils'
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
@@ -50,28 +51,27 @@ export default async function DeletedLeads() {
   const stillAssigned: Set<string> = new Set()          // practice_ids assigned to a person
 
   if (practiceIds.length) {
-    // Chunk into 300s for large lists.
-    const CHUNK = 300
-    for (let i = 0; i < practiceIds.length; i += CHUNK) {
-      const part = practiceIds.slice(i, i + CHUNK)
-
-      const { data: allocs } = await supabase
-        .from('lead_allocations')
-        .select('practice_id, tenants(name)')
-        .in('practice_id', part)
-        .eq('status', 'active')
+    // Same chunking (300 per request), same two queries per chunk, same
+    // result processing — the only change is running the chunks with
+    // bounded concurrency (matching mapConcurrent's use elsewhere in this
+    // codebase) instead of one chunk waiting for the previous one to
+    // finish, and running each chunk's own two queries together instead
+    // of one after another.
+    const parts = chunks(practiceIds, 300)
+    const chunkResults = await mapConcurrent(parts, 4, async (part) => {
+      const [{ data: allocs }, { data: assigns }] = await Promise.all([
+        supabase.from('lead_allocations').select('practice_id, tenants(name)').in('practice_id', part).eq('status', 'active'),
+        supabase.from('lead_assignments').select('practice_id').in('practice_id', part).eq('status', 'active'),
+      ])
+      return { allocs, assigns }
+    })
+    for (const { allocs, assigns } of chunkResults) {
       for (const a of (allocs ?? []) as any[]) {
         const n = a.tenants?.name
         if (!n) continue
         if (!stillAllocatedTo[a.practice_id]) stillAllocatedTo[a.practice_id] = []
         if (!stillAllocatedTo[a.practice_id].includes(n)) stillAllocatedTo[a.practice_id].push(n)
       }
-
-      const { data: assigns } = await supabase
-        .from('lead_assignments')
-        .select('practice_id')
-        .in('practice_id', part)
-        .eq('status', 'active')
       for (const a of (assigns ?? []) as any[]) {
         if (a.practice_id) stillAssigned.add(a.practice_id)
       }

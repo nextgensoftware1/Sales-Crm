@@ -39,16 +39,22 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
     )
   }
 
-  const worksheetReports = await getWorksheetReports()
+  // The tenants lookup only needs isSuperAdmin (already known) — it doesn't
+  // actually depend on worksheetReports' result, so run them together
+  // instead of tenants waiting for the whole worksheet report to finish first.
+  const [worksheetReports, tenantRowsResult] = await Promise.all([
+    getWorksheetReports(),
+    isSuperAdmin
+      ? createSupabaseServer().then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
+      : Promise.resolve({ data: null }),
+  ])
   const requestedCompany = (await searchParams).company ?? '__all__'
   let companies: WorksheetCompanyOption[] = []
   if (worksheetReports.ok) {
     const countByTenant = new Map<string, number>()
     for (const row of worksheetReports.rows) countByTenant.set(row.tenantId, (countByTenant.get(row.tenantId) ?? 0) + 1)
     if (isSuperAdmin) {
-      const supabase = await createSupabaseServer()
-      const { data: tenantRows } = await supabase.from('tenants').select('id, name').eq('status', 'active').order('name')
-      companies = (tenantRows ?? []).map(tenant => ({ id: tenant.id, name: tenant.name, count: countByTenant.get(tenant.id) ?? 0 }))
+      companies = (tenantRowsResult.data ?? []).map(tenant => ({ id: tenant.id, name: tenant.name, count: countByTenant.get(tenant.id) ?? 0 }))
     } else if (me?.tenant_id) {
       companies = [{ id: me.tenant_id, name: me.tenants?.name ?? 'Your company', count: countByTenant.get(me.tenant_id) ?? worksheetReports.rows.length }]
     }
