@@ -93,7 +93,7 @@ export default async function PracticeDetail({
         providers (
           npi, name, org_name, credential, taxonomy_code, taxonomy_desc,
           addr1, city, state, postal, phone,
-          status, mailing_phone, entity_type, is_anchor,
+          status, mailing_phone, entity_type, is_anchor, nppes_last_updated, enumeration_date,
           org_pac_id, num_org_members, payment_adj_pct, penalty,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
@@ -469,6 +469,14 @@ export default async function PracticeDetail({
               <div>
                 <span className="lead-field-label">Contact Phone</span>
                 <div className="lead-field-value">{primaryProvider?.mailing_phone || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_LastUpdated</span>
+                <div className="lead-field-value">{primaryProvider?.nppes_last_updated || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_EnumerationDate</span>
+                <div className="lead-field-value">{primaryProvider?.enumeration_date || '—'}</div>
               </div>
             </div>
           </div>

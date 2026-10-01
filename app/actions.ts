@@ -448,6 +448,7 @@
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { authorizePractice } from '../lib/lead-access'
+import { chunks, mapConcurrent } from '../lib/query-utils'
 import { revalidatePath } from 'next/cache'
 
 export async function allocatePractices(practiceCodes: string[], tenantSlug: string) {
@@ -469,12 +470,17 @@ export async function allocatePractices(practiceCodes: string[], tenantSlug: str
     .single()
   if (!tenant) return { ok: false, message: 'Company not found' }
 
-  const { data: practices } = await supabase
-    .from('master_practices')
-    .select('id')
-    .in('practice_code', practiceCodes)
+  const practiceBatches = await mapConcurrent(chunks(practiceCodes, 200), 4, (codes) =>
+    supabase
+      .from('master_practices')
+      .select('id')
+      .in('practice_code', codes)
+  )
+  const practiceError = practiceBatches.find(({ error }) => error)?.error
+  if (practiceError) return { ok: false, message: `Could not load selected practices: ${practiceError.message}` }
+  const practices = practiceBatches.flatMap(({ data }) => data ?? [])
 
-  if (!practices || practices.length === 0) {
+  if (practices.length === 0) {
     return { ok: false, message: 'No practices selected' }
   }
 
@@ -788,19 +794,23 @@ export async function softDeleteLeads(codes: string[]) {
     return { ok: false, message: 'No leads selected.' }
   }
 
-  const { error, count } = await supabase
-    .from('master_practices')
-    .update(
-      { deleted_at: new Date().toISOString(), deleted_by: (me as any).id },
-      { count: 'exact' }
-    )
-    .in('practice_code', codes)
-    .is('deleted_at', null)
+  const deleteBatches = await mapConcurrent(chunks(codes, 200), 4, (batch) =>
+    supabase
+      .from('master_practices')
+      .update(
+        { deleted_at: new Date().toISOString(), deleted_by: (me as any).id },
+        { count: 'exact' }
+      )
+      .in('practice_code', batch)
+      .is('deleted_at', null)
+  )
+  const deleteError = deleteBatches.find(({ error }) => error)?.error
+  if (deleteError) return { ok: false, message: `Delete failed: ${deleteError.message}` }
+  const count = deleteBatches.reduce((total, batch) => total + (batch.count ?? 0), 0)
 
-  if (error) return { ok: false, message: error.message }
   revalidatePath('/')
   revalidatePath('/deleted-leads')
-  return { ok: true, message: `Moved ${count ?? codes.length} lead(s) to Deleted Leads.` }
+  return { ok: true, message: `Moved ${count} lead(s) to Deleted Leads.` }
 }
 
 export async function restoreLeads(codes: string[]) {
@@ -817,16 +827,20 @@ export async function restoreLeads(codes: string[]) {
     return { ok: false, message: 'No leads selected.' }
   }
 
-  const { error, count } = await supabase
-    .from('master_practices')
-    .update({ deleted_at: null, deleted_by: null }, { count: 'exact' })
-    .in('practice_code', codes)
-    .not('deleted_at', 'is', null)
+  const restoreBatches = await mapConcurrent(chunks(codes, 200), 4, (batch) =>
+    supabase
+      .from('master_practices')
+      .update({ deleted_at: null, deleted_by: null }, { count: 'exact' })
+      .in('practice_code', batch)
+      .not('deleted_at', 'is', null)
+  )
+  const restoreError = restoreBatches.find(({ error }) => error)?.error
+  if (restoreError) return { ok: false, message: `Restore failed: ${restoreError.message}` }
+  const count = restoreBatches.reduce((total, batch) => total + (batch.count ?? 0), 0)
 
-  if (error) return { ok: false, message: error.message }
   revalidatePath('/')
   revalidatePath('/deleted-leads')
-  return { ok: true, message: `Restored ${count ?? codes.length} lead(s) to the pool.` }
+  return { ok: true, message: `Restored ${count} lead(s) to the pool.` }
 }
 
 export async function hardDeleteLeads(codes: string[]) {

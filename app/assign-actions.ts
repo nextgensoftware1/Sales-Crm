@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { chunks, mapConcurrent } from '../lib/query-utils'
 
 // ---------------------------------------------------------------------------
 // assignLeadsToAgent(practiceCodes, agentUserId)
@@ -60,33 +61,47 @@ export async function assignLeadsToAgent(
 
   // 2) Resolve practice_codes → practice ids. A company may assign leads it
   //    OWNS (its own uploads) OR that are ALLOCATED to it by Super Admin.
-  const { data: practices } = await supabase
-    .from('master_practices')
-    .select('id, practice_code, owner_tenant_id')
-    .in('practice_code', practiceCodes)
+  const practiceBatches = await mapConcurrent(chunks(practiceCodes, 200), 4, (codes) =>
+    supabase
+      .from('master_practices')
+      .select('id, practice_code, owner_tenant_id')
+      .in('practice_code', codes)
+  )
+  const practiceError = practiceBatches.find(({ error }) => error)?.error
+  if (practiceError) return { ok: false, message: `Could not load selected leads: ${practiceError.message}` }
+  const practices = practiceBatches.flatMap(({ data }) => data ?? [])
 
   // Which of these are allocated to my tenant?
-  const allPracticeIds = (practices ?? []).map((p: any) => p.id)
+  const allPracticeIds = practices.map((p: any) => p.id)
   let allocatedIds = new Set<string>()
   if (allPracticeIds.length) {
-    const { data: allocs } = await supabase
-      .from('lead_allocations')
-      .select('practice_id')
-      .eq('tenant_id', myTenantId)
-      .eq('status', 'active')
-      .in('practice_id', allPracticeIds)
-    allocatedIds = new Set((allocs ?? []).map((a: any) => a.practice_id))
+    const allocationBatches = await mapConcurrent(chunks(allPracticeIds, 200), 4, (ids) =>
+      supabase
+        .from('lead_allocations')
+        .select('practice_id')
+        .eq('tenant_id', myTenantId)
+        .eq('status', 'active')
+        .in('practice_id', ids)
+    )
+    const allocationError = allocationBatches.find(({ error }) => error)?.error
+    if (allocationError) return { ok: false, message: `Could not check lead ownership: ${allocationError.message}` }
+    allocatedIds = new Set(allocationBatches.flatMap(({ data }) => (data ?? []).map((a: any) => a.practice_id)))
   }
 
   // Keep practices my company owns OR is allocated.
-  const ids = (practices ?? [])
+  const ids = practices
     .filter((p: any) => p.owner_tenant_id === myTenantId || allocatedIds.has(p.id))
     .map((p: any) => p.id)
 
   // A company cannot assign a lead after another company has claimed it.
-  const { data: activeClaims } = ids.length ? await supabase.from('lead_company_claims')
-    .select('practice_id, tenant_id').in('practice_id', ids).eq('status', 'active') : { data: [] }
-  const blockedIds = new Set((activeClaims ?? [])
+  const claimBatches = await mapConcurrent(chunks(ids, 200), 4, (idsBatch) =>
+    supabase.from('lead_company_claims')
+      .select('practice_id, tenant_id').in('practice_id', idsBatch).eq('status', 'active')
+  )
+  const claimError = claimBatches.find(({ error }) => error)?.error
+  if (claimError) return { ok: false, message: `Could not check lead claims: ${claimError.message}` }
+  const activeClaims = claimBatches.flatMap(({ data }) => data ?? [])
+  const blockedIds = new Set(activeClaims
     .filter((claim: any) => claim.tenant_id !== myTenantId)
     .map((claim: any) => claim.practice_id))
   const assignableIds = ids.filter((id: string) => !blockedIds.has(id))
@@ -97,12 +112,17 @@ export async function assignLeadsToAgent(
 
   // Look up any EXISTING origin for these practices so we carry it forward
   // (a lead that came from the admin keeps admin as its origin as it moves down).
-  const { data: existingRows } = await supabase
-    .from('lead_assignments')
-    .select('practice_id, origin_user_id')
-    .in('practice_id', assignableIds)
+  const assignmentLookupBatches = await mapConcurrent(chunks(assignableIds, 200), 4, (idsBatch) =>
+    supabase
+      .from('lead_assignments')
+      .select('practice_id, origin_user_id')
+      .in('practice_id', idsBatch)
+  )
+  const assignmentLookupError = assignmentLookupBatches.find(({ error }) => error)?.error
+  if (assignmentLookupError) return { ok: false, message: `Could not load existing assignments: ${assignmentLookupError.message}` }
+  const existingRows = assignmentLookupBatches.flatMap(({ data }) => data ?? [])
   const originByPractice = new Map<string, string | null>()
-  for (const r of (existingRows ?? []) as any[]) {
+  for (const r of existingRows as any[]) {
     originByPractice.set(r.practice_id, r.origin_user_id ?? null)
   }
 
@@ -122,13 +142,11 @@ export async function assignLeadsToAgent(
 
   // onConflict matches the UNIQUE (practice_id, assigned_to) constraint:
   // re-assigning the same lead to the same person updates instead of duplicating.
-  const { error } = await supabase
-    .from('lead_assignments')
-    .upsert(rows, { onConflict: 'practice_id,assigned_to' })
-
-  if (error) {
-    return { ok: false, message: `Assign failed: ${error.message}` }
-  }
+  const upsertBatches = await mapConcurrent(chunks(rows, 200), 4, (rowsBatch) =>
+    supabase.from('lead_assignments').upsert(rowsBatch, { onConflict: 'practice_id,assigned_to' })
+  )
+  const upsertError = upsertBatches.find(({ error }) => error)?.error
+  if (upsertError) return { ok: false, message: `Assign failed: ${upsertError.message}` }
 
   const skipped = ids.length - assignableIds.length
   return { ok: true, message: `Assigned ${assignableIds.length} lead(s).${skipped ? ` Skipped ${skipped} claimed by another company.` : ''}`, assigned: assignableIds.length }

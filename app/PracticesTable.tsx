@@ -73,13 +73,12 @@ const C = {
 
 // Each signal pill has a key (for toggle state) and a test(p) => boolean.
 // Booleans (CCM/PCM/…) test their flag; MIPS tests for real MIPS data.
-// Compares only the calendar date (year-month-day) as a plain string —
-// these NPPES fields are stored as bare date strings (e.g. "2026-09-14"),
-// so a direct string comparison avoids the off-by-one-day risk that
-// parsing through a Date object (and its timezone conversion) would add.
-function sameCalendarDate(value: string | null | undefined, ymd: string): boolean {
+// Compare the stored calendar date directly to avoid timezone shifts.
+function isWithinDateRange(value: string | null | undefined, from: string, to: string): boolean {
+  if (!from && !to) return true
   if (!value) return false
-  return value.trim().slice(0, 10) === ymd
+  const date = value.trim().slice(0, 10)
+  return (!from || date >= from) && (!to || date <= to)
 }
 
 const hasRealMips = (p: Practice) => {
@@ -209,8 +208,10 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const [catTab, setCatTab] = useState('All Categories')
   // Only meaningful — and only shown — when catTab === 'Credentialing'.
   const [enumTypeFilter, setEnumTypeFilter] = useState('')
-  const [lastUpdatedFilter, setLastUpdatedFilter] = useState('') // YYYY-MM-DD
-  const [enumDateFilter, setEnumDateFilter] = useState('')       // YYYY-MM-DD
+  const [lastUpdatedFrom, setLastUpdatedFrom] = useState('')
+  const [lastUpdatedTo, setLastUpdatedTo] = useState('')
+  const [enumDateFrom, setEnumDateFrom] = useState('')
+  const [enumDateTo, setEnumDateTo] = useState('')
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -312,8 +313,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       // is selected, since these fields only mean anything for NPPES data.
       if (catTab === 'Credentialing') {
         if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
-        if (lastUpdatedFilter && !sameCalendarDate(p.lastUpdated, lastUpdatedFilter)) return false
-        if (enumDateFilter && !sameCalendarDate(p.enumerationDate, enumDateFilter)) return false
+        if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
+        if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
       }
       if (dispositionFilter && p.status !== dispositionFilter) return false
 
@@ -351,7 +352,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       })
     }
     return rows
-  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFilter, enumDateFilter])
+  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -364,7 +365,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const pageRows = filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFilter, enumDateFilter])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -466,11 +467,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFilter(''); setEnumDateFilter('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo('')
   }
 
   const activeFilterCount = [
     search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, companyFilter,
+    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo,
     catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
     poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
   ].filter(Boolean).length + activeSignals.size
@@ -655,10 +657,18 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               </select>
             </label>
             <label className="filter-control"><span>NPPES Last Updated</span>
-              <input type="date" value={lastUpdatedFilter} onChange={(e) => setLastUpdatedFilter(e.target.value)} style={input} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input aria-label="NPPES Last Updated from" type="date" value={lastUpdatedFrom} onChange={(e) => setLastUpdatedFrom(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
+                <span style={{ color: C.faint, fontSize: 11, textTransform: 'none' }}>to</span>
+                <input aria-label="NPPES Last Updated to" type="date" value={lastUpdatedTo} onChange={(e) => setLastUpdatedTo(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
+              </div>
             </label>
             <label className="filter-control"><span>NPPES Enumeration Date</span>
-              <input type="date" value={enumDateFilter} onChange={(e) => setEnumDateFilter(e.target.value)} style={input} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input aria-label="NPPES Enumeration Date from" type="date" value={enumDateFrom} onChange={(e) => setEnumDateFrom(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
+                <span style={{ color: C.faint, fontSize: 11, textTransform: 'none' }}>to</span>
+                <input aria-label="NPPES Enumeration Date to" type="date" value={enumDateTo} onChange={(e) => setEnumDateTo(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
+              </div>
             </label>
           </div>
         )}
@@ -721,6 +731,9 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             {specialtyFilter && <button onClick={() => setSpecialtyFilter('')}>{specialtyFilter} ×</button>}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
+            {enumTypeFilter && <button onClick={() => setEnumTypeFilter('')}>Enumeration: {enumTypeFilter} ×</button>}
+            {(lastUpdatedFrom || lastUpdatedTo) && <button onClick={() => { setLastUpdatedFrom(''); setLastUpdatedTo('') }}>Last updated: {lastUpdatedFrom || 'Any'} to {lastUpdatedTo || 'Any'} ×</button>}
+            {(enumDateFrom || enumDateTo) && <button onClick={() => { setEnumDateFrom(''); setEnumDateTo('') }}>Enumeration date: {enumDateFrom || 'Any'} to {enumDateTo || 'Any'} ×</button>}
             {poolTab !== 'All Leads' && <button onClick={() => setPoolTab('All Leads')}>{poolTab} ×</button>}
             {sourceTab !== 'All' && <button onClick={() => setSourceTab('All')}>{sourceTab} source ×</button>}
             {catTab !== 'All Categories' && <button onClick={() => setCatTab('All Categories')}>{catTab} ×</button>}
@@ -820,6 +833,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
+              <th style={{ ...th, minWidth: 150 }}>NPPES Enumeration Date</th>
+              <th style={{ ...th, minWidth: 140 }}>NPPES Last Updated</th>
               <th style={th}>Sex</th>
               <th style={thLeft}>Org Name</th>
               <th style={th}>Risk</th>
@@ -859,6 +874,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                 </td>
                 <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
+                <td style={{ ...td, color: p.enumerationDate ? C.dim : C.faint, fontSize: 12, whiteSpace: 'nowrap' }}>{p.enumerationDate || '—'}</td>
+                <td style={{ ...td, color: p.lastUpdated ? C.dim : C.faint, fontSize: 12, whiteSpace: 'nowrap' }}>{p.lastUpdated || '—'}</td>
                 <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
                 <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
@@ -888,22 +905,20 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           <span>
             {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, filtered.length)} of ${filtered.length} leads`}
           </span>
-          {isSuperAdmin && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.text, fontWeight: 700 }}>
-              Rows per page
-              <select
-                aria-label="Rows per page"
-                value={pageSize}
-                onChange={(event) => {
-                  setPageSize(Number(event.target.value))
-                  setPage(1)
-                }}
-                style={{ ...input, padding: '6px 28px 6px 9px' }}
-              >
-                {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}
-              </select>
-            </label>
-          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.text, fontWeight: 700 }}>
+            Rows per page
+            <select
+              aria-label="Rows per page"
+              value={pageSize}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value))
+                setPage(1)
+              }}
+              style={{ ...input, padding: '6px 28px 6px 9px' }}
+            >
+              {(isSuperAdmin ? [20, 50, 100, 200] : [8, 15, 50, 200]).map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button
