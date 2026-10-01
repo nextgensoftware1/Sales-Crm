@@ -9,6 +9,24 @@ const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Intere
 const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 
+// All of these fields are optional — an empty value is always valid. These
+// only fire once something is actually typed in.
+// US phone: optional +1/1 prefix, then a 3-3-4 digit number, with any mix
+// of spaces/dashes/dots/parentheses as separators (or none at all).
+const US_PHONE_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/
+// Same, but allows a trailing extension — matches the "Direct Phone /
+// Extension" placeholder on that specific field.
+const US_PHONE_EXT_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(\s*(x|ext\.?|extension)\s*\d{1,6})?$/i
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Letters (incl. accented), spaces, hyphens, apostrophes, periods, commas —
+// covers names, titles like "Dr." and suffixes like ", MD".
+const NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ'.,\s-]+$/
+
+function isValidUSPhone(v: string) { return !v.trim() || US_PHONE_RE.test(v.trim()) }
+function isValidUSPhoneWithExt(v: string) { return !v.trim() || US_PHONE_EXT_RE.test(v.trim()) }
+function isValidEmail(v: string) { return !v.trim() || EMAIL_RE.test(v.trim()) }
+function isValidName(v: string) { return !v.trim() || NAME_RE.test(v.trim()) }
+
 type Initial = Partial<WorksheetData> & { updatedByName?: string | null; updatedAt?: string | null }
 type ExistingTransfer = { closerName: string; handoffStatus: string | null; transferredAt: string } | null
 
@@ -35,6 +53,18 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   const [disposition, setDisposition] = useState(initial?.disposition ?? 'New')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  // Only shows an error for a field after the person has actually left it
+  // (or tried to save) — not while they're still mid-typing.
+  const [touched, setTouched] = useState<Set<string>>(new Set())
+  const touch = (field: string) => setTouched((prev) => new Set(prev).add(field))
+
+  const fieldErrors = {
+    additionalPhone: isValidUSPhone(additionalPhone) ? '' : 'Enter a valid US phone number (e.g. (555) 123-4567).',
+    email: isValidEmail(email) ? '' : 'Enter a valid email address.',
+    concernedPerson: isValidName(concernedPerson) ? '' : 'Letters and spaces only.',
+    directLine: isValidUSPhoneWithExt(directLine) ? '' : 'Enter a valid US phone number, optionally with an extension (e.g. (555) 123-4567 x12).',
+  }
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean)
 
   // Transfer
   const [closers, setClosers] = useState<{ id: string; name: string; email: string }[]>([])
@@ -73,6 +103,8 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   // so Activity History records it, and creates a reminder if a callback is set.
   const save = async () => {
     if (!callDetails.trim()) { setMsg('Call details are required before saving.'); return }
+    setTouched(new Set(['additionalPhone', 'email', 'concernedPerson', 'directLine']))
+    if (hasFieldErrors) { setMsg('Please fix the highlighted field(s) before saving.'); return }
     setSaving(true); setMsg('')
     const res = await saveWorksheet(practiceCode, {
       callDetails, additionalPhone, email, concernedPerson, directLine, callbackAt, timezone, disposition,
@@ -126,13 +158,37 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
 
       <div className="grid-fields-2" style={{ marginBottom: 16 }}>
         <div><label className="lead-field-label">Additional Phone</label>
-          <input value={additionalPhone} onChange={(e) => setAdditionalPhone(e.target.value)} placeholder="Secondary / Mobile Phone" className="lead-input" disabled={locked} /></div>
+          <input
+            type="tel" value={additionalPhone} onChange={(e) => setAdditionalPhone(e.target.value)} onBlur={() => touch('additionalPhone')}
+            placeholder="Secondary / Mobile Phone" className="lead-input" disabled={locked}
+            style={{ borderColor: touched.has('additionalPhone') && fieldErrors.additionalPhone ? 'var(--danger)' : undefined }}
+          />
+          {touched.has('additionalPhone') && fieldErrors.additionalPhone && <p style={{ fontSize: 11, color: 'var(--danger)', margin: '4px 0 0' }}>{fieldErrors.additionalPhone}</p>}
+        </div>
         <div><label className="lead-field-label">Email Address</label>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="billing@practice.com" className="lead-input" disabled={locked} /></div>
+          <input
+            type="email" value={email} onChange={(e) => setEmail(e.target.value)} onBlur={() => touch('email')}
+            placeholder="billing@practice.com" className="lead-input" disabled={locked}
+            style={{ borderColor: touched.has('email') && fieldErrors.email ? 'var(--danger)' : undefined }}
+          />
+          {touched.has('email') && fieldErrors.email && <p style={{ fontSize: 11, color: 'var(--danger)', margin: '4px 0 0' }}>{fieldErrors.email}</p>}
+        </div>
         <div><label className="lead-field-label">Concerned Person</label>
-          <input value={concernedPerson} onChange={(e) => setConcernedPerson(e.target.value)} placeholder="e.g. Practice Administrator" className="lead-input" disabled={locked} /></div>
+          <input
+            value={concernedPerson} onChange={(e) => setConcernedPerson(e.target.value)} onBlur={() => touch('concernedPerson')}
+            placeholder="e.g. Practice Administrator" className="lead-input" disabled={locked}
+            style={{ borderColor: touched.has('concernedPerson') && fieldErrors.concernedPerson ? 'var(--danger)' : undefined }}
+          />
+          {touched.has('concernedPerson') && fieldErrors.concernedPerson && <p style={{ fontSize: 11, color: 'var(--danger)', margin: '4px 0 0' }}>{fieldErrors.concernedPerson}</p>}
+        </div>
         <div><label className="lead-field-label">Direct Line</label>
-          <input value={directLine} onChange={(e) => setDirectLine(e.target.value)} placeholder="Direct Phone / Extension" className="lead-input" disabled={locked} /></div>
+          <input
+            type="tel" value={directLine} onChange={(e) => setDirectLine(e.target.value)} onBlur={() => touch('directLine')}
+            placeholder="Direct Phone / Extension" className="lead-input" disabled={locked}
+            style={{ borderColor: touched.has('directLine') && fieldErrors.directLine ? 'var(--danger)' : undefined }}
+          />
+          {touched.has('directLine') && fieldErrors.directLine && <p style={{ fontSize: 11, color: 'var(--danger)', margin: '4px 0 0' }}>{fieldErrors.directLine}</p>}
+        </div>
       </div>
 
       <label className="lead-field-label">Follow-up / Callback</label>
@@ -160,7 +216,7 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
         </div>
       </div>
 
-      <button onClick={save} disabled={saving || locked} className="lead-save-btn">
+      <button onClick={save} disabled={saving || locked || hasFieldErrors} className="lead-save-btn">
         {saving ? 'Saving…' : 'Save Worksheet Details'}
       </button>
       {msg && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>{msg}</p>}

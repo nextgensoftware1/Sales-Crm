@@ -270,8 +270,12 @@ export default async function Home() {
     // Both "NPPES - Found" and "NPPES - Not Found" count as having
     // credentialing data — only a genuinely blank Record_Source (no NPPES
     // lookup attempted at all) is excluded from the Credentialing filter.
+    // Only a confirmed NPPES match counts as Credentialing — "Not Found"
+    // (and blank) are excluded. "NPPES - Not Found" contains the substring
+    // "found" too, so it must be checked for explicitly rather than a
+    // plain .includes('found').
     const recordSourceLower = (provider?.record_source ?? '').toString().trim().toLowerCase()
-    const npiFound = recordSourceLower.length > 0
+    const npiFound = recordSourceLower.includes('found') && !recordSourceLower.includes('not found')
     const mipsByYear: Record<number, string> = {}
     for (const m of mipsRows) {
       const raw = (m.reporting_option ?? m.status ?? '').toString().trim()

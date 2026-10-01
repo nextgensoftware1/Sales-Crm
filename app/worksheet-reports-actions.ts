@@ -56,7 +56,9 @@ function deriveSignals(provider: {
     if (year) mipsByYear[year] = raw.replace(/^\d{4}\s*-\s*/, '') || raw
   }
   return {
-    npiFound: recordSourceLower.length > 0,
+    // Only a confirmed NPPES match counts as Credentialing — "Not Found"
+    // (and blank) are excluded. Matches the same rule in app/page.tsx.
+    npiFound: recordSourceLower.includes('found') && !recordSourceLower.includes('not found'),
     entityType: provider?.entity_type ?? null,
     enumerationDate: provider?.enumeration_date ?? null,
     nppesLastUpdated: provider?.nppes_last_updated ?? null,

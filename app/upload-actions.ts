@@ -293,6 +293,13 @@ export async function uploadLeadsCsv(
 
   const keyMap = new Map<string, string>()
   for (const k of Object.keys(rows[0])) keyMap.set(k.trim().toLowerCase(), k)
+  // File-level, not per-row: does this CSV have a Record_Source column at
+  // all? This decides how the WHOLE file is routed — Credentialing if
+  // present, the original MIPS/roster classification if absent — as
+  // opposed to checking each row's value individually. A file with the
+  // column present but a blank cell for a specific row still routes that
+  // row to Credentialing, since the column's presence is what matters.
+  const hasRecordSourceColumn = keyMap.has('record_source')
   const col = (row: CsvRow, name: string) => {
     const realKey = keyMap.get(name.toLowerCase())
     return realKey ? clean(row[realKey]) : ''
@@ -328,39 +335,56 @@ export async function uploadLeadsCsv(
     if (npi) npiByCode.set(code, npi)
   }
   const incomingNpis = Array.from(new Set(npiByCode.values()))
-  const existingNpis = new Set<string>()
+  // Maps each existing NPI to its CURRENT record_source value (or '' if
+  // none) — this is how "already Credentialing" is distinguished from
+  // "still MIPS/general": non-empty means it's already in the
+  // Credentialing pool, empty means it isn't yet.
+  const existingProviderSource = new Map<string, string>()
   for (const part of chunk(incomingNpis, 300)) {
     const { data: existProv } = await supabase
       .from('providers')
-      .select('npi')
+      .select('npi, record_source')
       .eq('owner_tenant_id', tenantId)
       .in('npi', part)
-    for (const p of (existProv ?? []) as any[]) existingNpis.add(p.npi)
+    for (const p of (existProv ?? []) as any[]) existingProviderSource.set(p.npi, (p.record_source ?? '').trim())
   }
 
   const toInsert = toInsertByCode.filter((c) => {
     const npi = npiByCode.get(c)
-    return npi ? !existingNpis.has(npi) : true
+    return npi ? !existingProviderSource.has(npi) : true
   })
   const skipped = allCodes.length - toInsert.length
 
-  // Re-uploading a lead you already have is normally a no-op — except when
-  // NPPES has since matched an NPI that previously had no match (or is
-  // simply fresher data). That row now carries real enrichment data worth
-  // keeping, so its descriptive fields are refreshed instead of the row
-  // being silently discarded. Rows without a "Found" match (e.g. still
-  // "NPPES - Not Found", which per the source data carries no other
-  // populated fields anyway) are left alone, unchanged from before.
-  // Ownership/structural fields — org_pac_id, is_anchor, owner_tenant_id,
-  // num_org_members, pecos_asct_cntl_id, enrlmt_id — are deliberately NOT
-  // touched here: this only refreshes descriptive data, it never
-  // reclassifies or reassigns an existing lead.
+  // Which existing duplicates get enriched depends entirely on whether
+  // this file has a Record_Source column at all:
+  //   - No Record_Source column (a MIPS/roster-type file): never enrich.
+  //     Any NPI that already exists — Credentialing or not — is left
+  //     completely untouched and reported as a plain duplicate. A
+  //     MIPS-type upload must never alter an existing Credentialing
+  //     record, or downgrade one.
+  //   - Record_Source column present (a Credentialing-type file): a
+  //     duplicate NPI that's ALREADY Credentialing (existing
+  //     record_source is non-empty) stays untouched and duplicate —
+  //     re-uploading data you already have isn't an update. A duplicate
+  //     NPI that exists only as a MIPS/general record (existing
+  //     record_source is empty) is NOT treated as a duplicate at all —
+  //     but only when THIS row specifically says "Found". A row saying
+  //     "Not Found" (or blank) never gets promoted, even in a
+  //     Credentialing-type file — only a confirmed NPPES match earns
+  //     Credentialing status.
   const isNppesFound = (row: CsvRow) => {
     const v = col(row, 'Record_Source').toLowerCase()
     return v.includes('found') && !v.includes('not found')
   }
   const toInsertSet = new Set(toInsert)
-  const codesToEnrich = allCodes.filter((c) => !toInsertSet.has(c) && isNppesFound(byCode.get(c)!))
+  const codesToEnrich = hasRecordSourceColumn
+    ? allCodes.filter((c) => {
+        if (toInsertSet.has(c)) return false
+        if (!isNppesFound(byCode.get(c)!)) return false
+        const npi = npiByCode.get(c) ?? clean(byCode.get(c)![npiKey])
+        return (existingProviderSource.get(npi) ?? '') === ''
+      })
+    : []
 
   let enrichedCount = 0
   let enrichError: string | null = null
@@ -437,7 +461,7 @@ export async function uploadLeadsCsv(
       if (enrichedCount > 0) parts.push(`Enriched ${enrichedCount} existing lead(s) with new NPPES data`)
       if (notMatchedCodes.length > 0) {
         parts.push(
-          `${notMatchedCodes.length} lead(s) had "Found" data but no matching record under your company to update ` +
+          `${notMatchedCodes.length} lead(s) were eligible for Credentialing promotion but had no matching record under your company to update ` +
           `(e.g. ${notMatchedCodes.slice(0, 5).join(', ')}${notMatchedCodes.length > 5 ? ', …' : ''}) — ` +
           `they may be owned by a different company or the practice/provider link is out of sync`
         )
@@ -448,14 +472,14 @@ export async function uploadLeadsCsv(
     return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
   }
 
-  // Anchor detection: Source='uploaded' OR (PECOS + ENRLMT present) OR
-  // NPPES has matched this NPI ("NPPES - Found") — a confirmed NPPES match
-  // means this is a real, workable lead regardless of what the Source
-  // column says (or whether it's present at all), so it always belongs in
-  // the visible Lead Pool, not hidden as a roster member.
+  // Anchor detection: in a Credentialing-type file, only a row whose own
+  // Record_Source specifically says "Found" is auto-anchored — "Not
+  // Found" (or blank) falls through to the same Source/PECOS/ENRLMT
+  // classification used when there's no Record_Source column at all,
+  // roster membership included.
   const isAnchorRow = (code: string) => {
     const row = byCode.get(code)!
-    if (isNppesFound(row)) return true
+    if (hasRecordSourceColumn && isNppesFound(row)) return true
     const source = col(row, 'Source').toLowerCase()
     if (source === 'uploaded') return true
     if (source.startsWith('roster')) return false
@@ -600,7 +624,7 @@ export async function uploadLeadsCsv(
     message: `Uploaded ${anchorCodes.length} lead(s)` +
       (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
       (enrichedCount ? `, enriched ${enrichedCount} existing lead(s) with new NPPES data` : '') +
-      (notMatchedCodes.length ? `, ${notMatchedCodes.length} had "Found" data but no matching record to update` : '') +
+      (notMatchedCodes.length ? `, ${notMatchedCodes.length} were eligible for Credentialing promotion but had no matching record to update` : '') +
       (plainSkipped ? `, skipped ${plainSkipped} duplicate(s)` : '') + '.',
     inserted: anchorCodes.length,
     skipped,
