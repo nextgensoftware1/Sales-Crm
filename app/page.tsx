@@ -4,7 +4,7 @@ import PracticesTable from './PracticesTable'
 import UploadLeadsButton from './UploadLeadsButton'
 import { redirect } from 'next/navigation'
 import AppShell from './AppShell'
-import { mapConcurrent } from '../lib/query-utils'
+import { mapConcurrent, readAllPages, rowsViaRpc, compactRow } from '../lib/query-utils'
 import { allRows } from '../lib/practice-navigation'
 
 export default async function Home() {
@@ -38,30 +38,43 @@ export default async function Home() {
   const PAGE = 1000
   const CHUNK_IDS = 300
 
-  const fetchAllPaged = async (makeQuery: () => any) => {
-    const out: any[] = []
-    let from = 0
-    while (true) {
-      let query = makeQuery()
+  // Page 0 also asks for an exact row count, so every remaining page can be
+  // requested at once instead of ramping up 1 -> 1 -> 4 pages per round trip.
+  const fetchPagedRows = async <T,>(
+    readPage: (from: number, to: number, withCount: boolean) => PromiseLike<{ data: T[] | null; error: unknown; count?: number | null }>
+  ): Promise<T[]> => readAllPages<T>(readPage, { pageSize: PAGE, concurrency: 6 })
+
+  // `id` is the final sort key so concurrent page ranges never overlap or skip
+  // rows (sorting by name alone is not unique).
+  const leadQuery = (withCount: boolean) =>
+    supabase.from('master_practices').select(SELECT, withCount ? { count: 'exact' } : undefined)
+  const fetchAllPaged = async (makeQuery: (withCount: boolean) => any) => {
+    return fetchPagedRows((from, to, withCount) => {
+      let query = makeQuery(withCount)
       if (canAssign) query = query.eq('assigned_away.assigned_by', myUserId).eq('assigned_away.status', 'active')
-      const { data: batch, error: err } = await query.order('created_at', { referencedTable: 'lead_activity', ascending: false }).limit(1, { referencedTable: 'lead_activity' }).range(from, from + PAGE - 1)
-      if (err) throw err
-      if (!batch || batch.length === 0) break
-      out.push(...batch)
-      if (batch.length < PAGE) break
-      from += PAGE
-    }
-    return out
+      return query.order('created_at', { referencedTable: 'lead_activity', ascending: false })
+        .limit(1, { referencedTable: 'lead_activity' }).range(from, to)
+    })
   }
 
+  // One database round trip per lead read (crm_lead_rows in
+  // database/performance-rpc.sql). Same row shape as the nested select above.
+  // If the function is not installed or fails, the original paged queries run.
+  const assignedBy = canAssign ? (myUserId ?? null) : null
+  const leadRpc = (args: Record<string, unknown>, fallback: () => Promise<any[]>) =>
+    rowsViaRpc<any>(supabase, 'crm_lead_rows', { p_assigned_by: assignedBy, ...args }, fallback)
+
   const fetchByIds = async (idsIn: string[]) => {
-    const ids = (idsIn ?? []).filter((id) => typeof id === 'string' && id.length > 0)
+    const ids = Array.from(new Set((idsIn ?? []).filter((id) => typeof id === 'string' && id.length > 0)))
     if (ids.length === 0) return []
+    return leadRpc({ p_mode: 'ids', p_ids: ids }, () => fetchByIdsPaged(ids))
+  }
+  const fetchByIdsPaged = async (ids: string[]) => {
     const chunks: string[][] = []
     for (let i = 0; i < ids.length; i += CHUNK_IDS) chunks.push(ids.slice(i, i + CHUNK_IDS))
     const results = await mapConcurrent(chunks, 4, (chunk) =>
-        fetchAllPaged(() =>
-          supabase.from('master_practices').select(SELECT).in('id', chunk).eq('is_roster', false).order('name')
+        fetchAllPaged((withCount: boolean) =>
+          leadQuery(withCount).in('id', chunk).eq('is_roster', false).order('name').order('id')
         )
     )
     return results.flat()
@@ -70,11 +83,12 @@ export default async function Home() {
   // Start the independent lead scan while dropdown/allocation metadata loads.
   // Capture errors immediately so an early rejection cannot go unhandled.
   const earlyLeadRead = isSuperAdmin || roleKey === 'company_admin'
-    ? fetchAllPaged(() => {
-        let query = supabase.from('master_practices').select(SELECT).eq('is_roster', false).order('name')
-        query = isSuperAdmin ? query.is('deleted_at', null) : query.eq('owner_tenant_id', myTenantId)
-        return query
-      }).then(data => ({ data, error: null }), error => ({ data: [], error }))
+    ? leadRpc(isSuperAdmin ? { p_mode: 'all' } : { p_mode: 'owner', p_tenant: myTenantId ?? null },
+        () => fetchAllPaged((withCount) => {
+          let query = leadQuery(withCount).eq('is_roster', false).order('name').order('id')
+          query = isSuperAdmin ? query.is('deleted_at', null) : query.eq('owner_tenant_id', myTenantId)
+          return query
+        })).then(data => ({ data, error: null }), error => ({ data: [], error }))
     : null
   // These reads depend only on the verified profile, not on each other.
   // Reuse assignment/allocation results instead of fetching the same rows twice.
@@ -100,25 +114,27 @@ export default async function Home() {
     ? scopeIdsRead.then(fetchByIds).then(data => ({ data, error: null }), error => ({ data: [], error }))
     : null
   const readAllocations = async () => {
-    const rows = []
-    for (let offset = 0; ; offset += PAGE) {
+    const tenantScope = !isSuperAdmin && myTenantId ? myTenantId : null
+    const rows = await rowsViaRpc<any>(supabase, 'crm_active_allocations', { p_tenant: tenantScope }, () => fetchPagedRows((from, to, withCount) => {
       let query = supabase.from('lead_allocations')
-        .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)')
+        .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)', withCount ? { count: 'exact' } : undefined)
         .eq('status', 'active')
       if (!isSuperAdmin && myTenantId) query = query.eq('tenant_id', myTenantId)
-      const { data, error } = await query.order('practice_id').order('tenant_id').range(offset, offset + PAGE - 1)
-      // Missing allocation data must not make assigned leads appear unassigned.
-      if (error) throw error
-      rows.push(...(data ?? []))
-      if (!data || data.length < PAGE) return { data: rows }
-    }
+      return query.order('practice_id').order('tenant_id').range(from, to)
+    }))
+    // Missing allocation data must not make assigned leads appear unassigned.
+    return { data: rows }
   }
 
+  // Read every page: a single request is capped at 1,000 rows by Supabase, which
+  // silently dropped claims/worksheets beyond the first 1,000.
   const claimsRead = !isSuperAdmin && myTenantId
-    ? supabase.from('lead_company_claims').select('practice_id, tenant_id').eq('status', 'active')
+    ? allRows<any>(() => supabase.from('lead_company_claims').select('practice_id, tenant_id')
+        .eq('status', 'active').order('practice_id').order('id')).then(data => ({ data }))
     : Promise.resolve(empty)
   const worksheetsRead = !isSuperAdmin && myTenantId
-    ? supabase.from('lead_worksheets').select('practice_id, updated_by, disposition, updated_at').eq('tenant_id', myTenantId)
+    ? allRows<any>(() => supabase.from('lead_worksheets').select('practice_id, updated_by, disposition, updated_at')
+        .eq('tenant_id', myTenantId).order('practice_id').order('id')).then(data => ({ data }))
     : Promise.resolve(empty)
 
   const [assignmentsResult, transfersResult, allocationsResult, claimsResult, worksheetsResult] = await Promise.all([
@@ -189,9 +205,9 @@ export default async function Home() {
         earlyLeadRead ? earlyLeadRead.then(result => {
           if (result.error) throw result.error
           return result.data
-        }) : fetchAllPaged(() =>
-          supabase.from('master_practices').select(SELECT).eq('owner_tenant_id', myTenantId).eq('is_roster', false).order('name')
-        ),
+        }) : leadRpc({ p_mode: 'owner', p_tenant: myTenantId ?? null }, () => fetchAllPaged((withCount) =>
+          leadQuery(withCount).eq('owner_tenant_id', myTenantId).eq('is_roster', false).order('name').order('id')
+        )),
         fetchByIds(myAllocatedIds),
       ])
       data = [...owned, ...allocated]
@@ -328,10 +344,15 @@ export default async function Home() {
       bhi: s.bhi ?? false,
       rpm: s.rpm ?? false,
       rcmFit: s.rcm_fit ?? false,
-      mips: mipsByYear,
       mipsByYear,
     }
   })
+
+  // Smaller browser payload: drop empty/false/null fields (read with ?? / ?. /
+  // truthiness in PracticesTable). name and practiceCode are always kept.
+  const compactPractices = practices.map(row => ({
+    ...compactRow(row), practiceCode: row.practiceCode, name: row.name,
+  })) as unknown as typeof practices
 
   return (
     <AppShell
@@ -345,7 +366,7 @@ export default async function Home() {
       headerRight={canUpload ? <UploadLeadsButton /> : null}
     >
       <PracticesTable
-        practices={practices}
+        practices={compactPractices}
         currentUser={currentUser}
         isSuperAdmin={isSuperAdmin}
         lazyOptions

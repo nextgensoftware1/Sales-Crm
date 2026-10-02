@@ -530,3 +530,63 @@ test('worksheet update history is hidden from agents and available to management
   assert.match(shell, /n\.href === '\/worksheet-updates'.*showAdmin \|\| canManageUsers/)
   assert.match(shell, /item\.href === '\/admin' \|\| item\.href === '\/worksheet-updates'/)
 })
+
+// One-round-trip RPC path must produce exactly what the original queries produce.
+function withLeadRpcs(db, tables) {
+  db.rpc = (name, a) => {
+    const byName = (x, y) => String(x.name).localeCompare(String(y.name)) || String(x.id).localeCompare(String(y.id))
+    if (name === 'crm_lead_rows') {
+      let rows = tables.master_practices.filter(p => !p.is_roster)
+      if (a.p_mode === 'all') rows = rows.filter(p => !p.deleted_at)
+      else if (a.p_mode === 'owner') rows = rows.filter(p => p.owner_tenant_id === a.p_tenant)
+      else if (a.p_mode === 'ids') rows = rows.filter(p => a.p_ids.includes(p.id))
+      return Promise.resolve({ data: rows.slice().sort(byName).map(r => {
+        const o = { ...r }; if (!a.p_assigned_by) delete o.assigned_away; return o }), error: null })
+    }
+    if (name === 'crm_active_allocations') return Promise.resolve({ data: tables.lead_allocations
+      .filter(r => r.status === 'active' && (!a.p_tenant || r.tenant_id === a.p_tenant)), error: null })
+    return Promise.resolve({ data: null, error: { code: 'PGRST202' } })
+  }
+  return db
+}
+for (const role of Object.keys(expected)) {
+  test(`lead RPC path matches original queries for ${role}`, async () => {
+    const run = async (rpc) => {
+      const { me, tables } = homeFixture(role), calls = []
+      let db = database(tables, calls); if (rpc) db = withLeadRpcs(db, tables)
+      const { default: Home } = loadTs('app/page.tsx', {
+        '../lib/supabase-server': { createSupabaseServer: async () => db,
+          getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+          getCurrentProfile: async () => ({ data: me }) },
+        './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
+        'next/navigation': { redirect: () => { throw Error('unexpected redirect') } } })
+      return { props: (await Home()).props.children.props, calls: calls.length }
+    }
+    const before = await run(false), after = await run(true)
+    const norm = x => JSON.stringify({ ...x, practices: [...x.practices].sort((p, q) => p.practiceCode.localeCompare(q.practiceCode)) })
+    assert.equal(norm(after.props), norm(before.props))
+    assert.ok(after.calls < before.calls)
+  })
+}
+
+test('compacted lead rows render the identical table', () => {
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server')
+  const { compactRow } = loadTs('lib/query-utils.ts')
+  const { default: Table } = loadTs('app/PracticesTable.tsx', {
+    'next/link': ({ href, children, prefetch, ...rest }) => React.createElement('a', { href, ...rest }, children),
+    'next/navigation': { useRouter: () => ({ refresh() {} }) },
+    './actions': { allocatePractices() {}, softDeleteLeads() {} }, './assign-actions': { assignLeadsToAgent() {} },
+  })
+  const row = (i) => ({ practiceCode: 'PR-' + i, allocatedOn: i % 2 ? '2026-01-01T00:00:00Z' : null, status: i % 3 ? null : 'Qualified',
+    assignedAwayTo: i % 4 ? null : { name: 'Ann', role: 'Agent' }, source: i % 2 ? 'Allocated' : 'Uploaded',
+    allocatedTo: i % 2 ? 'Acme' : null, allocatedCompanies: i % 2 ? [{ id: 't', name: 'Acme' }] : [], name: 'Name ' + i,
+    state: i % 5 ? 'NY' : null, specialty: null, sex: null, orgName: i % 2 ? 'Org' : null, risk: null, npiFound: i % 2 === 0,
+    entityType: null, enumerationDate: null, lastUpdated: null, paymentAdj: i % 3 ? null : 0, lastDialed: null,
+    ccm: i % 2 === 0, pcm: false, awv: false, tcm: false, bhi: false, rpm: false, rcmFit: i % 3 === 0, mipsByYear: i % 2 ? { 2026: 'Group' } : {} })
+  const full = Array.from({ length: 40 }, (_, i) => row(i))
+  const compact = full.map(r => ({ ...compactRow(r), practiceCode: r.practiceCode, name: r.name }))
+  for (const props of [{ isSuperAdmin: true }, { canAssign: true, viewerRole: 'manager' }, { viewerRole: 'agent' }]) {
+    assert.equal(renderToStaticMarkup(React.createElement(Table, { practices: compact, lazyOptions: true, ...props })),
+      renderToStaticMarkup(React.createElement(Table, { practices: full, lazyOptions: true, ...props })))
+  }
+})

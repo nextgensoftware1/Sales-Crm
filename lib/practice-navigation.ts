@@ -1,18 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { chunks, mapConcurrent } from './query-utils'
+import { chunks, mapConcurrent, readAllPages, rowsViaRpc } from './query-utils'
 
 type Lead = { id: string; practice_code: string; name: string }
 type Scope = { role: string; userId: string | null; tenantId: string | null; personalIds?: string[] }
 
 // Fetch every page: PostgREST's default row cap is not a total-count API.
+// Pages are read in concurrent waves instead of one round trip per 1,000 rows.
 export async function allRows<T>(makeQuery: () => PromiseLike<{ data: T[] | null; error: unknown }> & { range(from: number, to: number): PromiseLike<{ data: T[] | null; error: unknown }> }): Promise<T[]> {
-  const rows: T[] = []
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await makeQuery().range(from, from + 999)
-    if (error) throw error
-    rows.push(...(data ?? []))
-    if (!data || data.length < 1000) return rows
-  }
+  return readAllPages<T>((from, to) => makeQuery().range(from, to), { concurrency: 4 })
 }
 
 export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): Promise<string[]> {
@@ -22,8 +17,9 @@ export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): P
       .eq('is_roster', false).order('name').order('id')))).flat()
   let leads: Lead[] = []
   if (scope.role === 'super_admin') {
-    leads = await allRows<Lead>(() => db.from('master_practices').select(projection)
-      .eq('is_roster', false).is('deleted_at', null).order('name').order('id'))
+    leads = await rowsViaRpc<Lead>(db, 'crm_practice_index', { p_owner: null }, () =>
+      allRows<Lead>(() => db.from('master_practices').select(projection)
+        .eq('is_roster', false).is('deleted_at', null).order('name').order('id')))
   } else if (['agent', 'closer', 'manager', 'team_lead'].includes(scope.role) && scope.userId) {
     let ids = scope.personalIds
     if (!ids) {
@@ -46,8 +42,9 @@ export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): P
     }
   } else if (scope.role === 'company_admin' && scope.tenantId) {
     const [owned, allocations] = await Promise.all([
-      allRows<Lead>(() => db.from('master_practices').select(projection)
-        .eq('owner_tenant_id', scope.tenantId).eq('is_roster', false).order('name').order('id')),
+      rowsViaRpc<Lead>(db, 'crm_practice_index', { p_owner: scope.tenantId }, () =>
+        allRows<Lead>(() => db.from('master_practices').select(projection)
+          .eq('owner_tenant_id', scope.tenantId).eq('is_roster', false).order('name').order('id'))),
       allRows<{ practice_id: string }>(() => db.from('lead_allocations').select('practice_id')
         .eq('tenant_id', scope.tenantId).eq('status', 'active').order('practice_id')),
     ])

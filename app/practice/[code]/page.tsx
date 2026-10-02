@@ -259,7 +259,8 @@ export default async function PracticeDetail({
     .eq('practice_id', practice.id)
   if (!isSuperAdmin && myTenantId) transferQuery = transferQuery.eq('tenant_id', myTenantId)
 
-  const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: worksheetRow }] = await Promise.all([
+  const orgPac = primaryProvider?.org_pac_id
+  const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: worksheetRow }, { data: orgProvs }] = await Promise.all([
     getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
       personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined })
       .catch(() => null),
@@ -273,6 +274,12 @@ export default async function PracticeDetail({
     transferQuery.order('created_at', { ascending: false })
       .limit(1).maybeSingle(),
     worksheetQuery.maybeSingle(),
+    // Previously awaited on its own after this batch — one extra round trip.
+    orgPac
+      ? supabase.from('providers')
+          .select('npi, provider_signals(ccm), provider_mips(reporting_option)')
+          .eq('org_pac_id', orgPac)
+      : Promise.resolve({ data: null as any[] | null }),
   ])
   const codesList = navigationCodes ?? []
   const currentIndex = codesList.indexOf(code)
@@ -324,14 +331,7 @@ export default async function PracticeDetail({
   let rosterClinicianCount = 0
 
   let rosterProviders: any[] = providersList
-  const orgPac = primaryProvider?.org_pac_id
-  if (orgPac) {
-    const { data: orgProvs } = await supabase
-      .from('providers')
-      .select('npi, provider_signals(ccm), provider_mips(reporting_option)')
-      .eq('org_pac_id', orgPac)
-    if (orgProvs && orgProvs.length) rosterProviders = orgProvs
-  }
+  if (orgProvs && orgProvs.length) rosterProviders = orgProvs
 
   const seenNpi = new Set<string>()
   for (const prov of rosterProviders) {
