@@ -5,6 +5,7 @@ import UploadLeadsButton from './UploadLeadsButton'
 import { redirect } from 'next/navigation'
 import AppShell from './AppShell'
 import { mapConcurrent } from '../lib/query-utils'
+import { allRows } from '../lib/practice-navigation'
 
 export default async function Home() {
   const supabase = await createSupabaseServer()
@@ -79,11 +80,17 @@ export default async function Home() {
   // Reuse assignment/allocation results instead of fetching the same rows twice.
   const assignmentScoped = ['agent', 'closer', 'manager', 'team_lead'].includes(roleKey)
   const empty = { data: [] }
-  const assignmentsRead = Promise.resolve(assignmentScoped || canAssign ? supabase.from('lead_assignments')
-    .select('practice_id, assigned_at, current_status, master_practices(practice_code)')
-    .eq('assigned_to', myUserId).eq('status', 'active') : empty)
+  const assignmentsRead = Promise.resolve(assignmentScoped || canAssign
+    ? allRows<any>(() => supabase.from('lead_assignments')
+        .select('practice_id, assigned_at, current_status, master_practices(practice_code)')
+        .eq('assigned_to', myUserId).eq('status', 'active').order('practice_id'))
+        .then(data => ({ data }))
+    : empty)
   const transfersRead = Promise.resolve(roleKey === 'closer'
-    ? supabase.from('lead_transfers').select('practice_id, created_at').eq('to_user_id', myUserId) : empty)
+    ? allRows<{ practice_id: string; created_at: string }>(() => supabase.from('lead_transfers')
+        .select('practice_id, created_at').eq('to_user_id', myUserId).order('practice_id'))
+        .then(data => ({ data }))
+    : empty)
   const scopeIdsRead = Promise.all([assignmentsRead, transfersRead]).then(results =>
     Array.from(new Set(results.flatMap(result => (result.data ?? []).map(row => row.practice_id)).filter(Boolean)))
   )

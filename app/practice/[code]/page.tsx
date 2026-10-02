@@ -168,12 +168,13 @@ export default async function PracticeDetail({
       let allocatedToMe = false
       const allocatedCodes = new Set<string>()
       if (!ownsIt) {
-        const { data: allocs } = await supabase
+        const allocs = await allRows<any>(() => supabase
           .from('lead_allocations')
           .select('id, master_practices(practice_code)')
           .eq('tenant_id', myTenantId)
           .eq('status', 'active')
-        for (const a of (allocs ?? []) as any[]) {
+          .order('id'))
+        for (const a of allocs) {
           if (a.master_practices?.practice_code) allocatedCodes.add(a.master_practices.practice_code)
         }
         allocatedToMe = allocatedCodes.has(code)
