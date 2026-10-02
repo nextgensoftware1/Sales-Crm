@@ -304,6 +304,19 @@ export async function uploadLeadsCsv(
     const realKey = keyMap.get(name.toLowerCase())
     return realKey ? clean(row[realKey]) : ''
   }
+  const authorizedOfficialName = (row: CsvRow) => {
+    const prefix = col(row, 'NPPES_AuthOfficial_Prefix') || col(row, 'NPPES_AuthOfficial_NamePrefix')
+    const name = col(row, 'NPPES_AuthOfficial_Name') || [
+      col(row, 'NPPES_AuthOfficial_FirstName'),
+      col(row, 'NPPES_AuthOfficial_MiddleName'),
+      col(row, 'NPPES_AuthOfficial_LastName'),
+    ].filter(Boolean).join(' ')
+    const displayName = [prefix, name].filter(Boolean).join(' ')
+    const credential = col(row, 'NPPES_AuthOfficial_Credential')
+    return credential && displayName && !displayName.toLowerCase().endsWith(credential.toLowerCase())
+      ? `${displayName} ${credential}`
+      : displayName
+  }
   const npiKey = keyMap.get('npi')
   if (!npiKey) return { ok: false, message: 'CSV has no NPI column.' }
 
@@ -386,6 +399,70 @@ export async function uploadLeadsCsv(
       })
     : []
 
+  const codesToEnrichSet = new Set(codesToEnrich)
+  const hasOfficialProfileColumns = [
+    'nppes_providername', 'nppes_organizationname', 'nppes_authofficial_name',
+    'nppes_authofficial_firstname', 'nppes_authofficial_middlename', 'nppes_authofficial_lastname',
+    'nppes_authofficial_prefix', 'nppes_authofficial_nameprefix', 'nppes_authofficial_credential',
+    'nppes_authofficial_title',
+  ].some((column) => keyMap.has(column))
+  let profileUpdatedCount = 0
+  let profileUpdateError: string | null = null
+  if (hasOfficialProfileColumns) {
+    const profileCodes = allCodes.filter((code) => {
+      if (toInsertSet.has(code) || codesToEnrichSet.has(code)) return false
+      const row = byCode.get(code)!
+      return !!(
+        col(row, 'NPPES_ProviderName') ||
+        col(row, 'NPPES_OrganizationName') ||
+        authorizedOfficialName(row) ||
+        col(row, 'NPPES_AuthOfficial_Title')
+      )
+    })
+    await mapConcurrent(profileCodes, 4, async (code) => {
+      if (profileUpdateError) return
+      const row = byCode.get(code)!
+      const npi = clean(row[npiKey])
+      const profilePatch = Object.fromEntries([
+        ['name', col(row, 'NPPES_ProviderName')],
+        ['org_name', col(row, 'NPPES_OrganizationName')],
+      ].filter(([, value]) => value))
+      const officialName = authorizedOfficialName(row)
+      const officialTitle = col(row, 'NPPES_AuthOfficial_Title')
+      let matchedProvider = false
+      if (Object.keys(profilePatch).length > 0) {
+        let profileQuery = supabase.from('providers').update(profilePatch).eq('npi', npi)
+        if (roleKey !== 'super_admin') profileQuery = profileQuery.eq('owner_tenant_id', tenantId)
+        const { data, error } = await profileQuery.select('id')
+        if (error) { profileUpdateError = `Provider profile update failed: ${error.message}`; return }
+        matchedProvider = (data ?? []).length > 0
+      }
+      if (officialName) {
+        let nameQuery = supabase.from('providers').update({ auth_official_name: officialName }).eq('npi', npi)
+        if (roleKey !== 'super_admin') nameQuery = nameQuery.eq('owner_tenant_id', tenantId)
+        const { data, error } = await nameQuery.select('id')
+        if (error) {
+          profileUpdateError = `Could not update Authorized Official name. Run database/add-auth-official-name-column.sql first. ${error.message}`
+          return
+        }
+        matchedProvider ||= (data ?? []).length > 0
+      }
+      if (officialTitle) {
+        let titleQuery = supabase.from('providers').update({ auth_official_title: officialTitle }).eq('npi', npi)
+        if (roleKey !== 'super_admin') titleQuery = titleQuery.eq('owner_tenant_id', tenantId)
+        const { data, error } = await titleQuery.select('id')
+        if (error) {
+          profileUpdateError = `Could not update NPPES_AuthOfficial_Title. Run database/add-auth-official-title-column.sql first. ${error.message}`
+          return
+        }
+        matchedProvider ||= (data ?? []).length > 0
+      }
+      if (matchedProvider) profileUpdatedCount++
+      else profileUpdateError = `No provider record found for ${code} to update.`
+    })
+  }
+  if (profileUpdateError) return { ok: false, message: profileUpdateError }
+
   let enrichedCount = 0
   let enrichError: string | null = null
   const notMatchedCodes: string[] = []
@@ -395,7 +472,10 @@ export async function uploadLeadsCsv(
       const row = byCode.get(code)!
       const npi = clean(row[npiKey])
       const enrichment: Record<string, string> = {
-        name: col(row, 'NPPES_Name') || col(row, 'Name') || '',
+        name: col(row, 'NPPES_ProviderName') || col(row, 'NPPES_Name') || col(row, 'Name') || '',
+        org_name: col(row, 'NPPES_OrganizationName') || col(row, 'Org_Name') || '',
+        auth_official_name: authorizedOfficialName(row),
+        auth_official_title: col(row, 'NPPES_AuthOfficial_Title') || '',
         state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || '',
         city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || '',
         postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || '',
@@ -455,10 +535,11 @@ export async function uploadLeadsCsv(
   if (enrichError) return { ok: false, message: enrichError }
 
   if (toInsert.length === 0) {
-    if (enrichedCount > 0 || notMatchedCodes.length > 0) {
-      const untouched = skipped - enrichedCount - notMatchedCodes.length
+    if (enrichedCount > 0 || profileUpdatedCount > 0 || notMatchedCodes.length > 0) {
+      const untouched = skipped - enrichedCount - profileUpdatedCount - notMatchedCodes.length
       const parts: string[] = []
       if (enrichedCount > 0) parts.push(`Enriched ${enrichedCount} existing lead(s) with new NPPES data`)
+      if (profileUpdatedCount > 0) parts.push(`Updated official details for ${profileUpdatedCount} existing lead(s)`)
       if (notMatchedCodes.length > 0) {
         parts.push(
           `${notMatchedCodes.length} lead(s) were eligible for Credentialing promotion but had no matching record under your company to update ` +
@@ -494,7 +575,8 @@ export async function uploadLeadsCsv(
     const enrlmt = col(row, 'ENRLMT_ID') || null
     return {
       npi,
-      name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (NPI ${npi})`,
+      name: col(row, 'NPPES_ProviderName') || col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (NPI ${npi})`,
+      auth_official_name: authorizedOfficialName(row) || null,
       state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
       city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
       postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
@@ -510,7 +592,8 @@ export async function uploadLeadsCsv(
         if (src.startsWith('roster:')) return src.slice('roster:'.length).trim() || null
         return col(row, 'Org_PAC_ID') || null
       })(),
-      org_name: col(row, 'Org_Name') || null,
+      org_name: col(row, 'NPPES_OrganizationName') || col(row, 'Org_Name') || null,
+      auth_official_title: col(row, 'NPPES_AuthOfficial_Title') || null,
       num_org_members: numMembers ? parseInt(numMembers, 10) || null : null,
       pecos_asct_cntl_id: pecos,
       enrlmt_id: enrlmt,
@@ -547,7 +630,7 @@ export async function uploadLeadsCsv(
     const row = byCode.get(code)!
     return {
       practice_code: code,
-      name: col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (${code})`,
+      name: col(row, 'NPPES_ProviderName') || col(row, 'NPPES_Name') || col(row, 'Name') || `Practice (${code})`,
       state: col(row, 'NPPES_PrimaryState') || col(row, 'NPPES_State') || col(row, 'State') || null,
       city: col(row, 'NPPES_PrimaryCity') || col(row, 'NPPES_City') || col(row, 'City') || null,
       postal: col(row, 'NPPES_PrimaryPostal') || col(row, 'NPPES_Postal') || col(row, 'Postal') || null,
@@ -618,12 +701,13 @@ export async function uploadLeadsCsv(
   }
 
   const rosterCount = toInsert.length - anchorCodes.length
-  const plainSkipped = skipped - enrichedCount - notMatchedCodes.length
+  const plainSkipped = skipped - enrichedCount - profileUpdatedCount - notMatchedCodes.length
   return {
     ok: true,
     message: `Uploaded ${anchorCodes.length} lead(s)` +
       (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
       (enrichedCount ? `, enriched ${enrichedCount} existing lead(s) with new NPPES data` : '') +
+      (profileUpdatedCount ? `, updated official details for ${profileUpdatedCount} existing lead(s)` : '') +
       (notMatchedCodes.length ? `, ${notMatchedCodes.length} were eligible for Credentialing promotion but had no matching record to update` : '') +
       (plainSkipped ? `, skipped ${plainSkipped} duplicate(s)` : '') + '.',
     inserted: anchorCodes.length,

@@ -93,7 +93,7 @@ export default async function PracticeDetail({
         providers (
           npi, name, org_name, credential, taxonomy_code, taxonomy_desc,
           addr1, city, state, postal, phone,
-          status, mailing_phone, entity_type, is_anchor, nppes_last_updated, enumeration_date,
+          status, mailing_phone, entity_type, is_anchor, nppes_last_updated, enumeration_date, auth_official_name, auth_official_title,
           org_pac_id, num_org_members, payment_adj_pct, penalty,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
           provider_mips ( reporting_option )
@@ -533,7 +533,8 @@ export default async function PracticeDetail({
 
                   <div className="lead-divider">
                     <span className="lead-subhead">Authorized Official</span>
-                    <div className="lead-kv"><span>Name</span><span>{primaryProvider?.name ?? '—'}</span></div>
+                    <div className="lead-kv"><span>Name</span><span>{primaryProvider?.auth_official_name || primaryProvider?.name || '—'}</span></div>
+                    <div className="lead-kv"><span>Title</span><span>{primaryProvider?.auth_official_title ?? '—'}</span></div>
                     <div className="lead-kv"><span>Phone</span><span className="mono">{primaryProvider?.phone ?? practice.phone ?? '—'}</span></div>
                   </div>
 
