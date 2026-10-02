@@ -7,7 +7,7 @@ import { getWorksheetReports } from '../worksheet-reports-actions'
 import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
 import WorksheetCompanyFilter, { type WorksheetCompanyOption } from './WorksheetCompanyFilter'
 
-export default async function WorksheetReportsPage({ searchParams }: { searchParams: Promise<{ company?: string }> }) {
+export default async function WorksheetReportsPage({ searchParams }: { searchParams: Promise<{ company?: string; view?: string }> }) {
 
   const { data: { user } } = await getCurrentUser()
   if (!user) redirect('/login')
@@ -48,7 +48,9 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
       ? createSupabaseServer().then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
       : Promise.resolve({ data: null }),
   ])
-  const requestedCompany = (await searchParams).company ?? '__all__'
+  const reportParams = await searchParams
+  const requestedCompany = reportParams.company ?? '__all__'
+  const initialView = reportParams.view === 'sheet' ? 'sheet' : 'reports'
   let companies: WorksheetCompanyOption[] = []
   if (worksheetReports.ok) {
     const countByTenant = new Map<string, number>()
@@ -84,7 +86,7 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
     >
       <div className="card">
         {visibleReports.ok ? (
-          <WorksheetReportsClient rows={visibleReports.rows} scope={visibleReports.scope} companyName={selectedCompanyName ?? visibleReports.companyName} truncated={visibleReports.truncated} />
+          <WorksheetReportsClient rows={visibleReports.rows} scope={visibleReports.scope} companyName={selectedCompanyName ?? visibleReports.companyName} truncated={visibleReports.truncated} initialView={initialView} />
         ) : (
           <p className="subtle">{visibleReports.message}</p>
         )}

@@ -358,6 +358,79 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 .worksheet-detail-error { max-width:560px; }
 .worksheet-detail-error h2 { margin-top:0; color:var(--ink-strong); }
 .worksheet-detail-error p { color:var(--muted); }
+.worksheet-preview-trigger { display:inline-grid; place-items:center; width:25px; height:25px; margin-left:7px; padding:0; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--accent-strong); vertical-align:middle; cursor:pointer; }
+.worksheet-preview-trigger:hover { background:var(--surface-2); border-color:var(--accent); }
+.report-practice-cell { display:flex; align-items:center; gap:2px; }
+.report-practice-cell>strong { min-width:0; }
+.report-practice-cell .worksheet-preview-trigger { flex:none; margin-left:4px; }
+.worksheet-preview-trigger:focus-visible,.worksheet-preview-close:focus-visible,.worksheet-preview-secondary:focus-visible,.worksheet-preview-open:focus-visible,.worksheet-preview-assign:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.worksheet-preview-dialog { width:min(880px,calc(100% - 32px)); max-width:none; max-height:min(760px,calc(100dvh - 32px)); padding:0; overflow:hidden; border:1px solid var(--border); border-radius:9px; background:var(--surface); color:var(--ink); box-shadow:0 24px 72px rgba(5,18,26,.3); }
+.worksheet-preview-dialog::backdrop { background:rgba(13,25,34,.58); backdrop-filter:blur(3px); }
+.worksheet-preview-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:17px 20px 14px; border-bottom:1px solid var(--border); }
+.worksheet-preview-kicker { color:var(--accent-strong); font-size:9px; font-weight:800; text-transform:uppercase; }
+.worksheet-preview-header h2 { margin:4px 0 2px; color:var(--ink-strong); font-size:18px; line-height:1.25; overflow-wrap:anywhere; }
+.worksheet-preview-header p { margin:0; color:var(--muted); font:600 10px var(--font-mono),monospace; }
+.worksheet-preview-close { display:grid; place-items:center; flex:none; width:32px; height:32px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--muted); cursor:pointer; }
+.worksheet-preview-content { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(240px,.8fr); min-height:280px; max-height:min(620px,calc(100dvh - 150px)); overflow:auto; }
+.worksheet-preview-main,.worksheet-preview-timeline { min-width:0; padding:18px 20px; }
+.worksheet-preview-timeline { border-left:1px solid var(--border); background:var(--surface-2); }
+.worksheet-preview-section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
+.worksheet-preview-section-heading h3 { margin:0; color:var(--ink-strong); font-size:13px; }
+.worksheet-preview-section-heading>span { display:inline-flex; align-items:center; min-height:21px; padding:2px 8px; border:1px solid var(--border); border-radius:11px; color:var(--muted); font-size:9px; font-weight:700; }
+.worksheet-preview-status { border-color:rgba(var(--accent-rgb),.3)!important; background:rgba(var(--accent-rgb),.08); color:var(--accent-strong)!important; }
+.worksheet-preview-call-details { padding:12px 13px; border-left:3px solid var(--accent); background:var(--surface-2); color:var(--ink); font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.worksheet-preview-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 18px; margin-top:14px; }
+.worksheet-preview-field { min-width:0; padding:10px 0; border-bottom:1px solid var(--border); }
+.worksheet-preview-field span { display:block; margin-bottom:4px; color:var(--muted); font-size:9px; font-weight:800; text-transform:uppercase; }
+.worksheet-preview-field strong { display:block; color:var(--ink-strong); font-size:11px; font-weight:600; overflow-wrap:anywhere; white-space:pre-wrap; }
+.worksheet-preview-assignment { margin-top:17px; padding-top:15px; border-top:1px solid var(--border); }
+.worksheet-preview-assign-row { display:flex; align-items:center; gap:8px; }
+.worksheet-preview-assign-row select { flex:1; min-width:0; height:35px; padding:0 9px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--ink-strong); font:600 11px var(--font-sans),sans-serif; }
+.worksheet-preview-assign { display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:35px; padding:0 12px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:var(--accent-contrast,var(--surface)); font:700 10px var(--font-sans),sans-serif; cursor:pointer; }
+.worksheet-preview-assign:disabled { opacity:.55; cursor:not-allowed; }
+.worksheet-preview-assignment-status { margin:8px 0 0; color:var(--muted); font-size:10px; line-height:1.5; }
+.worksheet-preview-assignment-status.is-success { color:var(--ok); }
+.worksheet-preview-assignment-status.is-error { color:var(--danger); }
+.worksheet-preview-timeline ol { display:grid; gap:0; margin:0; padding:2px 0 0 8px; list-style:none; }
+.worksheet-preview-timeline li { position:relative; display:flex; gap:11px; min-width:0; padding:0 0 18px 14px; border-left:1px solid var(--border); }
+.worksheet-preview-timeline li:last-child { padding-bottom:2px; border-left-color:transparent; }
+.worksheet-preview-timeline-dot { position:absolute; top:2px; left:-5px; width:9px; height:9px; border:2px solid var(--surface-2); border-radius:50%; background:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.worksheet-preview-timeline li>div { min-width:0; }
+.worksheet-preview-timeline li strong { display:block; color:var(--ink-strong); font-size:10px; overflow-wrap:anywhere; }
+.worksheet-preview-timeline li p { margin:4px 0; color:var(--ink); font-size:10px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.worksheet-preview-timeline li small { display:block; color:var(--muted); font-size:9px; line-height:1.5; }
+.worksheet-preview-activity-loading { display:grid; gap:9px; color:var(--muted); font-size:10px; }
+.worksheet-preview-activity-loading i { display:block; width:100%; height:25px; border-radius:4px; background:linear-gradient(100deg,var(--surface) 20%,var(--border) 45%,var(--surface) 70%); background-size:220% 100%; animation:worksheet-preview-shimmer 1.25s ease-in-out infinite; }
+.worksheet-preview-empty,.worksheet-preview-message { margin:0; padding:14px; border:1px dashed var(--border); color:var(--muted); font-size:11px; line-height:1.5; }
+.worksheet-preview-message { margin:18px; align-self:start; }
+.worksheet-preview-message.is-error { border-color:var(--danger); color:var(--danger); }
+.worksheet-preview-skeleton { grid-column:1/-1; display:grid; grid-template-columns:minmax(0,1.2fr) minmax(240px,.8fr); min-width:0; }
+.worksheet-preview-skeleton>section { min-width:0; padding:18px 20px; }
+.worksheet-preview-skeleton>section+section { border-left:1px solid var(--border); background:var(--surface-2); }
+.worksheet-preview-skeleton>section>span { display:block; border-radius:4px; background:linear-gradient(100deg,var(--surface-2) 20%,var(--border) 45%,var(--surface-2) 70%); background-size:220% 100%; animation:worksheet-preview-shimmer 1.25s ease-in-out infinite; }
+.worksheet-preview-skeleton-title { width:43%; height:13px; margin-bottom:16px; }
+.worksheet-preview-skeleton-title.short { width:38%; }
+.worksheet-preview-skeleton-note { height:45px; margin-bottom:7px; }
+.worksheet-preview-skeleton-note.short { width:78%; height:30px; }
+.worksheet-preview-skeleton-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:17px; }
+.worksheet-preview-skeleton-fields span { height:34px; border-bottom:1px solid var(--border); background:linear-gradient(100deg,var(--surface-2) 20%,var(--border) 45%,var(--surface-2) 70%); background-size:220% 100%; animation:worksheet-preview-shimmer 1.25s ease-in-out infinite; }
+.worksheet-preview-skeleton-event { position:relative; height:42px; margin:0 0 12px 7px; border-left:1px solid var(--border); }
+.worksheet-preview-skeleton-event::after { position:absolute; top:2px; left:12px; width:70%; height:25px; border-radius:4px; background:linear-gradient(100deg,var(--surface) 20%,var(--border) 45%,var(--surface) 70%); background-size:220% 100%; animation:worksheet-preview-shimmer 1.25s ease-in-out infinite; content:""; }
+@keyframes worksheet-preview-shimmer { to { background-position-x:-220%; } }
+@media(prefers-reduced-motion:reduce) { .worksheet-preview-skeleton * { animation:none!important; } }
+.worksheet-preview-footer { display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; border-top:1px solid var(--border); background:var(--surface); }
+.worksheet-preview-secondary,.worksheet-preview-open { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:34px; padding:0 11px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--ink-strong); font:700 10px var(--font-sans),sans-serif; text-decoration:none; cursor:pointer; }
+.worksheet-preview-open { border-color:var(--accent); background:var(--accent); color:var(--accent-contrast,var(--surface)); }
+.worksheet-preview-open:hover { filter:brightness(.96); }
+@media(max-width:680px) {
+  .worksheet-preview-dialog { max-height:calc(100dvh - 24px); }
+  .worksheet-preview-content { grid-template-columns:minmax(0,1fr); max-height:calc(100dvh - 148px); }
+  .worksheet-preview-skeleton { grid-template-columns:minmax(0,1fr); }
+  .worksheet-preview-main,.worksheet-preview-timeline { padding:15px; }
+  .worksheet-preview-skeleton>section { padding:15px; }
+  .worksheet-preview-skeleton>section+section { border-top:1px solid var(--border); border-left:0; }
+  .worksheet-preview-timeline { border-top:1px solid var(--border); border-left:0; }
+}
 @media(max-width:900px){.worksheet-detail-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.worksheet-detail-summary>div:nth-child(2){border-right:0}.worksheet-detail-summary>div:nth-child(-n+2){border-bottom:1px solid var(--border)}.imported-editor-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.imported-editor-toolbar{align-items:flex-start;flex-direction:column}}
 @media(max-width:560px){.worksheet-detail-summary,.imported-editor-grid{grid-template-columns:1fr}.worksheet-detail-summary>div{border-right:0;border-bottom:1px solid var(--border)}.worksheet-detail-summary>div:last-child{border-bottom:0}.imported-editor-grid label.is-wide{grid-column:auto}.imported-editor-footer{align-items:flex-start;flex-wrap:wrap}.imported-editor-footer>span{width:100%}}
 

@@ -47,12 +47,16 @@ export default async function PracticeDetail({
   searchParams,
 }: {
   params: Promise<{ code: string }>
-  searchParams: Promise<{ from?: string }>
+  searchParams: Promise<{ from?: string; company?: string; view?: string }>
 }) {
   const { code } = await params
-  const { from } = await searchParams
-  const returnPath = from === 'transfers' ? '/transfers' : '/'
-  const returnQuery = from === 'transfers' ? '?from=transfers' : ''
+  const { from, company, view } = await searchParams
+  const returnPath = from === 'transfers' ? '/transfers' : from === 'worksheet-reports' ? '/worksheet-reports' : '/'
+  const returnQuery = from === 'transfers'
+    ? '?from=transfers'
+    : from === 'worksheet-reports'
+      ? `?company=${encodeURIComponent(company ?? '')}&view=${view === 'sheet' ? 'sheet' : 'reports'}`
+      : ''
 
   const supabase = await createSupabaseServer()
 
@@ -228,7 +232,9 @@ export default async function PracticeDetail({
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
-          <Link prefetch={false} href="/">← Back to all practices</Link>
+          <Link prefetch={false} href={`${returnPath}${returnQuery}`}>
+            {from === 'worksheet-reports' ? '← Back to Worksheet Reports' : from === 'transfers' ? '← Back to transfers' : '← Back to all practices'}
+          </Link>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
           <p className="subtle" style={{ marginTop: 12 }}>
             {error
@@ -413,7 +419,7 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <Link prefetch={false} href={returnPath} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : 'Back to list'}>
+              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Worksheet Reports' : 'Back to list'}>
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </Link>
               <div className="lead-pager">

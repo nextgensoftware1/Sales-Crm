@@ -1,11 +1,12 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
+import { Eye, Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
+import WorksheetPreviewModal from './WorksheetPreviewModal'
 
 type Practice = {
   practiceCode: string
@@ -143,6 +144,8 @@ const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
 export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
+  const [previewPractice, setPreviewPractice] = useState<{ code: string; name: string } | null>(null)
+  const closeWorksheetPreview = useCallback(() => setPreviewPractice(null), [])
   const filtersStorageKey = `${LEAD_FILTERS_STORAGE_KEY}:${viewerUserId ?? 'unknown'}`
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -933,6 +936,15 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
                   <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
+                  <button
+                    type="button"
+                    className="worksheet-preview-trigger"
+                    title="View saved worksheet"
+                    aria-label={`View saved worksheet for ${p.name}`}
+                    onClick={() => setPreviewPractice({ code: p.practiceCode, name: p.name })}
+                  >
+                    <Eye size={14} />
+                  </button>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
                   {p.assignedAwayTo && (
                     <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
@@ -967,6 +979,13 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           </tbody>
         </table>
       </section>
+      {previewPractice && (
+        <WorksheetPreviewModal
+          practiceCode={previewPractice.code}
+          practiceName={previewPractice.name}
+          onClose={closeWorksheetPreview}
+        />
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
