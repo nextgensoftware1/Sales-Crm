@@ -368,6 +368,7 @@ export default async function Home() {
       <PracticesTable
         practices={compactPractices}
         currentUser={currentUser}
+        viewerUserId={myUserId}
         isSuperAdmin={isSuperAdmin}
         lazyOptions
         canAssign={canAssign}

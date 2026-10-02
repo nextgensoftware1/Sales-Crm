@@ -46,6 +46,7 @@ type Props = {
   companies?: Company[]
   isSuperAdmin?: boolean
   currentUser?: { full_name: string; role: string; company: string } | null
+  viewerUserId?: string
   canAssign?: boolean
   myAgents?: { id: string; full_name: string; role: string }[]
   myAssignedCodes?: string[]
@@ -119,8 +120,30 @@ const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
 const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
 type ZoneKey = typeof ZONE_KEYS[number]
 
-export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount }: Props) {
+type PersistedLeadFilters = {
+  search: string
+  stateFilter: string
+  specialtyFilter: string
+  dispositionFilter: string
+  companyFilter: string
+  zoneFilter: ZoneKey | ''
+  activeSignals: string[]
+  assignedView: 'all' | 'mine'
+  poolTab: string
+  sourceTab: 'All' | 'Allocated' | 'Uploaded'
+  catTab: string
+  enumTypeFilter: string
+  lastUpdatedFrom: string
+  lastUpdatedTo: string
+  enumDateFrom: string
+  enumDateTo: string
+}
+
+const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
+
+export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
+  const filtersStorageKey = `${LEAD_FILTERS_STORAGE_KEY}:${viewerUserId ?? 'unknown'}`
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
   const [optionsLoaded, setOptionsLoaded] = useState(!lazyOptions)
@@ -212,6 +235,51 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const [lastUpdatedTo, setLastUpdatedTo] = useState('')
   const [enumDateFrom, setEnumDateFrom] = useState('')
   const [enumDateTo, setEnumDateTo] = useState('')
+  const [filtersRestored, setFiltersRestored] = useState(false)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(filtersStorageKey)
+      if (stored) {
+        const filters = JSON.parse(stored) as Partial<PersistedLeadFilters>
+        if (typeof filters.search === 'string') setSearch(filters.search)
+        if (typeof filters.stateFilter === 'string') setStateFilter(filters.stateFilter)
+        if (typeof filters.specialtyFilter === 'string') setSpecialtyFilter(filters.specialtyFilter)
+        if (typeof filters.dispositionFilter === 'string') setDispositionFilter(filters.dispositionFilter)
+        if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
+        if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
+        if (Array.isArray(filters.activeSignals)) {
+          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
+        }
+        if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
+        if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
+        if (filters.sourceTab === 'All' || filters.sourceTab === 'Allocated' || filters.sourceTab === 'Uploaded') setSourceTab(filters.sourceTab)
+        if (typeof filters.catTab === 'string') setCatTab(filters.catTab)
+        if (typeof filters.enumTypeFilter === 'string') setEnumTypeFilter(filters.enumTypeFilter)
+        if (typeof filters.lastUpdatedFrom === 'string') setLastUpdatedFrom(filters.lastUpdatedFrom)
+        if (typeof filters.lastUpdatedTo === 'string') setLastUpdatedTo(filters.lastUpdatedTo)
+        if (typeof filters.enumDateFrom === 'string') setEnumDateFrom(filters.enumDateFrom)
+        if (typeof filters.enumDateTo === 'string') setEnumDateTo(filters.enumDateTo)
+      }
+    } catch {
+    } finally {
+      setFiltersRestored(true)
+    }
+  }, [filtersStorageKey])
+
+  useEffect(() => {
+    if (!filtersRestored) return
+    const filters: PersistedLeadFilters = {
+      search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter,
+      activeSignals: Array.from(activeSignals), assignedView, poolTab, sourceTab, catTab,
+      enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo,
+    }
+    try {
+      localStorage.setItem(filtersStorageKey, JSON.stringify(filters))
+    } catch {
+      // Keep filtering usable when browser storage is unavailable.
+    }
+  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
