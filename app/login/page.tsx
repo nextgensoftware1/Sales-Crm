@@ -39,7 +39,7 @@ export default function LoginPage() {
       await supabase.auth.signOut()
       setLoading(false)
       if (status.reason === 'suspended') {
-        setError('Your account has been suspended. Please contact your admin to have this fixed.')
+        setError('Your account is inactive or suspended. Please contact your company administrator.')
       } else {
         setError('Invalid email or password.')
       }
