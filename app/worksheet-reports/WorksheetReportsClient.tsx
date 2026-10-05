@@ -256,24 +256,22 @@ export default function WorksheetReportsClient({
   // view every row is already theirs, so the filter is hidden there
   // rather than shown with one meaningless option.
   const showFilledBy = scope !== 'personal'
-  const [specialtyFilter, setSpecialtyFilter] = useState('')
+  const [dispositionFilter, setDispositionFilter] = useState('')
   const [filledByFilter, setFilledByFilter] = useState('')
-  const [callbackFilter, setCallbackFilter] = useState('') // YYYY-MM-DD
   const [lastUpdateFilter, setLastUpdateFilter] = useState('') // YYYY-MM-DD
 
-  const specialties = useMemo(() => Array.from(new Set(rows.map((r) => r.specialty).filter((v): v is string => !!v))).sort(), [rows])
+  const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
   const filteredRows = useMemo(() => rows.filter((r) => {
-    if (specialtyFilter && r.specialty !== specialtyFilter) return false
+    if (dispositionFilter && r.disposition !== dispositionFilter) return false
     if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
-    if (callbackFilter && !sameCalendarDate(r.callbackAt, callbackFilter)) return false
     if (lastUpdateFilter && !sameCalendarDate(r.lastUpdatedAt, lastUpdateFilter)) return false
     return true
-  }), [rows, specialtyFilter, filledByFilter, showFilledBy, callbackFilter, lastUpdateFilter])
+  }), [rows, dispositionFilter, filledByFilter, showFilledBy, lastUpdateFilter])
 
-  const resetFilters = () => { setSpecialtyFilter(''); setFilledByFilter(''); setCallbackFilter(''); setLastUpdateFilter('') }
-  const activeFilterCount = [specialtyFilter, showFilledBy ? filledByFilter : '', callbackFilter, lastUpdateFilter].filter(Boolean).length
+  const resetFilters = () => { setDispositionFilter(''); setFilledByFilter(''); setLastUpdateFilter('') }
+  const activeFilterCount = [dispositionFilter, showFilledBy ? filledByFilter : '', lastUpdateFilter].filter(Boolean).length
 
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
@@ -324,10 +322,10 @@ export default function WorksheetReportsClient({
 
       {rows.length > 0 && (
         <div className="report-filters" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16, padding: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)' }}>
-          <label className="filter-control"><span>Specialty</span>
-            <select className="input" value={specialtyFilter} onChange={(e) => setSpecialtyFilter(e.target.value)}>
-              <option value="">All Specialties</option>
-              {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
+          <label className="filter-control"><span>Call Disposition</span>
+            <select className="input" value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)}>
+              <option value="">All Dispositions</option>
+              {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           </label>
           {showFilledBy && (
@@ -338,9 +336,6 @@ export default function WorksheetReportsClient({
               </select>
             </label>
           )}
-          <label className="filter-control"><span>Callback</span>
-            <input type="date" className="input" value={callbackFilter} onChange={(e) => setCallbackFilter(e.target.value)} />
-          </label>
           <label className="filter-control"><span>Last Updated</span>
             <input type="date" className="input" value={lastUpdateFilter} onChange={(e) => setLastUpdateFilter(e.target.value)} />
           </label>

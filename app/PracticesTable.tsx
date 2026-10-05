@@ -293,7 +293,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     [serverPaging, practices, filters, isSuperAdmin, prioritySet, newLeadSet, workedLeadSet],
   )
 
-  const tableColumnCount = 11 + ((isSuperAdmin || canAssign) ? 1 : 0) + (isSuperAdmin ? 1 : 0)
+  const tableColumnCount = 10 + ((isSuperAdmin || canAssign) ? 1 : 0) + (isSuperAdmin ? 1 : 0)
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -853,7 +853,6 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
               <th style={th}>Sex</th>
-              <th style={thLeft}>Org Name</th>
               <th style={th}>Risk</th>
               <th style={th}>Payment Adj %</th>
               <th style={thLeft}>Source</th>
@@ -892,7 +891,6 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                 <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
                 <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
                 <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
                 <td style={{ ...td, color: p.paymentAdj ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.paymentAdj ?? '—'}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source)}</td>
