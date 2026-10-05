@@ -380,7 +380,7 @@ test('practice counter includes assigned leads beyond the first 1000 rows', asyn
 for (const role of ['manager','super_admin','agent','signed_out']) {
   test(`lazy lead options enforce ${role} permissions`, async () => {
     const calls=[]
-    const db=database({users:[{id:'junior',tenant_id:'a',full_name:'Junior',roles:{key:'agent',level:4}},{id:'outsider',tenant_id:'b',roles:{key:'agent',level:4}}],tenants:[{slug:'a',name:'A',is_platform:false}]},calls)
+    const db=database({users:[{id:'junior',tenant_id:'a',status:'active',full_name:'Junior',roles:{key:'agent',level:4}},{id:'outsider',tenant_id:'b',status:'active',roles:{key:'agent',level:4}}],tenants:[{slug:'a',name:'A',is_platform:false}]},calls)
     const {GET}=loadTs('app/api/lead-options/route.ts',{'../../../lib/supabase-server':{
       createSupabaseServer:async()=>db,getCurrentUser:async()=>({data:{user:role==='signed_out'?null:{id:'auth-me'}}}),
       getCurrentProfile:async()=>({data:{id:'me',tenant_id:'a',roles:{key:role,level:2}}}),
@@ -1026,4 +1026,103 @@ test('lead snapshots stay bounded: newest 3 per user', () => {
   assert.equal(ids.filter(id => snapshots.getLeadSnapshot(id, 'bounded-user')).length, 3)
   assert.ok(snapshots.getLeadSnapshot(ids[4], 'bounded-user'))
   assert.equal(snapshots.getLeadSnapshot(ids[0], 'bounded-user'), null)
+})
+
+// ---------------------------------------------------------------------------
+// Company Admin: remove a team member (soft delete).
+// ---------------------------------------------------------------------------
+function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banError = null, releaseError = null, released = [{ practice_id: 'p1' }, { practice_id: 'p2' }] } = {}) {
+  const log = []
+  const table = (name) => {
+    const q = { op: 'select', filters: {}, values: null }
+    const api = {
+      select(cols) { if (q.op === 'select') q.cols = cols; else q.returning = cols; return api },
+      update(v) { q.op = 'update'; q.values = v; return api },
+      delete() { q.op = 'delete'; return api },
+      eq(k, v) { q.filters[k] = v; return api },
+      maybeSingle() { log.push({ table: name, ...q }); return Promise.resolve({ data: target, error: null }) },
+      then(res, rej) {
+        log.push({ table: name, ...q })
+        const out = name === 'lead_assignments' && q.op === 'delete'
+          ? { data: releaseError ? null : released, error: releaseError } : { data: null, error: null }
+        return Promise.resolve(out).then(res, rej)
+      },
+    }
+    return api
+  }
+  const bans = []
+  const admin = { from: table, auth: { admin: { updateUserById: async (id, attrs) => { bans.push({ id, attrs }); return { error: banError } } } } }
+  const { removeCompanyUser } = loadTs('app/admin-manage-actions.ts', {
+    '../lib/supabase-server': {
+      createSupabaseServer: async () => ({}),
+      getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+      getCurrentProfile: async () => ({ data: { id: 'me', tenant_id: 'T1', roles: { key: meRole, level: meLevel } } }),
+    },
+    '../lib/supabase-admin': { createSupabaseAdmin: () => admin },
+  })
+  return { removeCompanyUser, log, bans }
+}
+const agent = (over = {}) => ({ id: 'u9', auth_id: 'auth-u9', tenant_id: 'T1', status: 'active', full_name: 'Acme Agent', roles: { key: 'agent', level: 5 }, ...over })
+
+test('remove user: company admin removes an agent safely', async () => {
+  const h = removeUserHarness({ target: agent() })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, true)
+  assert.match(res.message, /Acme Agent was removed.*2 assigned leads returned to the pool/)
+  const writes = h.log.filter(e => e.op !== 'select')
+  assert.deepEqual(writes.map(w => [w.table, w.op]), [['users', 'update'], ['lead_assignments', 'delete']])
+  assert.deepEqual(writes[0].values, { status: 'suspended' })
+  assert.deepEqual(writes[0].filters, { id: 'u9', tenant_id: 'T1', status: 'active' })
+  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'T1', status: 'active' })   // only their ACTIVE leads, only in my company
+  assert.deepEqual(h.bans, [{ id: 'auth-u9', attrs: { ban_duration: '876000h' } }])
+  // History tables are never touched.
+  assert.equal(h.log.some(e => ['lead_worksheets', 'lead_activity', 'sales', 'lead_transfers'].includes(e.table)), false)
+})
+
+for (const [label, opts, id, pattern] of [
+  ['manager cannot remove (company admin only)', { meRole: 'manager', meLevel: 3, target: agent() }, 'u9', /Only a Company Admin/],
+  ['cannot remove yourself', { target: agent({ id: 'me' }) }, 'me', /your own account/],
+  ['cannot remove another company\'s user', { target: agent({ tenant_id: 'OTHER' }) }, 'u9', /own company/],
+  ['cannot remove a super admin', { target: agent({ roles: { key: 'super_admin', level: 1 } }) }, 'u9', /own company/],
+  ['cannot remove an equal role (another company admin)', { target: agent({ roles: { key: 'company_admin', level: 2 } }) }, 'u9', /more junior role/],
+  ['cannot remove an already removed user', { target: agent({ status: 'suspended' }) }, 'u9', /already been removed/],
+  ['unknown user', { target: null }, 'u9', /own company/],
+]) {
+  test(`remove user: ${label}`, async () => {
+    const h = removeUserHarness(opts)
+    const res = await h.removeCompanyUser(id)
+    assert.equal(res.ok, false); assert.match(res.message, pattern)
+    assert.equal(h.log.some(e => e.op !== 'select'), false)   // nothing written
+    assert.equal(h.bans.length, 0)
+  })
+}
+
+test('remove user: if login cannot be revoked, the profile is restored and no leads are released', async () => {
+  const h = removeUserHarness({ target: agent(), banError: { message: 'auth down' } })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, false); assert.match(res.message, /nothing was changed/)
+  const writes = h.log.filter(e => e.op !== 'select')
+  assert.deepEqual(writes.map(w => [w.table, w.op, w.values]), [['users', 'update', { status: 'suspended' }], ['users', 'update', { status: 'active' }]])
+})
+
+test('remove user: if releasing leads fails, the user is still removed and the admin is told', async () => {
+  const h = removeUserHarness({ target: agent(), releaseError: { message: 'timeout' } })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, true); assert.match(res.message, /could not be released.*Manage Assignments/)
+})
+
+test('removed teammates are hidden from "Assign to…" and cannot be assigned leads', async () => {
+  const people = [
+    { id: 'a1', full_name: 'Active Agent', tenant_id: 'T1', status: 'active', roles: { key: 'agent', level: 5 } },
+    { id: 'a2', full_name: 'Removed Agent', tenant_id: 'T1', status: 'suspended', roles: { key: 'agent', level: 5 } },
+  ]
+  const me = { id: 'me', tenant_id: 'T1', roles: { key: 'company_admin', level: 2 } }
+  const server = (tables) => ({ createSupabaseServer: async () => database(tables, []),
+    getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }), getCurrentProfile: async () => ({ data: me }) })
+  const { GET } = loadTs('app/api/lead-options/route.ts', { '../../../lib/supabase-server': server({ users: people }) })
+  const body = await (await GET()).json()
+  assert.deepEqual(body.agents.map(a => a.full_name), ['Active Agent'])
+  const { assignLeadsToAgent } = loadTs('app/assign-actions.ts', { '../lib/supabase-server': server({ users: people, master_practices: [] }) })
+  const res = await assignLeadsToAgent(['PR-1'], 'a2')
+  assert.equal(res.ok, false); assert.match(res.message, /removed from your team/)
 })

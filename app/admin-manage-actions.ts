@@ -183,6 +183,82 @@ export async function createUser(input: {
   return { ok: true }
 }
 
+// ---- Remove a user from my company (Company Admin only) ----
+//
+// "Delete" for a company team member, done safely:
+//   1. The profile is marked suspended (they disappear from assign lists and
+//      cannot sign in through the app's login check).
+//   2. Their Supabase login is banned, so they cannot sign in or refresh a
+//      session at all.
+//   3. Their ACTIVE lead assignments are released back to the company pool,
+//      exactly like the existing "unassign" action, so no lead is stuck with
+//      someone who can no longer work it.
+// Their worksheets, call activity, transfers and sales are KEPT: reports and
+// history stay correct, and nothing that references them breaks.
+export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
+  if (!userId || typeof userId !== 'string') return { ok: false, message: 'Choose a user to remove.' }
+  const me = await whoAmI()
+  if (!me) return { ok: false, message: 'Not signed in.' }
+  if (me.roleKey !== 'company_admin' || !me.tenantId) {
+    return { ok: false, message: 'Only a Company Admin can remove users from the company.' }
+  }
+  if (userId === me.id) return { ok: false, message: 'You cannot remove your own account.' }
+
+  let admin
+  try {
+    admin = createSupabaseAdmin()
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'User management is not configured.' }
+  }
+
+  const { data: row, error: readError } = await admin.from('users')
+    .select('id, auth_id, tenant_id, status, full_name, roles(key, level)')
+    .eq('id', userId).maybeSingle()
+  if (readError) return { ok: false, message: `Could not load that user: ${readError.message}` }
+  const target = row as unknown as {
+    id: string; auth_id: string | null; tenant_id: string | null; status: string; full_name: string | null
+    roles: { key: string; level: number } | null
+  } | null
+  if (!target || target.tenant_id !== me.tenantId || target.roles?.key === 'super_admin') {
+    return { ok: false, message: 'You can only remove users from your own company.' }
+  }
+  if ((target.roles?.level ?? 0) <= me.level) {
+    return { ok: false, message: 'You can only remove users with a more junior role than yours.' }
+  }
+  if (target.status !== 'active') return { ok: false, message: 'This user has already been removed or suspended.' }
+
+  // 1. Deactivate the profile (only if it is still active in my company).
+  const { error: deactivateError } = await admin.from('users').update({ status: 'suspended' })
+    .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'active')
+  if (deactivateError) return { ok: false, message: `Could not remove this user: ${deactivateError.message}` }
+
+  // 2. Revoke their login. If that fails, undo step 1 so nothing is half-done.
+  if (target.auth_id) {
+    const { error: banError } = await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: '876000h' })
+    if (banError) {
+      const { error: restoreError } = await admin.from('users').update({ status: 'active' })
+        .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'suspended')
+      return { ok: false, message: restoreError
+        ? `Could not revoke login (${banError.message}) or restore the profile (${restoreError.message}). Please contact support.`
+        : `Could not revoke this user's login, so nothing was changed: ${banError.message}` }
+    }
+  }
+
+  // 3. Return their active leads to the company pool.
+  const { data: released, error: releaseError } = await admin.from('lead_assignments')
+    .delete()
+    .eq('assigned_to', target.id)
+    .eq('tenant_id', me.tenantId)
+    .eq('status', 'active')
+    .select('practice_id')
+  const name = target.full_name || 'This user'
+  if (releaseError) {
+    return { ok: true, message: `${name} was removed and can no longer sign in, but their assigned leads could not be released (${releaseError.message}). Unassign them from Manage Assignments.` }
+  }
+  const count = released?.length ?? 0
+  return { ok: true, message: `${name} was removed and can no longer sign in. ${count} assigned lead${count === 1 ? '' : 's'} returned to the pool. Their worksheets and history were kept.` }
+}
+
 // ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----
 
 async function requireSuperAdmin() {

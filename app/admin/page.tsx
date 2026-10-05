@@ -6,6 +6,7 @@ import AppShell from '../AppShell'
 import AdminManageClient from './AdminManageClient'
 import AdminUsersByCompanyClient from './AdminUsersByCompanyClient'
 import CompaniesTable from './CompaniesTable'
+import CompanyTeamClient from './CompanyTeamClient'
 import SectionTabs from '../SectionTabs'
 import AllocationHistory from './AllocationHistory'
 
@@ -52,7 +53,7 @@ export default async function AdminPage() {
   if (roleKey !== 'super_admin') {
     const myCompanyName = (me as any)?.tenants?.name ?? 'Your Company'
     const [{ data: myUsers }, { data: availableRoles }] = await Promise.all([
-      supabase.from('users').select('email, full_name, status, roles(key, label, level)')
+      supabase.from('users').select('id, email, full_name, status, roles(key, label, level)')
         .eq('tenant_id', (me as any)?.tenant_id),
       rolesQuery,
     ])
@@ -63,11 +64,6 @@ export default async function AdminPage() {
       // tenant_id happens to point at this company (e.g. from earlier testing).
       .filter((u) => u.roles?.key !== 'super_admin')
       .sort((a, b) => (a.roles?.level ?? 99) - (b.roles?.level ?? 99))
-    const statusBadge = (status: string) => {
-      const s = (status || '').toLowerCase()
-      const cls = s === 'active' ? 'badge-green' : s === 'inactive' ? 'badge-grey' : 'badge-amber'
-      return <span className={`badge ${cls}`}>{status}</span>
-    }
 
     return (
       <AppShell
@@ -83,21 +79,16 @@ export default async function AdminPage() {
           <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />
           <div className="card">
             <h2 className="h-section">Your Team ({sorted.length})</h2>
-            <div className="tbl-wrap">
-              <table className="tbl">
-                <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead>
-                <tbody>
-                  {sorted.map((u: any, i) => (
-                    <tr key={i}>
-                      <td>{u.full_name}</td>
-                      <td>{u.email}</td>
-                      <td><strong>{roleLabel(u.roles?.key)}</strong></td>
-                      <td>{statusBadge(u.status)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* Company Admins can remove junior teammates; other roles see it read-only. */}
+            <CompanyTeamClient
+              members={sorted.map((u: any) => ({
+                id: u.id, full_name: u.full_name, email: u.email, status: u.status,
+                roleKey: u.roles?.key ?? null, roleLevel: u.roles?.level ?? null,
+              }))}
+              canRemove={roleKey === 'company_admin'}
+              myId={(me as any)?.id ?? ''}
+              myLevel={(me as any)?.roles?.level ?? 999}
+            />
           </div>
         </div>
       </AppShell>

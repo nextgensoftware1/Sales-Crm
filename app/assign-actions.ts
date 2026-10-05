@@ -48,12 +48,15 @@ export async function assignLeadsToAgent(
   // Agent, or Closer; Team Lead to Agent or Closer.
   const { data: target } = await supabase
     .from('users')
-    .select('tenant_id, roles(level)')
+    .select('tenant_id, status, roles(level)')
     .eq('id', agentUserId)
     .maybeSingle()
 
   if (!target || (target as any).tenant_id !== myTenantId) {
     return { ok: false, message: 'That person is not on your team.' }
+  }
+  if ((target as any).status !== 'active') {
+    return { ok: false, message: 'That person has been removed from your team. Choose an active teammate.' }
   }
   if (((target as any).roles?.level ?? 0) <= myLevel) {
     return { ok: false, message: 'You can only assign to a more junior role than your own.' }

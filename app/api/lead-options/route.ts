@@ -19,8 +19,9 @@ export async function GET() {
       : respond({ companies: data ?? [], agents: [] })
   }
   if (!me.tenant_id) return respond({ message: 'No company assigned.' }, 403)
+  // Removed (suspended) teammates must not appear in "Assign to…".
   const { data, error } = await db.from('users').select('id, full_name, roles(key, level)')
-    .eq('tenant_id', me.tenant_id).order('full_name')
+    .eq('tenant_id', me.tenant_id).eq('status', 'active').order('full_name')
   if (error) return respond({ message: 'Could not load team members. Please retry.' }, 503)
   const people = data as unknown as { id: string; full_name: string; roles: { key: string; level: number } | null }[] | null
   return respond({ companies: [], agents: (people ?? [])
