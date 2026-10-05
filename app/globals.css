@@ -302,6 +302,7 @@ h1, h2, h3 { font-family: var(--font-display), "Plus Jakarta Sans", sans-serif; 
 .sheet-toolbar-controls { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:1; }
 .sheet-page-size,.report-page-size { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:10.5px; white-space:nowrap; }
 .sheet-page-size select,.report-page-size select { height:32px; padding:0 24px 0 8px; border:1px solid var(--border); border-radius:6px; outline:0; background:var(--surface); color:var(--ink); font:700 11px var(--font-sans),sans-serif; }
+.sheet-date-input { height:32px; padding:0 8px; border:1px solid var(--border); border-radius:6px; outline:0; background:var(--surface); color:var(--ink); font:700 11px var(--font-sans),sans-serif; }
 .sheet-open-hint { padding:8px 12px; border-bottom:1px solid var(--border); background:rgba(var(--accent-rgb),.055); color:var(--muted); font-size:10.5px; }
 .sheet-grid-wrap { width:100%; overflow:auto; max-height:68vh; scrollbar-width:thin; }
 .sheet-grid { border-collapse:separate; border-spacing:0; min-width:max-content; width:100%; font-size:11px; }

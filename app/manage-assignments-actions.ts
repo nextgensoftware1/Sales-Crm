@@ -3,13 +3,14 @@
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { roleLabel } from '../lib/roles'
 import { allRows } from '../lib/practice-navigation'
+import { chunks, mapConcurrent } from '../lib/query-utils'
 
 // ---------------------------------------------------------------------------
 // Manage the assignments I personally made (assigned_by = me).
 //
 //   getMyAssignmentSummary()  → my direct reports + how many leads I gave each
 //   getAssignedLeads(agentId) → the leads I assigned to that specific person
-//   unassignLead(practiceCode, agentId) → remove that assignment (back to pool)
+//   unassignLead(practiceId, agentId) → remove that assignment (back to pool)
 //
 // All scoped so a caller can only touch assignments they created.
 // ---------------------------------------------------------------------------
@@ -53,6 +54,10 @@ export async function getMyIncomingCodes(): Promise<string[]> {
 }
 
 const CAN_MANAGE = ['company_admin', 'manager', 'team_lead']
+
+function oneRelation<T>(relation: T | T[] | null | undefined): T | undefined {
+  return Array.isArray(relation) ? relation[0] : relation ?? undefined
+}
 
 export async function getCompanyAllocationSummary(): Promise<{
   ok: boolean
@@ -134,7 +139,7 @@ export async function getCompanyAllocatedLeads(companyId: string): Promise<{
   return { ok: true, leads }
 }
 
-// People I assigned leads to, with a count.
+// People with active assignments in my scope, with a count.
 export async function getMyAssignmentSummary(): Promise<{
   ok: boolean
   message?: string
@@ -145,88 +150,193 @@ export async function getMyAssignmentSummary(): Promise<{
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
-  const { data: rows, error } = await supabase
-    .from('lead_assignments')
-    .select('assigned_to, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))')
-    .eq('assigned_by', me.id)
-    .eq('status', 'active')
-
-  if (error) return { ok: false, message: error.message }
-
   const map = new Map<string, { id: string; full_name: string; role: string; count: number }>()
-  for (const r of (rows ?? []) as any[]) {
-    const id = r.assigned_to
-    if (!id) continue
-    const existing = map.get(id)
-    if (existing) existing.count++
-    else map.set(id, {
-      id,
-      full_name: r.users?.full_name ?? 'Unknown',
-      role: roleLabel(r.users?.roles?.key),
-      count: 1,
-    })
+  try {
+    if (me.roleKey === 'company_admin') {
+      const tenantId = me.tenantId
+      if (!tenantId) return { ok: false, message: 'Your account is not assigned to a company.' }
+
+      const members = await allRows<{ id: string; full_name: string | null; roles: { key: string | null } | { key: string | null }[] | null }>(() => supabase
+        .from('users')
+        .select('id, full_name, roles(key, label)')
+        .eq('tenant_id', tenantId)
+        .order('id'))
+      const memberById = new Map<string, { full_name: string; role: string }>(
+        members.map((member) => [member.id, {
+          full_name: member.full_name ?? 'Unknown',
+          role: roleLabel(oneRelation(member.roles)?.key),
+        }])
+      )
+      const memberIds = [...memberById.keys()]
+      const batches = await mapConcurrent(chunks(memberIds, 200), 4, (ids) =>
+        allRows<{ assigned_to: string | null }>(() => supabase
+          .from('lead_assignments')
+          .select('assigned_to')
+          .in('assigned_to', ids)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .order('assigned_to')
+          .order('practice_id'))
+      )
+
+      for (const row of batches.flat()) {
+        const id = row.assigned_to
+        if (!id) continue
+        const member = memberById.get(id)
+        if (!member) continue
+        const existing = map.get(id)
+        if (existing) existing.count++
+        else map.set(id, { id, ...member, count: 1 })
+      }
+    } else {
+      const rows = await allRows<{
+        assigned_to: string | null
+        users: { full_name: string | null; roles: { key: string | null } | { key: string | null }[] | null } | { full_name: string | null; roles: { key: string | null } | { key: string | null }[] | null }[] | null
+      }>(() => supabase
+        .from('lead_assignments')
+        .select('assigned_to, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))')
+        .eq('assigned_by', me.id)
+        .eq('status', 'active')
+        .order('assigned_to')
+        .order('practice_id'))
+
+      for (const row of rows) {
+        const id = row.assigned_to
+        if (!id) continue
+        const existing = map.get(id)
+        if (existing) existing.count++
+        else map.set(id, {
+          id,
+          full_name: oneRelation(row.users)?.full_name ?? 'Unknown',
+          role: roleLabel(oneRelation(oneRelation(row.users)?.roles)?.key),
+          count: 1,
+        })
+      }
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Could not load assignments.' }
   }
   return { ok: true, people: Array.from(map.values()).sort((a, b) => a.full_name.localeCompare(b.full_name)) }
 }
 
-// The leads I assigned to one specific person.
+// The active leads assigned to one person in the caller's scope.
 export async function getAssignedLeads(agentId: string): Promise<{
   ok: boolean
   message?: string
-  leads?: { practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string }[]
+  leads?: { practiceId: string; practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string; canRemove: boolean }[]
 }> {
   const supabase = await createSupabaseServer()
   const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
 
-  const { data: rows, error } = await supabase
-    .from('lead_assignments')
-    .select('assigned_at, master_practices(practice_code, name, state, specialty)')
-    .eq('assigned_by', me.id)
-    .eq('assigned_to', agentId)
-    .eq('status', 'active')
+  const companyAdmin = me.roleKey === 'company_admin'
+  const tenantId = me.tenantId
+  if (companyAdmin) {
+    if (!tenantId) return { ok: false, message: 'Your account is not assigned to a company.' }
+    const { data: member, error: memberError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', agentId)
+      .eq('tenant_id', tenantId)
+      .maybeSingle()
+    if (memberError) return { ok: false, message: memberError.message }
+    if (!member) return { ok: false, message: 'That person is not on your team.' }
+  }
 
-  if (error) return { ok: false, message: error.message }
+  type AssignedLeadRow = {
+    practice_id: string
+    assigned_by: string | null
+    assigned_at: string
+    master_practices: {
+      practice_code: string | null
+      name: string | null
+      state: string | null
+      specialty: string | null
+    } | {
+      practice_code: string | null
+      name: string | null
+      state: string | null
+      specialty: string | null
+    }[] | null
+  }
+  let rows: AssignedLeadRow[]
+  try {
+    rows = companyAdmin
+      ? await allRows<AssignedLeadRow>(() => supabase
+        .from('lead_assignments')
+        .select('practice_id, assigned_by, assigned_at, master_practices(practice_code, name, state, specialty)')
+        .eq('assigned_to', agentId)
+        .eq('status', 'active')
+        .eq('tenant_id', tenantId!)
+        .order('assigned_at', { ascending: false })
+        .order('practice_id'))
+      : await allRows<AssignedLeadRow>(() => supabase
+        .from('lead_assignments')
+        .select('practice_id, assigned_by, assigned_at, master_practices(practice_code, name, state, specialty)')
+        .eq('assigned_to', agentId)
+        .eq('status', 'active')
+        .eq('assigned_by', me.id)
+        .order('assigned_at', { ascending: false })
+        .order('practice_id'))
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Could not load assigned leads.' }
+  }
 
-  const leads = (rows ?? [])
-    .map((r: any) => ({
-      practiceCode: r.master_practices?.practice_code,
-      name: r.master_practices?.name ?? '',
-      state: r.master_practices?.state ?? null,
-      specialty: r.master_practices?.specialty ?? null,
-      assignedAt: r.assigned_at,
-    }))
-    .filter((l: any) => l.practiceCode)
-    .sort((a: any, b: any) => a.name.localeCompare(b.name))
+  const leads = rows.flatMap((row) => {
+    const practice = oneRelation(row.master_practices)
+    if (!practice?.practice_code) return []
+    return [{
+      practiceId: row.practice_id,
+      practiceCode: practice.practice_code,
+      name: practice.name ?? '',
+      state: practice.state,
+      specialty: practice.specialty,
+      assignedAt: row.assigned_at,
+      canRemove: row.assigned_by === me.id,
+    }]
+  }).sort((a, b) => a.name.localeCompare(b.name) || a.practiceCode.localeCompare(b.practiceCode) || a.practiceId.localeCompare(b.practiceId))
 
   return { ok: true, leads }
 }
 
-// Remove one assignment (I made it) → the lead returns to the unassigned pool.
-export async function unassignLead(practiceCode: string, agentId: string): Promise<{ ok: boolean; message: string }> {
+// Remove an assignment I made → the lead returns to the unassigned pool.
+export async function unassignLead(practiceId: string, agentId: string): Promise<{ ok: boolean; message: string }> {
   const supabase = await createSupabaseServer()
   const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
   if (!CAN_MANAGE.includes(me.roleKey)) return { ok: false, message: 'Not allowed.' }
+  if (!me.tenantId) return { ok: false, message: 'Your account is not assigned to a company.' }
 
-  // resolve practice_code → id, scoped to my company
-  const { data: prac } = await supabase
+  const { data: prac, error: practiceError } = await supabase
     .from('master_practices')
-    .select('id')
-    .eq('owner_tenant_id', me.tenantId)
-    .eq('practice_code', practiceCode)
+    .select('id, owner_tenant_id')
+    .eq('id', practiceId)
     .maybeSingle()
 
+  if (practiceError) return { ok: false, message: `Could not load lead: ${practiceError.message}` }
   if (!prac) return { ok: false, message: 'Lead not found in your company.' }
+
+  if (prac.owner_tenant_id !== me.tenantId) {
+    const { data: allocation, error: allocationError } = await supabase
+      .from('lead_allocations')
+      .select('practice_id')
+      .eq('practice_id', prac.id)
+      .eq('tenant_id', me.tenantId)
+      .eq('status', 'active')
+      .maybeSingle()
+    if (allocationError) return { ok: false, message: `Could not verify lead access: ${allocationError.message}` }
+    if (!allocation) return { ok: false, message: 'Lead not found in your company.' }
+  }
 
   // delete only the assignment I made to this person
   const { error } = await supabase
     .from('lead_assignments')
     .delete()
-    .eq('practice_id', (prac as any).id)
+    .eq('practice_id', prac.id)
     .eq('assigned_to', agentId)
     .eq('assigned_by', me.id)
+    .eq('status', 'active')
 
   if (error) return { ok: false, message: `Remove failed: ${error.message}` }
   return { ok: true, message: 'Lead un-assigned and returned to the pool.' }
