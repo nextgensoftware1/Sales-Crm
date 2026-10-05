@@ -2,9 +2,7 @@
 
 import Link from 'next/link'
 import { Fragment, useMemo, useState } from 'react'
-import { Eye } from 'lucide-react'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
-import WorksheetPreviewModal from '../WorksheetPreviewModal'
 
 const PAGE_SIZES = [8, 15, 20, 100] as const
 
@@ -21,63 +19,45 @@ function sameCalendarDate(value: string | null | undefined, ymd: string): boolea
   return value.trim().slice(0, 10) === ymd
 }
 
-function WorksheetSheet({ rows }: { rows: WorksheetReportRow[] }) {
-  const columns = useMemo(() => Array.from(new Set(rows.flatMap(row => Object.keys(row.importData ?? {})))), [rows])
+function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
+  const imported = rows.filter(row => row.importData)
+  const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
   const [query, setQuery] = useState('')
   const [pageSize, setPageSize] = useState<number>(15)
   const [page, setPage] = useState(1)
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return rows
-    return rows.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
-      row.state, row.specialty, row.callDetails, row.concernedPerson, row.additionalPhone,
-      row.directLine, row.email, row.disposition, ...Object.values(row.importData ?? {})]
-      .some(value => String(value ?? '').toLowerCase().includes(needle)))
-  }, [rows, query])
+    if (!needle) return imported
+    return imported.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
+      ...Object.values(row.importData ?? {})].some(value => String(value ?? '').toLowerCase().includes(needle)))
+  }, [imported, query])
   const totalPages = Math.max(1, Math.ceil(visible.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageStart = (safePage - 1) * pageSize
   const pageRows = visible.slice(pageStart, pageStart + pageSize)
 
-  if (!rows.length) return <div className="sheet-empty">No saved worksheet rows are available.</div>
+  if (!imported.length) return <div className="sheet-empty">No imported worksheet rows are available.</div>
   return <div className="worksheet-sheet">
     <div className="sheet-toolbar">
-      <div><strong>Saved worksheet data</strong><span>{visible.length} of {rows.length} rows · {columns.length} imported columns</span></div>
+      <div><strong>Imported worksheet data</strong><span>{visible.length} of {imported.length} rows · {columns.length} source columns</span></div>
       <div className="sheet-toolbar-controls">
         <label className="sheet-page-size"><span>Rows</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
-        <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} placeholder="Search saved worksheets…" /></label>
+        <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} placeholder="Search every column…" /></label>
       </div>
     </div>
-    <div className="sheet-open-hint">Select a row to open its worksheet. Uploaded rows open the imported worksheet editor.</div>
+    <div className="sheet-open-hint">Select any cell to open the complete worksheet and edit its uploaded fields.</div>
     <div className="sheet-grid-wrap">
       <table className="sheet-grid">
-        <thead><tr>
-          <th className="sheet-row-number">#</th><th>Company</th><th>Practice</th><th>State</th><th>Specialty</th>
-          <th>Worksheet agent</th><th>Call details</th><th>Contact</th><th>Callback</th><th>Disposition</th><th>Last updated</th>
-          {columns.map(column => <th key={column}>{column}</th>)}
-        </tr></thead>
-        <tbody>{pageRows.map((row, index) => {
-          const companyQuery = `company=${encodeURIComponent(row.tenantId)}&view=sheet`
-          const href = row.importData
-            ? `/worksheet-reports/${row.tenantId}/${row.practiceId}?view=sheet`
-            : `/practice/${row.practiceCode}?from=worksheet-reports&${companyQuery}`
-          const contact = [row.concernedPerson, row.additionalPhone, row.directLine, row.email].filter(Boolean).join(' · ')
-          const cellLink = (content: React.ReactNode) => <Link prefetch={false} className="sheet-cell-link" href={href}>{content}</Link>
-          return <tr key={`${row.companyName}:${row.practiceId}`}>
-            <th className="sheet-row-number">{pageStart + index + 1}</th>
-            <td className="sheet-frozen">{cellLink(<strong>{row.companyName ?? '—'}</strong>)}</td>
-            <td>{cellLink(<>{row.providerName ?? row.practiceName}<div className="subtle mono" style={{ fontSize: 10 }}>{row.practiceCode}</div></>)}</td>
-            <td>{cellLink(row.state ?? '—')}</td>
-            <td>{cellLink(row.specialty ?? '—')}</td>
-            <td>{cellLink(row.filledBy ?? '—')}</td>
-            <td>{cellLink(row.callDetails || '—')}</td>
-            <td>{cellLink(contact || '—')}</td>
-            <td>{cellLink(<>{fmtDate(row.callbackAt)}{row.timezone ? ` ${row.timezone}` : ''}</>)}</td>
-            <td>{cellLink(row.disposition ?? '—')}</td>
-            <td>{cellLink(fmtDate(row.lastUpdatedAt))}</td>
-            {columns.map(column => <td key={column}>{cellLink(row.importData?.[column] || '—')}</td>)}
-          </tr>
-        })}</tbody>
+        <thead><tr><th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <tbody>{pageRows.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
+          <th className="sheet-row-number">{pageStart + index + 1}</th>
+          <td className="sheet-frozen"><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}><strong>{row.companyName ?? '—'}</strong></Link></td>
+          <td><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{row.filledBy ?? '—'}</Link></td>
+          {columns.map(column => {
+            const value = row.importData?.[column]
+            return <td key={column}><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{value || '—'}</Link></td>
+          })}
+        </tr>)}</tbody>
       </table>
     </div>
     <div className="sheet-pagination">
@@ -98,15 +78,13 @@ function fmtDate(iso: string | null): string {
  * and row-expansion, reused for both the single-company view and each
  * group in the Super Admin's company-wise view. */
 function ReportTable({
-  rows, showCompanyColumn, expanded, onToggleRow, enableAssignment,
+  rows, showCompanyColumn, expanded, onToggleRow,
 }: {
   rows: WorksheetReportRow[]
   showCompanyColumn: boolean
   expanded: Set<string>
   onToggleRow: (id: string) => void
-  enableAssignment: boolean
 }) {
-  const [previewRow, setPreviewRow] = useState<WorksheetReportRow | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<number>(8)
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
@@ -151,20 +129,9 @@ function ReportTable({
                       </button>
                     </td>
                     <td>
-                      <div className="report-practice-cell">
-                        <strong>{r.importData
-                          ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.providerName ?? r.practiceName}</Link>
-                          : r.practiceName}</strong>
-                        <button
-                          type="button"
-                          className="worksheet-preview-trigger"
-                          title="View saved worksheet"
-                          aria-label={`View saved worksheet for ${r.practiceName}`}
-                          onClick={() => setPreviewRow(r)}
-                        >
-                          <Eye size={14} />
-                        </button>
-                      </div>
+                      <strong>{r.importData
+                        ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.providerName ?? r.practiceName}</Link>
+                        : r.practiceName}</strong>
                       <div className="subtle mono" style={{ fontSize: 10.5 }}>{r.importData ? `NPI ${r.practiceCode.replace(/^PR-/, '')}` : r.practiceCode}</div>
                     </td>
                     {showCompanyColumn && <td>{r.companyName ?? '—'}</td>}
@@ -231,48 +198,19 @@ function ReportTable({
             <button className="btn" disabled={safePage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
           </div>
       </div>
-      {previewRow && (
-        <WorksheetPreviewModal
-          practiceCode={previewRow.practiceCode}
-          practiceName={previewRow.providerName ?? previewRow.practiceName}
-          tenantId={previewRow.tenantId}
-          practiceId={previewRow.practiceId}
-          initialPreview={{
-            worksheet: {
-              callDetails: previewRow.callDetails,
-              additionalPhone: previewRow.additionalPhone,
-              email: previewRow.email,
-              concernedPerson: previewRow.concernedPerson,
-              directLine: previewRow.directLine,
-              callbackAt: previewRow.callbackAt,
-              timezone: previewRow.timezone,
-              disposition: previewRow.disposition,
-              updatedAt: previewRow.lastUpdatedAt,
-              updatedByName: previewRow.lastUpdatedBy,
-              companyName: previewRow.companyName,
-            },
-            activities: [],
-          }}
-          enableAssignment={enableAssignment}
-          fullLeadHref={previewRow.importData ? `/worksheet-reports/${previewRow.tenantId}/${previewRow.practiceId}?company=${encodeURIComponent(previewRow.tenantId)}&view=reports` : null}
-          fullLeadLabel="Open imported worksheet"
-          onClose={() => setPreviewRow(null)}
-        />
-      )}
     </>
   )
 }
 
 /** One company's collapsible section in the Super Admin view. */
 function CompanySection({
-  companyName, rows, expanded, onToggleRow, defaultOpen, enableAssignment,
+  companyName, rows, expanded, onToggleRow, defaultOpen,
 }: {
   companyName: string
   rows: WorksheetReportRow[]
   expanded: Set<string>
   onToggleRow: (id: string) => void
   defaultOpen: boolean
-  enableAssignment: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -295,7 +233,7 @@ function CompanySection({
       </button>
       {open && (
         <div style={{ padding: 14 }}>
-          <ReportTable rows={rows} showCompanyColumn={false} expanded={expanded} onToggleRow={onToggleRow} enableAssignment={enableAssignment} />
+          <ReportTable rows={rows} showCompanyColumn={false} expanded={expanded} onToggleRow={onToggleRow} />
         </div>
       )}
     </div>
@@ -303,16 +241,15 @@ function CompanySection({
 }
 
 export default function WorksheetReportsClient({
-  rows, scope, companyName, truncated, initialView = 'reports',
+  rows, scope, companyName, truncated,
 }: {
   rows: WorksheetReportRow[]
   scope: 'all' | 'company' | 'personal'
   companyName: string | null
   truncated: boolean
-  initialView?: 'reports' | 'sheet'
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [view, setView] = useState<'reports' | 'sheet'>(initialView)
+  const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
   // Filled By only makes sense where a report can show more than one
   // person's work (company/platform scope) — for an agent's own personal
@@ -421,7 +358,7 @@ export default function WorksheetReportsClient({
         </div>
       )}
 
-      {view === 'sheet' ? <WorksheetSheet rows={filteredRows} /> : rows.length === 0 ? (
+      {view === 'sheet' ? <ImportedSheet rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : filteredRows.length === 0 ? (
         <p className="subtle">No worksheets match these filters. <button type="button" className="report-practice-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={resetFilters}>Clear filters</button> to see all {rows.length}.</p>
@@ -434,11 +371,10 @@ export default function WorksheetReportsClient({
             expanded={expanded}
             onToggleRow={toggleRow}
             defaultOpen={groups.length === 1 || i === 0}
-            enableAssignment
           />
         ))
       ) : (
-        <ReportTable rows={filteredRows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} enableAssignment={scope !== 'personal'} />
+        <ReportTable rows={filteredRows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} />
       )}
     </div>
   )

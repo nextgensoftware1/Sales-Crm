@@ -5,7 +5,6 @@ import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import AdminManageClient from './AdminManageClient'
 import AdminUsersByCompanyClient from './AdminUsersByCompanyClient'
-import CompanyTeamClient from './CompanyTeamClient'
 import CompaniesTable from './CompaniesTable'
 import SectionTabs from '../SectionTabs'
 import AllocationHistory from './AllocationHistory'
@@ -53,7 +52,7 @@ export default async function AdminPage() {
   if (roleKey !== 'super_admin') {
     const myCompanyName = (me as any)?.tenants?.name ?? 'Your Company'
     const [{ data: myUsers }, { data: availableRoles }] = await Promise.all([
-      supabase.from('users').select('id, email, full_name, status, roles(key, label, level)')
+      supabase.from('users').select('email, full_name, status, roles(key, label, level)')
         .eq('tenant_id', (me as any)?.tenant_id),
       rolesQuery,
     ])
@@ -64,14 +63,11 @@ export default async function AdminPage() {
       // tenant_id happens to point at this company (e.g. from earlier testing).
       .filter((u) => u.roles?.key !== 'super_admin')
       .sort((a, b) => (a.roles?.level ?? 99) - (b.roles?.level ?? 99))
-    const teamMembers = sorted.map((user: any) => ({
-      id: user.id,
-      name: user.full_name,
-      email: user.email,
-      roleKey: user.roles?.key ?? '',
-      level: user.roles?.level ?? 999,
-      status: user.status,
-    }))
+    const statusBadge = (status: string) => {
+      const s = (status || '').toLowerCase()
+      const cls = s === 'active' ? 'badge-green' : s === 'inactive' ? 'badge-grey' : 'badge-amber'
+      return <span className={`badge ${cls}`}>{status}</span>
+    }
 
     return (
       <AppShell
@@ -86,12 +82,22 @@ export default async function AdminPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />
           <div className="card">
-            <h2 className="h-section">Your Team ({teamMembers.length})</h2>
-            <CompanyTeamClient
-              members={teamMembers}
-              currentUserId={me?.id ?? ''}
-              currentRoleLevel={me?.roles?.level ?? 999}
-            />
+            <h2 className="h-section">Your Team ({sorted.length})</h2>
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead>
+                <tbody>
+                  {sorted.map((u: any, i) => (
+                    <tr key={i}>
+                      <td>{u.full_name}</td>
+                      <td>{u.email}</td>
+                      <td><strong>{roleLabel(u.roles?.key)}</strong></td>
+                      <td>{statusBadge(u.status)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </AppShell>

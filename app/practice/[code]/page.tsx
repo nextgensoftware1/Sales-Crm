@@ -117,7 +117,7 @@ export default async function PracticeDetail({
     personalScope ? allRows<{ practice_id: string }>(() => supabase.from('lead_assignments').select('practice_id')
       .eq('assigned_to', myUserId!).eq('status', 'active').order('practice_id')).then(data => ({ data })) : Promise.resolve({ data: [] }),
     personalScope && roleKey === 'closer' ? allRows<{ practice_id: string }>(() => supabase.from('lead_transfers').select('practice_id')
-      .eq('to_user_id', myUserId!).order('practice_id')).then(data => ({ data })) : Promise.resolve({ data: [] }),
+      .eq('to_user_id', myUserId!).order('practice_id').order('id')).then(data => ({ data })) : Promise.resolve({ data: [] }),
   ])
   const rows = (candidates ?? []) as any[]
 

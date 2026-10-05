@@ -44,6 +44,9 @@ select pg_temp.try_index('create index if not exists idx_lead_company_claims_sta
 select pg_temp.try_index('create index if not exists idx_lead_worksheets_tenant_practice  on public.lead_worksheets (tenant_id, practice_id)');
 select pg_temp.try_index('create index if not exists idx_lead_worksheets_practice_updated on public.lead_worksheets (practice_id, updated_at desc)');
 
+-- Assignments page: one company's allocated leads, newest first
+select pg_temp.try_index('create index if not exists idx_lead_allocations_tenant_status_allocated on public.lead_allocations (tenant_id, status, allocated_at desc, practice_id)');
+
 -- Practice detail roster lookups and per-request profile lookup
 select pg_temp.try_index('create index if not exists idx_providers_org_pac on public.providers (org_pac_id)');
 select pg_temp.try_index('create index if not exists idx_users_auth_id     on public.users (auth_id)');

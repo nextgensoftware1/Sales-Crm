@@ -23,9 +23,9 @@ export async function checkAccountStatus(): Promise<{
   // there's nothing left to sign in to.
   if (!me) return { ok: false, reason: 'not_found' }
 
-  const myStatus = me.status
-  const companyStatus = me.tenants?.status
-  if (myStatus === 'suspended' || myStatus === 'inactive' || companyStatus === 'suspended') {
+  const myStatus = (me as any).status
+  const companyStatus = (me as any).tenants?.status
+  if (myStatus === 'suspended' || companyStatus === 'suspended') {
     return { ok: false, reason: 'suspended' }
   }
 

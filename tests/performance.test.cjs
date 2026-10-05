@@ -7,6 +7,11 @@ const vm = require('node:vm')
 const ts = require('typescript')
 
 const root = path.resolve(__dirname, '..')
+// Most Leads page tests check the lead data itself, so they run in legacy mode
+// (all rows sent). Server-paged tests switch this on explicitly.
+process.env.CRM_SERVER_PAGED_LEADS = '0'
+// Lead data tests use the v3/original paths unless a test opts into compact rows.
+process.env.CRM_COMPACT_LEAD_RPC = '0'
 function loadTs(file, mocks = {}) {
   const filename = path.resolve(root, file)
   const { outputText } = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -126,6 +131,15 @@ test('identity helper verifies with Auth and ignores arbitrary request headers',
   await assert.rejects(server.getCurrentUser(), /temporary outage/)
 })
 
+// The Leads page sends rows packed ({ keys, rows }); unpack them so tests can
+// assert on plain lead objects exactly as before.
+function withPractices(props) {
+  if (!props.packedPractices) return props
+  const { unpackRows } = loadTs('lib/lead-pack.ts')
+  const { packedPractices, ...rest } = props
+  return { ...rest, practices: unpackRows(packedPractices) }
+}
+
 function database(tables, calls, failures = {}) {
   return { rpc(name, payload) {
     calls.push({ table: `rpc:${name}`, operation: 'rpc', payload })
@@ -204,7 +218,7 @@ for (const [role, codes] of Object.entries(expected)) {
       './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
       'next/navigation': { redirect: () => { throw Error('unexpected redirect') } },
     })
-    const view = await Home(), props = view.props.children.props
+    const view = await Home(), props = withPractices(view.props.children.props)
     assert.equal(props.viewerRole, role)
     assert.equal(props.completedWorksheetCount, ['agent', 'closer'].includes(role) ? 1 : undefined)
     assert.deepEqual(props.practices.map((p) => p.practiceCode), codes)
@@ -560,7 +574,7 @@ for (const role of Object.keys(expected)) {
           getCurrentProfile: async () => ({ data: me }) },
         './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
         'next/navigation': { redirect: () => { throw Error('unexpected redirect') } } })
-      return { props: (await Home()).props.children.props, calls: calls.length }
+      return { props: withPractices((await Home()).props.children.props), calls: calls.length }
     }
     const before = await run(false), after = await run(true)
     const norm = x => JSON.stringify({ ...x, practices: [...x.practices].sort((p, q) => p.practiceCode.localeCompare(q.practiceCode)) })
@@ -575,7 +589,7 @@ test('compacted lead rows render the identical table', () => {
   const { default: Table } = loadTs('app/PracticesTable.tsx', {
     'next/link': ({ href, children, prefetch, ...rest }) => React.createElement('a', { href, ...rest }, children),
     'next/navigation': { useRouter: () => ({ refresh() {} }) },
-    './actions': { allocatePractices() {}, softDeleteLeads() {} }, './assign-actions': { assignLeadsToAgent() {} },
+    './actions': { allocatePractices() {}, softDeleteLeads() {} }, './assign-actions': { assignLeadsToAgent() {} }, './leads-page-actions': { queryLeadPage: async () => ({ ok: false, message: 'not used' }) },
   })
   const row = (i) => ({ practiceCode: 'PR-' + i, allocatedOn: i % 2 ? '2026-01-01T00:00:00Z' : null, status: i % 3 ? null : 'Qualified',
     assignedAwayTo: i % 4 ? null : { name: 'Ann', role: 'Agent' }, source: i % 2 ? 'Allocated' : 'Uploaded',
@@ -589,4 +603,427 @@ test('compacted lead rows render the identical table', () => {
     assert.equal(renderToStaticMarkup(React.createElement(Table, { practices: compact, lazyOptions: true, ...props })),
       renderToStaticMarkup(React.createElement(Table, { practices: full, lazyOptions: true, ...props })))
   }
+})
+
+test('company allocation summary counts in the database and matches a full row count', async () => {
+  const tenants = [
+    { id: 't1', name: 'Acme', is_platform: false, status: 'active' },
+    { id: 't2', name: 'Beta', is_platform: false, status: 'active' },
+    { id: 't3', name: 'Empty', is_platform: false, status: 'active' },
+    { id: 'tp', name: 'Platform', is_platform: true, status: 'active' },
+  ]
+  const lead_allocations = [
+    ...Array.from({ length: 2503 }, (_, i) => ({ practice_id: 'a' + i, tenant_id: 't1', status: 'active' })),
+    ...Array.from({ length: 7 }, (_, i) => ({ practice_id: 'b' + i, tenant_id: 't2', status: 'active' })),
+    ...Array.from({ length: 40 }, (_, i) => ({ practice_id: 'c' + i, tenant_id: 't2', status: 'released' })),
+  ]
+  const tables = { tenants, lead_allocations }
+  let requests = 0, downloadedRows = 0
+  const db = { from(table) {
+    requests++
+    const filters = []; let head = false
+    const run = () => {
+      const rows = tables[table].filter(row => filters.every(f => f(row)))
+      if (!head) downloadedRows += rows.length
+      return head ? { data: null, count: rows.length, error: null } : { data: rows, error: null }
+    }
+    const q = {
+      select(_cols, opts) { head = !!opts?.head; return q },
+      eq(k, v) { filters.push(r => r[k] === v); return q },
+      order() { return q },
+      then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
+    }
+    return q
+  } }
+  const { getCompanyAllocationSummary } = loadTs('app/manage-assignments-actions.ts', {
+    '../lib/supabase-server': {
+      createSupabaseServer: async () => db,
+      getCurrentUser: async () => ({ data: { user: { id: 'u' } } }),
+      getCurrentProfile: async () => ({ data: { id: 'me', tenant_id: null, roles: { key: 'super_admin' } } }),
+    },
+  })
+  const result = await getCompanyAllocationSummary()
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.companies, [
+    { id: 't1', name: 'Acme', count: 2503 },
+    { id: 't2', name: 'Beta', count: 7 },
+    { id: 't3', name: 'Empty', count: 0 },
+    { id: 'tp', name: 'Platform', count: 0 },
+  ].filter(c => c.id !== 'tp'))
+  assert.equal(downloadedRows, 3) // only the tenant list; no allocation rows downloaded
+  assert.equal(requests, 4)       // 1 tenant list + 1 count per company
+})
+
+test('packed lead rows round-trip exactly and render the identical table', () => {
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server')
+  const { compactRow } = loadTs('lib/query-utils.ts')
+  const { packRows, unpackRows } = loadTs('lib/lead-pack.ts')
+  const { default: Table } = loadTs('app/PracticesTable.tsx', {
+    'next/link': ({ href, children, prefetch, ...rest }) => React.createElement('a', { href, ...rest }, children),
+    'next/navigation': { useRouter: () => ({ refresh() {} }) },
+    './actions': { allocatePractices() {}, softDeleteLeads() {} }, './assign-actions': { assignLeadsToAgent() {} }, './leads-page-actions': { queryLeadPage: async () => ({ ok: false, message: 'not used' }) },
+  })
+  const row = (i) => ({ practiceCode: 'PR-' + i, allocatedOn: i % 2 ? '2026-01-01T00:00:00Z' : null, status: i % 3 ? null : 'Qualified',
+    assignedAwayTo: i % 4 ? null : { name: 'Ann', role: 'Agent' }, source: i % 2 ? 'Allocated' : 'Uploaded',
+    allocatedTo: i % 2 ? 'Acme' : null, allocatedCompanies: i % 2 ? [{ id: 't', name: 'Acme' }] : [], name: i === 7 ? null : 'Name ' + i,
+    state: i % 5 ? 'NY' : null, specialty: null, sex: null, orgName: i % 2 ? 'Org' : null, risk: null, npiFound: i % 2 === 0,
+    entityType: null, enumerationDate: null, lastUpdated: null, paymentAdj: i % 3 ? null : 0, lastDialed: null,
+    ccm: i % 2 === 0, pcm: false, awv: false, tcm: false, bhi: false, rpm: false, rcmFit: i % 3 === 0, mipsByYear: i % 2 ? { 2026: 'Group' } : {} })
+  const compact = Array.from({ length: 40 }, (_, i) => row(i)).map(r => ({ ...compactRow(r), practiceCode: r.practiceCode, name: r.name }))
+  const packed = JSON.parse(JSON.stringify(packRows(compact)))   // exactly what crosses the network
+  assert.deepEqual(unpackRows(packed), JSON.parse(JSON.stringify(compact)))
+  assert.ok(JSON.stringify(packed).length < JSON.stringify(compact).length)
+  for (const props of [{ isSuperAdmin: true }, { canAssign: true, viewerRole: 'manager' }, { viewerRole: 'agent' }]) {
+    assert.equal(renderToStaticMarkup(React.createElement(Table, { packedPractices: packed, lazyOptions: true, ...props })),
+      renderToStaticMarkup(React.createElement(Table, { practices: compact, lazyOptions: true, ...props })))
+  }
+})
+
+test('compact database rows decode to the nested lead shape', () => {
+  const { decodeFlatLead } = loadTs('lib/lead-pack.ts')
+  const lead = decodeFlatLead(['id1', 'PR-1', 'Name', 'NY', null, null, '2026-01-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00',
+    ['123', 'Org', 'F', null, 1.5, null, 'NPPES - Found', 'NPI-1', '2020-01-02', [true, false, null, false, false, true, true], [[2026, null, '2026 - Group']]],
+    [['2026-03-01T00:00:00+00:00', ['Ann', 'agent']], [null, null]]])
+  assert.deepEqual(lead, {
+    id: 'id1', practice_code: 'PR-1', name: 'Name', state: 'NY', specialty: null, owner_tenant_id: null, created_at: '2026-01-01T00:00:00+00:00',
+    lead_activity: [{ created_at: '2026-02-01T00:00:00+00:00' }],
+    practice_providers: [{ providers: { npi: '123', org_name: 'Org', nppes_sex: 'F', nppes_last_updated: null, payment_adj_pct: 1.5, at_risk: null,
+      record_source: 'NPPES - Found', entity_type: 'NPI-1', enumeration_date: '2020-01-02',
+      provider_signals: { ccm: true, pcm: false, awv: null, tcm: false, bhi: false, rpm: true, rcm_fit: true },
+      provider_mips: [{ performance_year: 2026, status: null, reporting_option: '2026 - Group' }] } }],
+    assigned_away: [{ assigned_at: '2026-03-01T00:00:00+00:00', users: { full_name: 'Ann', roles: { key: 'agent' } } },
+      { assigned_at: null, users: null }],
+  })
+  const bare = decodeFlatLead(['id2', 'PR-2', 'B', null, null, null, null, null, null, null])
+  assert.deepEqual(bare.practice_providers, [])
+  assert.deepEqual(bare.lead_activity, [])
+  assert.equal('assigned_away' in bare, false)
+})
+
+for (const role of Object.keys(expected)) {
+  test(`compact lead RPC path matches original queries for ${role}`, async () => {
+    const encode = (p, by) => {
+      const prov = p.practice_providers?.[0]?.providers
+      const s = prov?.provider_signals
+      return [p.id, p.practice_code, p.name, p.state ?? null, p.specialty ?? null, p.owner_tenant_id ?? null, p.created_at ?? null,
+        p.lead_activity?.[0]?.created_at ?? null,
+        prov ? [prov.npi ?? null, prov.org_name ?? null, prov.nppes_sex ?? null, prov.nppes_last_updated ?? null, prov.payment_adj_pct ?? null,
+          prov.at_risk ?? null, prov.record_source ?? null, prov.entity_type ?? null, prov.enumeration_date ?? null,
+          s ? [s.ccm ?? null, s.pcm ?? null, s.awv ?? null, s.tcm ?? null, s.bhi ?? null, s.rpm ?? null, s.rcm_fit ?? null] : null,
+          (prov.provider_mips ?? []).map(m => [m.performance_year ?? null, m.status ?? null, m.reporting_option ?? null])] : null,
+        by ? (p.assigned_away ?? []).map(a => [a.assigned_at ?? null, a.users ? [a.users.full_name ?? null, a.users.roles?.key ?? null] : null]) : null]
+    }
+    const run = async (compact) => {
+      const { me, tables } = homeFixture(role), calls = []
+      let db = database(tables, calls)
+      if (compact) {
+        db = withLeadRpcs(db, tables)
+        const nested = db.rpc
+        db.rpc = (name, a) => name === 'crm_lead_rows_flat'
+          ? nested('crm_lead_rows', a).then(({ data }) => ({ data: data.map(p => encode(p, a.p_assigned_by)), error: null }))
+          : nested(name, a)
+      }
+      const { default: Home } = loadTs('app/page.tsx', {
+        '../lib/supabase-server': { createSupabaseServer: async () => db,
+          getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+          getCurrentProfile: async () => ({ data: me }) },
+        './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
+        'next/navigation': { redirect: () => { throw Error('unexpected redirect') } } })
+      return withPractices((await Home()).props.children.props)
+    }
+    const norm = x => JSON.stringify({ ...x, practices: [...x.practices].sort((p, q) => p.practiceCode.localeCompare(q.practiceCode)) })
+    try {
+      process.env.CRM_COMPACT_LEAD_RPC = '0'
+      const original = norm(await run(false))
+      delete process.env.CRM_COMPACT_LEAD_RPC          // default: compact path on
+      assert.equal(norm(await run(true)), original)
+    } finally {
+      process.env.CRM_COMPACT_LEAD_RPC = '0'
+    }
+  })
+}
+
+test('compact lead function is used by default and skipped when switched off', async () => {
+  const { me, tables } = homeFixture('super_admin'), calls = []
+  const db = database(tables, calls)
+  const { default: Home } = loadTs('app/page.tsx', {
+    '../lib/supabase-server': { createSupabaseServer: async () => db,
+      getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+      getCurrentProfile: async () => ({ data: me }) },
+    './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
+    'next/navigation': { redirect: () => { throw Error('unexpected redirect') } } })
+  try {
+    delete process.env.CRM_COMPACT_LEAD_RPC
+    await Home()
+    let rpcNames = calls.filter(c => c.operation === 'rpc').map(c => c.table)
+    assert.equal(rpcNames[0], 'rpc:crm_lead_rows_flat')       // tried first by default
+    assert.equal(rpcNames.includes('rpc:crm_lead_rows'), true) // safe fallback (mock has no flat function)
+    calls.length = 0
+    process.env.CRM_COMPACT_LEAD_RPC = '0'
+    await Home()
+    rpcNames = calls.filter(c => c.operation === 'rpc').map(c => c.table)
+    assert.equal(rpcNames.includes('rpc:crm_lead_rows_flat'), false)
+  } finally {
+    process.env.CRM_COMPACT_LEAD_RPC = '0'
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Server-paged Leads page: must give exactly the same results as the original
+// browser-side filtering. The reference below is a verbatim copy of the
+// original PracticesTable filter/sort and summary code.
+// ---------------------------------------------------------------------------
+function referenceFilter(practices, f, { isSuperAdmin, prioritySet, newLeadSet, workedLeadSet }) {
+  const ZONE_BY_STATE = { CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
+    NJ: 'EST', NY: 'EST', NC: 'EST', OH: 'EST', PA: 'EST', RI: 'EST', SC: 'EST', VT: 'EST', VA: 'EST', WV: 'EST', DC: 'EST', MI: 'EST', IN: 'EST', KY: 'EST',
+    AL: 'CST', AR: 'CST', IL: 'CST', IA: 'CST', KS: 'CST', LA: 'CST', MN: 'CST', MS: 'CST', MO: 'CST', NE: 'CST', ND: 'CST', OK: 'CST', SD: 'CST', TN: 'CST', TX: 'CST', WI: 'CST',
+    AZ: 'MST', CO: 'MST', ID: 'MST', MT: 'MST', NM: 'MST', UT: 'MST', WY: 'MST', CA: 'PST', NV: 'PST', OR: 'PST', WA: 'PST', AK: 'Other', HI: 'Other' }
+  const isWithinDateRange = (value, from, to) => { if (!from && !to) return true; if (!value) return false; const date = value.trim().slice(0, 10); return (!from || date >= from) && (!to || date <= to) }
+  const toLocalCalendarDate = (value) => { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
+  const hasRealMips = (p) => { const v = (p.mipsByYear?.[2026] ?? '').toString().trim().toLowerCase(); if (!v) return false
+    if (v.includes('individual')) return true; if (v.includes('group')) return true; if (v.includes('apm')) return true; return false }
+  const SIGNALS = [['ccm', p => !!p.ccm], ['pcm', p => !!p.pcm], ['awv', p => !!p.awv], ['tcm', p => !!p.tcm], ['bhi', p => !!p.bhi],
+    ['rpm', p => !!p.rpm], ['rcmFit', p => !!p.rcmFit], ['mips', p => hasRealMips(p)]].map(([key, test]) => ({ key, test }))
+  const { search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, catTab, sourceTab, poolTab, assignedView, companyFilter,
+    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter } = f
+  const activeSignals = new Set(f.activeSignals), hasPriority = prioritySet.size > 0
+  const rows = practices.filter((p) => {
+    if (isSuperAdmin) {
+      if (companyFilter === '__unassigned__' && (p.allocatedCompanies?.length ?? 0) > 0) return false
+      if (companyFilter && companyFilter !== '__unassigned__' && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
+    }
+    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
+    if (stateFilter && p.state !== stateFilter) return false
+    if (zoneFilter) { const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'; if (practiceZone !== zoneFilter) return false }
+    if (specialtyFilter && p.specialty !== specialtyFilter) return false
+    if (catTab === 'MIPS' && !hasRealMips(p)) return false
+    if (catTab === 'RCM' && !p.rcmFit) return false
+    if (catTab === 'CCM' && !p.ccm) return false
+    if (catTab === 'Credentialing' && !p.npiFound) return false
+    if (catTab === 'Credentialing') {
+      if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
+      if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
+      if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
+    }
+    if (dispositionFilter && p.status !== dispositionFilter) return false
+    for (const key of activeSignals) { const sig = SIGNALS.find((s) => s.key === key); if (sig && !sig.test(p)) return false }
+    if (sourceTab !== 'All') { const src = (p.source ?? '').toLowerCase(); const isAllocated = src.includes('alloc')
+      if (sourceTab === 'Allocated' && !isAllocated) return false; if (sourceTab === 'Uploaded' && isAllocated) return false }
+    if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
+    if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
+    if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
+    if (assignedDateFilter && toLocalCalendarDate(p.allocatedOn) !== assignedDateFilter) return false
+    return true
+  })
+  if (hasPriority && assignedView === 'all') {
+    rows.sort((a, b) => { const pa = prioritySet.has(a.practiceCode) ? 0 : 1, pb = prioritySet.has(b.practiceCode) ? 0 : 1
+      if (pa !== pb) return pa - pb; return a.name.localeCompare(b.name) })
+  }
+  return rows
+}
+
+function randomLeads(count, seed = 7) {
+  let x = seed; const rnd = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)]
+  return Array.from({ length: count }, (_, i) => ({
+    practiceCode: 'PR-' + (1000 + i), name: pick(['Alpha Care', 'beta clinic', 'Gamma Health', 'Délta Med', 'alpha care', 'Zeta']) + ' ' + (i % 13),
+    state: pick(['NY', 'TX', 'CA', 'AK', 'ZZ', null]), specialty: pick(['Cardiology', 'Family', null]),
+    ccm: rnd() < .5, pcm: rnd() < .3, awv: rnd() < .2, tcm: rnd() < .2, bhi: rnd() < .2, rpm: rnd() < .2, rcmFit: rnd() < .4,
+    npiFound: rnd() < .5, entityType: pick(['NPI-1', 'NPI-2', null]), enumerationDate: pick(['2015-03-04', '2020-12-31', null]),
+    lastUpdated: pick(['2024-01-10', '2025-06-30', null]), mipsByYear: pick([{ 2026: 'Group' }, { 2026: 'Excluded' }, { 2025: 'Individual' }, {}]),
+    allocatedOn: pick(['2026-09-14T22:30:00Z', '2026-09-15T02:00:00Z', '2026-09-15T19:30:00+00:00', null, 'bad-date']),
+    status: pick(['Qualified', 'Follow Up', 'Call back later', 'Transferred', null]), source: pick(['Allocated', 'Uploaded']),
+    allocatedCompanies: pick([[], [{ id: 't1', name: 'Acme' }], [{ id: 't2', name: 'Beta' }, { id: 't1', name: 'Acme' }]]),
+    assignedAwayTo: rnd() < .2 ? { name: 'Ann', role: 'Agent' } : null,
+  }))
+}
+function randomFilters(rnd, pick) {
+  const maybe = (v, p = .3) => (rnd() < p ? v : undefined)
+  return {
+    search: maybe(pick(['alpha', 'PR-10', 'é', 'zzz', 'CARE'])) ?? '', stateFilter: maybe(pick(['NY', 'TX', 'ZZ'])) ?? '',
+    zoneFilter: maybe(pick(['EST', 'CST', 'PST', 'Other'])) ?? '', specialtyFilter: maybe(pick(['Cardiology', 'Family'])) ?? '',
+    dispositionFilter: maybe(pick(['Qualified', 'Follow Up'])) ?? '', activeSignals: rnd() < .4 ? ['ccm', 'mips', 'rcmFit', 'pcm'].filter(() => rnd() < .4) : [],
+    catTab: pick(['All Categories', 'All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing']), sourceTab: pick(['All', 'All', 'Allocated', 'Uploaded']),
+    poolTab: pick(['All Leads', 'All Leads', 'New Leads', 'Worked Leads']), assignedView: pick(['all', 'all', 'mine']),
+    companyFilter: maybe(pick(['__unassigned__', 't1', 't2'])) ?? '', enumTypeFilter: maybe(pick(['NPI-1', 'NPI-2'])) ?? '',
+    lastUpdatedFrom: maybe('2024-06-01') ?? '', lastUpdatedTo: maybe('2025-12-31') ?? '', enumDateFrom: maybe('2016-01-01') ?? '', enumDateTo: maybe('2021-01-01') ?? '',
+    assignedDateFilter: maybe(pick(['2026-09-14', '2026-09-15', '2026-09-16'])) ?? '',
+  }
+}
+
+test('shared lead filter matches the original browser filter for 3,000 random filter combinations', () => {
+  const lf = loadTs('lib/lead-filters.ts')
+  const leads = randomLeads(400)
+  let x = 99; const rnd = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)]
+  for (let i = 0; i < 3000; i++) {
+    const ctx = { isSuperAdmin: rnd() < .5, prioritySet: new Set(rnd() < .5 ? leads.filter(() => rnd() < .2).map(l => l.practiceCode) : []),
+      newLeadSet: new Set(leads.filter(() => rnd() < .3).map(l => l.practiceCode)), workedLeadSet: new Set(leads.filter(() => rnd() < .3).map(l => l.practiceCode)) }
+    const f = randomFilters(rnd, pick)
+    const expected = referenceFilter(leads, f, ctx).map(p => p.practiceCode)
+    assert.deepEqual(lf.filterLeads(leads, lf.sanitizeLeadFilters(f), ctx).map(p => p.practiceCode), expected, JSON.stringify(f))
+  }
+})
+
+test('shared lead overview matches the original summary and dropdown logic', () => {
+  const { leadOverview } = loadTs('lib/lead-filters.ts')
+  const leads = randomLeads(300, 3)
+  for (const isSuperAdmin of [true, false]) for (const completedWorksheetCount of [undefined, 5]) {
+    const newLeadSet = new Set(leads.slice(0, 40).map(l => l.practiceCode)), workedLeadSet = new Set(leads.slice(20, 90).map(l => l.practiceCode).concat(['GONE']))
+    const o = leadOverview(leads, { isSuperAdmin, newLeadSet, workedLeadSet, completedWorksheetCount })
+    assert.deepEqual(o.states, Array.from(new Set(leads.map(p => p.state).filter(Boolean))).sort())
+    assert.deepEqual(o.specialties, Array.from(new Set(leads.map(p => p.specialty).filter(Boolean))).sort())
+    assert.deepEqual(o.dispositions, Array.from(new Set(leads.map(p => p.status).filter(Boolean))).sort())
+    assert.equal(o.summaryCounts.total, leads.length)
+    assert.equal(o.summaryCounts.unassigned, leads.filter(p => isSuperAdmin ? (p.allocatedCompanies?.length ?? 0) === 0 : !p.assignedAwayTo).length)
+    assert.equal(o.summaryCounts.worked, completedWorksheetCount ?? leads.filter(p => workedLeadSet.has(p.practiceCode)).length)
+    assert.equal(o.summaryCounts.followUp, leads.filter(p => { const s = (p.status ?? '').toLowerCase(); return s.includes('follow') || s.includes('call back') || s.includes('callback') }).length)
+    assert.equal(o.newCount, newLeadSet.size); assert.equal(o.workedCount, workedLeadSet.size)
+    assert.equal(Object.values(o.zoneCounts).reduce((a, b) => a + b, 0), leads.length)
+  }
+})
+
+test('"Assigned on" date uses the browser time zone on the server', () => {
+  const { calendarDateIn, toLocalCalendarDate } = loadTs('lib/lead-filters.ts')
+  const saved = process.env.TZ
+  try {
+    for (const tz of ['Asia/Karachi', 'America/New_York', 'UTC', 'Pacific/Kiritimati']) {
+      process.env.TZ = tz
+      for (const value of ['2026-09-14T22:30:00Z', '2026-09-15T19:30:00+00:00', '2026-03-08T07:30:00Z', null, '', 'bad-date'])
+        assert.equal(calendarDateIn(tz)(value), toLocalCalendarDate(value), `${tz} ${value}`)
+    }
+    assert.equal(calendarDateIn('Not/AZone')('2026-09-14T22:30:00Z'), toLocalCalendarDate('2026-09-14T22:30:00Z'))
+  } finally {
+    if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved
+  }
+})
+
+for (const role of Object.keys(expected)) {
+  test(`server-paged Leads page returns the same leads, pages and counts as before for ${role}`, async () => {
+    const lf = loadTs('lib/lead-filters.ts')
+    const render = async (paged) => {
+      process.env.CRM_SERVER_PAGED_LEADS = paged ? '1' : '0'
+      const { me, tables } = homeFixture(role)
+      const snapshots = loadTs('lib/lead-snapshots.ts')
+      const { default: Home } = loadTs('app/page.tsx', {
+        '../lib/supabase-server': { createSupabaseServer: async () => database(tables, []),
+          getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+          getCurrentProfile: async () => ({ data: me }) },
+        './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
+        'next/navigation': { redirect: () => { throw Error('unexpected redirect') } } })
+      return { props: (await Home()).props.children.props, snapshots }
+    }
+    try {
+      const legacy = withPractices((await render(false)).props)
+      const { props, snapshots } = await render(true)
+      assert.equal(props.practices, undefined); assert.equal(props.packedPractices, undefined)
+      const ctx = { isSuperAdmin: legacy.isSuperAdmin, prioritySet: new Set(legacy.myAssignedCodes ?? []),
+        newLeadSet: new Set(legacy.newLeadCodes ?? []), workedLeadSet: new Set(legacy.workedLeadCodes ?? []) }
+      // Same counts and dropdowns as the browser computed from the full list.
+      assert.deepEqual(props.serverPaging.overview, lf.leadOverview(legacy.practices, { ...ctx, completedWorksheetCount: legacy.completedWorksheetCount }))
+      const snap = snapshots.getLeadSnapshot(props.serverPaging.snapshotId, 'auth-me')
+      assert.ok(snap)
+      assert.equal(snapshots.getLeadSnapshot(props.serverPaging.snapshotId, 'someone-else'), null)
+      let x = 5; const rnd = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648
+      const pick = (arr) => arr[Math.floor(rnd() * arr.length)]
+      for (let i = 0; i < 60; i++) {
+        const f = lf.sanitizeLeadFilters(i === 0 ? {} : randomFilters(rnd, pick))
+        const want = lf.filterLeads(legacy.practices, f, ctx)
+        const pageSize = pick([1, 2, 8, 20])
+        const first = snapshots.queryLeadSnapshot(snap, f, null, 1, pageSize, true)
+        assert.deepEqual(first.codes, want.map(p => p.practiceCode))
+        const pages = []
+        for (let pg = 1; pg <= Math.max(1, Math.ceil(want.length / pageSize)); pg++)
+          pages.push(...snapshots.queryLeadSnapshot(snap, f, null, pg, pageSize, false).rows)
+        assert.deepEqual(JSON.parse(JSON.stringify(pages)), JSON.parse(JSON.stringify(want)))
+      }
+      assert.deepEqual(props.serverPaging.codes, lf.filterLeads(legacy.practices, lf.DEFAULT_LEAD_FILTERS, ctx).map(p => p.practiceCode))
+    } finally {
+      process.env.CRM_SERVER_PAGED_LEADS = '0'
+    }
+  })
+}
+
+test('server-paged table renders the identical first screen', () => {
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server')
+  const lf = loadTs('lib/lead-filters.ts')
+  const { default: Table } = loadTs('app/PracticesTable.tsx', {
+    'next/link': ({ href, children, prefetch, ...rest }) => React.createElement('a', { href, ...rest }, children),
+    'next/navigation': { useRouter: () => ({ refresh() {} }) },
+    './actions': { allocatePractices() {}, softDeleteLeads() {} }, './assign-actions': { assignLeadsToAgent() {} },
+    './leads-page-actions': { queryLeadPage: async () => assert.fail('first screen must not need a request') },
+  })
+  const leads = randomLeads(57, 11)
+  for (const [props, pageSize] of [[{ isSuperAdmin: true }, 20], [{ canAssign: true, viewerRole: 'manager', myAssignedCodes: ['PR-1003', 'PR-1040'] }, 8], [{ viewerRole: 'agent', completedWorksheetCount: 2 }, 8]]) {
+    const newLeadCodes = leads.slice(0, 5).map(l => l.practiceCode), workedLeadCodes = leads.slice(3, 12).map(l => l.practiceCode)
+    const ctx = { isSuperAdmin: !!props.isSuperAdmin, prioritySet: new Set(props.myAssignedCodes ?? []), newLeadSet: new Set(newLeadCodes), workedLeadSet: new Set(workedLeadCodes) }
+    const all = lf.filterLeads(leads, lf.DEFAULT_LEAD_FILTERS, ctx)
+    const serverPaging = { snapshotId: 's1', overview: lf.leadOverview(leads, { ...ctx, completedWorksheetCount: props.completedWorksheetCount }),
+      rows: all.slice(0, pageSize), codes: all.map(p => p.practiceCode), pageSize }
+    const legacy = renderToStaticMarkup(React.createElement(Table, { practices: leads, newLeadCodes, workedLeadCodes, lazyOptions: true, ...props }))
+    const paged = renderToStaticMarkup(React.createElement(Table, { serverPaging, lazyOptions: true, ...props }))
+    assert.equal(paged, legacy)
+  }
+})
+
+test('lead page action: signed-in check, per-user snapshots, rebuild when missing', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'
+  try {
+    const { me, tables } = homeFixture('super_admin')
+    let authUser = { id: 'auth-me' }, loads = 0
+    const supabaseServer = {
+      createSupabaseServer: async () => { loads++; return database(tables, []) },
+      getCurrentUser: async () => ({ data: { user: authUser } }),
+      getCurrentProfile: async () => ({ data: me }),
+    }
+    const mocks = { '../lib/supabase-server': supabaseServer, 'next/navigation': { redirect: () => { throw Error('redirect') } } }
+    const snapshots = loadTs('lib/lead-snapshots.ts', mocks)
+    const { queryLeadPage } = loadTs('app/leads-page-actions.ts', { ...mocks, '../lib/lead-snapshots': snapshots })
+    const lf = loadTs('lib/lead-filters.ts')
+    const { loadLeadsData } = loadTs('lib/leads-data.ts', mocks)
+
+    // Signed out: nothing returned.
+    authUser = null
+    const out = await queryLeadPage({ snapshotId: 'x', filters: {}, page: 1, pageSize: 20, wantCodes: true })
+    assert.equal(out.ok, false); assert.equal(loads, 0)
+
+    // Missing snapshot: rebuilt for the signed-in user, with codes + overview.
+    authUser = { id: 'auth-me' }
+    const first = await queryLeadPage({ snapshotId: 'does-not-exist', filters: {}, page: 1, pageSize: 2, wantCodes: false })
+    assert.equal(first.ok, true); assert.ok(first.overview); assert.ok(Array.isArray(first.codes)); assert.equal(loads, 1)
+    const data = await loadLeadsData()
+    const ctx = { isSuperAdmin: true, prioritySet: new Set(data.myAssignedCodes), newLeadSet: new Set(data.newLeadCodes), workedLeadSet: new Set(data.workedLeadCodes) }
+    assert.deepEqual(first.codes, lf.filterLeads(data.practices, lf.DEFAULT_LEAD_FILTERS, ctx).map(p => p.practiceCode))
+
+    // Existing snapshot: reused, no database work.
+    loads = 0
+    const again = await queryLeadPage({ snapshotId: first.snapshotId, filters: { search: 'p' }, page: 1, pageSize: 2, wantCodes: true })
+    assert.equal(again.ok, true); assert.equal(again.snapshotId, first.snapshotId); assert.equal(again.overview, undefined); assert.equal(loads, 0)
+
+    // Another user cannot read that snapshot: they get their own, rebuilt.
+    authUser = { id: 'someone-else' }
+    const other = await queryLeadPage({ snapshotId: first.snapshotId, filters: {}, page: 1, pageSize: 2, wantCodes: false })
+    assert.equal(other.ok, true)
+    assert.notEqual(other.snapshotId, first.snapshotId)   // never the first user's snapshot
+    assert.ok(other.overview)                              // rebuilt with their own sign-in
+    assert.equal(snapshots.getLeadSnapshot(other.snapshotId, 'auth-me'), null)
+    assert.equal(snapshots.getLeadSnapshot(first.snapshotId, 'someone-else'), null)
+
+    // Bad input is cleaned up rather than trusted.
+    authUser = { id: 'auth-me' }
+    const odd = await queryLeadPage({ snapshotId: first.snapshotId, filters: { zoneFilter: 'DROP', activeSignals: ['nope', 'ccm'], sourceTab: 1 }, page: -5, pageSize: 99999, wantCodes: true })
+    assert.equal(odd.ok, true); assert.equal(odd.page, 1); assert.equal(odd.pageSize, 200)
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'
+  }
+})
+
+test('lead snapshots stay bounded: newest 3 per user', () => {
+  const snapshots = loadTs('lib/lead-snapshots.ts')
+  const data = { isSuperAdmin: false, myAssignedCodes: [], newLeadCodes: [], workedLeadCodes: [], practices: [], completedWorksheetCount: undefined }
+  const ids = Array.from({ length: 5 }, () => snapshots.saveLeadSnapshot('bounded-user', data).id)
+  assert.equal(ids.filter(id => snapshots.getLeadSnapshot(id, 'bounded-user')).length, 3)
+  assert.ok(snapshots.getLeadSnapshot(ids[4], 'bounded-user'))
+  assert.equal(snapshots.getLeadSnapshot(ids[0], 'bounded-user'), null)
 })

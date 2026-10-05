@@ -6,43 +6,31 @@ import { useRouter } from 'next/navigation'
 import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
+import { unpackRows, type PackedRows } from '../lib/lead-pack'
+import { queryLeadPage } from './leads-page-actions'
+import {
+  SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
+  type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
+} from '../lib/lead-filters'
 
-type Practice = {
-  practiceCode: string
-  name: string
-  state: string | null
-  specialty: string | null
-  ccm: boolean
-  pcm: boolean
-  awv: boolean
-  tcm: boolean
-  bhi: boolean
-  rpm: boolean
-  rcmFit: boolean
-  npiFound?: boolean
-  entityType?: string | null
-  enumerationDate?: string | null
-  lastUpdated?: string | null
-  mips?: Record<number, string> | null
-  mipsByYear?: Record<number, string> | null
-  allocatedOn?: string | null
-  status?: string | null
-  source?: string | null
-  allocatedTo?: string | null
-  allocatedCompanies?: { id: string; name: string }[]
-  sex?: string | null
-  orgName?: string | null
-  risk?: string | null
-  paymentAdj?: string | null
-  lastDialed?: string | null
-  assignedAwayTo?: { name: string; role: string } | null
-}
+type Practice = LeadRow
 
 type Company = { id: string; slug: string; name: string }
 
 type Props = {
   lazyOptions?: boolean
-  practices: Practice[]
+  practices?: Practice[]
+  // Same rows, sent with each field name once (see lib/lead-pack.ts).
+  packedPractices?: PackedRows
+  // Server-paged mode: only the visible page is sent; other pages and filter
+  // results come from app/leads-page-actions.ts (see lib/lead-snapshots.ts).
+  serverPaging?: {
+    snapshotId: string
+    overview: LeadOverview
+    rows: Practice[]
+    codes?: string[]
+    pageSize: number
+  }
   companies?: Company[]
   isSuperAdmin?: boolean
   currentUser?: { full_name: string; role: string; company: string } | null
@@ -72,63 +60,8 @@ const C = {
   violet: 'var(--purple)',
 }
 
-// Each signal pill has a key (for toggle state) and a test(p) => boolean.
-// Booleans (CCM/PCM/…) test their flag; MIPS tests for real MIPS data.
-// Compare the stored calendar date directly to avoid timezone shifts.
-function isWithinDateRange(value: string | null | undefined, from: string, to: string): boolean {
-  if (!from && !to) return true
-  if (!value) return false
-  const date = value.trim().slice(0, 10)
-  return (!from || date >= from) && (!to || date <= to)
-}
-
-function toLocalCalendarDate(value: string | null | undefined): string {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-const hasRealMips = (p: Practice) => {
-  const v = (p.mipsByYear?.[2026] ?? '').toString().trim().toLowerCase()
-  if (!v) return false
-  // Real MIPS participation = the row mentions Individual or Group (or MIPS APM),
-  // even if "Excluded" also appears (e.g. "Individual + Group / Excluded - low volume").
-  if (v.includes('individual')) return true
-  if (v.includes('group')) return true
-  if (v.includes('apm')) return true
-  // Otherwise it's purely No record / Excluded → not real participation.
-  return false
-}
-
-const SIGNALS: { key: string; label: string; test: (p: Practice) => boolean }[] = [
-  { key: 'ccm',    label: 'CCM',     test: (p) => !!p.ccm },
-  { key: 'pcm',    label: 'PCM',     test: (p) => !!p.pcm },
-  { key: 'awv',    label: 'AWV',     test: (p) => !!p.awv },
-  { key: 'tcm',    label: 'TCM',     test: (p) => !!p.tcm },
-  { key: 'bhi',    label: 'BHI',     test: (p) => !!p.bhi },
-  { key: 'rpm',    label: 'RPM',     test: (p) => !!p.rpm },
-  { key: 'rcmFit', label: 'RCM Fit', test: (p) => !!p.rcmFit },
-  { key: 'mips',   label: 'MIPS',    test: (p) => hasRealMips(p) },
-]
-
-// Deterministic state -> US timezone-zone mapping (same lookup used on the
-// single-practice page), so these counts reflect the real practices in view.
-const ZONE_BY_STATE: Record<string, 'EST' | 'CST' | 'MST' | 'PST' | 'Other'> = {
-  CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
-  NJ: 'EST', NY: 'EST', NC: 'EST', OH: 'EST', PA: 'EST', RI: 'EST', SC: 'EST', VT: 'EST',
-  VA: 'EST', WV: 'EST', DC: 'EST', MI: 'EST', IN: 'EST', KY: 'EST',
-  AL: 'CST', AR: 'CST', IL: 'CST', IA: 'CST', KS: 'CST', LA: 'CST', MN: 'CST', MS: 'CST',
-  MO: 'CST', NE: 'CST', ND: 'CST', OK: 'CST', SD: 'CST', TN: 'CST', TX: 'CST', WI: 'CST',
-  AZ: 'MST', CO: 'MST', ID: 'MST', MT: 'MST', NM: 'MST', UT: 'MST', WY: 'MST',
-  CA: 'PST', NV: 'PST', OR: 'PST', WA: 'PST',
-  AK: 'Other', HI: 'Other',
-}
-const ZONE_KEYS = ['EST', 'CST', 'MST', 'PST', 'Other'] as const
-type ZoneKey = typeof ZONE_KEYS[number]
+// Signals, zones, date helpers, filtering and summary counts live in
+// lib/lead-filters.ts so the server can apply the exact same rules.
 
 type PersistedLeadFilters = {
   search: string
@@ -152,8 +85,15 @@ type PersistedLeadFilters = {
 
 const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
-export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
+export default function PracticesTable({ practices: practicesProp, packedPractices, serverPaging, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
+  const practices = useMemo<Practice[]>(
+    () => (serverPaging ? [] : packedPractices ? unpackRows<Practice>(packedPractices) : practicesProp ?? []),
+    [serverPaging, packedPractices, practicesProp],
+  )
+  // Server-paged mode state (unused in legacy mode).
+  const [serverSnapshotId, setServerSnapshotId] = useState(serverPaging?.snapshotId ?? '')
+  const [serverOverview, setServerOverview] = useState<LeadOverview | null>(serverPaging?.overview ?? null)
   const canFilterAssignedDate = ['company_admin', 'manager', 'team_lead', 'agent', 'closer'].includes(viewerRole)
   const filtersStorageKey = `${LEAD_FILTERS_STORAGE_KEY}:${viewerUserId ?? 'unknown'}`
   const [companies, setCompanies] = useState(initialCompanies)
@@ -203,11 +143,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     // Keep allocated companies available while the lazy registered-company
     // request is loading, and tolerate historical allocations whose company
     // has since been deactivated or removed from the normal company list.
-    for (const practice of practices) {
-      for (const company of practice.allocatedCompanies ?? []) registered.set(company.id, company.name)
-    }
+    const leadCompanies = serverPaging
+      ? serverOverview?.leadCompanies ?? []
+      : practices.flatMap((practice) => practice.allocatedCompanies ?? [])
+    for (const company of leadCompanies) registered.set(company.id, company.name)
     return Array.from(registered, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
-  }, [companies, practices])
+  }, [companies, practices, serverPaging, serverOverview])
   const [activeSignals, setActiveSignals] = useState<Set<string>>(new Set())
 
   // ---- REAL allocation state ----
@@ -295,48 +236,14 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     }
   }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
-  const states = useMemo(
-    () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
-    [practices]
+  // Dropdown options and summary-card numbers: computed here in legacy mode,
+  // computed on the server (same function) in server-paged mode.
+  const localOverview = useMemo(
+    () => (serverPaging ? null : leadOverview(practices, { isSuperAdmin, newLeadSet, workedLeadSet, completedWorksheetCount })),
+    [serverPaging, practices, isSuperAdmin, newLeadSet, workedLeadSet, completedWorksheetCount],
   )
-
-  const specialties = useMemo(
-    () => Array.from(new Set(practices.map((p) => p.specialty).filter(Boolean))).sort() as string[],
-    [practices]
-  )
-
-  const dispositions = useMemo(
-    () => Array.from(new Set(practices.map((p) => p.status).filter(Boolean))).sort() as string[],
-    [practices]
-  )
-
-  // Real zone counts, derived from each practice's state — same lookup used
-  // on the single-practice page's zone badge.
-  const zoneCounts = useMemo(() => {
-    const counts: Record<string, number> = { EST: 0, CST: 0, MST: 0, PST: 0, Other: 0 }
-    for (const p of practices) {
-      const zone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'
-      counts[zone] = (counts[zone] ?? 0) + 1
-    }
-    return counts
-  }, [practices])
-
-  const summaryCounts = useMemo(() => ({
-    total: practices.length,
-    unassigned: practices.filter((p) => isSuperAdmin
-      ? (p.allocatedCompanies?.length ?? 0) === 0
-      : !p.assignedAwayTo).length,
-    assigned: practices.filter((p) => isSuperAdmin
-      ? (p.allocatedCompanies?.length ?? 0) > 0
-      : !!p.assignedAwayTo).length,
-    worked: completedWorksheetCount ?? practices.filter((p) => workedLeadSet.has(p.practiceCode)).length,
-    qualified: practices.filter((p) => (p.status ?? '').toLowerCase().includes('qualif')).length,
-    new: practices.filter((p) => newLeadSet.has(p.practiceCode)).length,
-    followUp: practices.filter((p) => {
-      const status = (p.status ?? '').toLowerCase()
-      return status.includes('follow') || status.includes('call back') || status.includes('callback')
-    }).length,
-  }), [practices, isSuperAdmin, workedLeadSet, newLeadSet, completedWorksheetCount])
+  const overview = (localOverview ?? serverOverview)!
+  const { states, specialties, dispositions, zoneCounts, summaryCounts } = overview
 
   const summaryCards = useMemo(() => {
     if (isSuperAdmin) return [
@@ -371,83 +278,99 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     })
   }
 
-  const filtered = useMemo(() => {
-    const rows = practices.filter((p) => {
-      if (isSuperAdmin) {
-        if (companyFilter === '__unassigned__' && (p.allocatedCompanies?.length ?? 0) > 0) return false
-        if (companyFilter && companyFilter !== '__unassigned__'
-          && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
-      }
-      if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
-      if (stateFilter && p.state !== stateFilter) return false
-      if (zoneFilter) {
-        const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'
-        if (practiceZone !== zoneFilter) return false
-      }
-      if (specialtyFilter && p.specialty !== specialtyFilter) return false
+  // Current filters as one object (same values the browser filtered by before).
+  const filters = useMemo<LeadFilters>(() => ({
+    ...DEFAULT_LEAD_FILTERS,
+    search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter,
+    activeSignals: Array.from(activeSignals), catTab, sourceTab, poolTab, assignedView, companyFilter,
+    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
+  }), [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters])
 
-      // Category tab filter (All / MIPS / RCM / CCM / Credentialing)
-      if (catTab === 'MIPS' && !hasRealMips(p)) return false
-      if (catTab === 'RCM' && !p.rcmFit) return false
-      if (catTab === 'CCM' && !p.ccm) return false
-      if (catTab === 'Credentialing' && !p.npiFound) return false
-      // Credentialing sub-filters — only applied once Credentialing itself
-      // is selected, since these fields only mean anything for NPPES data.
-      if (catTab === 'Credentialing') {
-        if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
-        if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
-        if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
-      }
-      if (dispositionFilter && p.status !== dispositionFilter) return false
-
-      // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
-      for (const key of activeSignals) {
-        const sig = SIGNALS.find((s) => s.key === key)
-        if (sig && !sig.test(p)) return false
-      }
-
-      // Source filter: All / Allocated (from Super Admin) / Uploaded (own)
-      if (sourceTab !== 'All') {
-        const src = (p.source ?? '').toLowerCase()
-        const isAllocated = src.includes('alloc')
-        if (sourceTab === 'Allocated' && !isAllocated) return false
-        if (sourceTab === 'Uploaded' && isAllocated) return false
-      }
-
-      // Pool tab filter (All Leads / New Leads / Worked Leads)
-      if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
-      if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
-
-      // "My assigned" view: only leads assigned to me (priority).
-      if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
-      if (assignedDateFilter && toLocalCalendarDate(p.allocatedOn) !== assignedDateFilter) return false
-
-      return true
-    })
-
-    // Priority leads (assigned to me) float to the top; otherwise keep name order.
-    if (hasPriority && assignedView === 'all') {
-      rows.sort((a, b) => {
-        const pa = prioritySet.has(a.practiceCode) ? 0 : 1
-        const pb = prioritySet.has(b.practiceCode) ? 0 : 1
-        if (pa !== pb) return pa - pb
-        return a.name.localeCompare(b.name)
-      })
-    }
-    return rows
-  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  // Legacy mode: filter the full list in the browser.
+  const filtered = useMemo(
+    () => (serverPaging ? [] : filterLeads(practices, filters, { isSuperAdmin, prioritySet, newLeadSet, workedLeadSet })),
+    [serverPaging, practices, filters, isSuperAdmin, prioritySet, newLeadSet, workedLeadSet],
+  )
 
   const tableColumnCount = 11 + ((isSuperAdmin || canAssign) ? 1 : 0) + (isSuperAdmin ? 1 : 0)
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
   // of rendering the entire result set at once.
-  const [pageSize, setPageSize] = useState(isSuperAdmin ? 20 : 8)
+  const [pageSize, setPageSize] = useState(serverPaging?.pageSize ?? (isSuperAdmin ? 20 : 8))
   const [page, setPage] = useState(1)
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+
+  // ---- server-paged mode: the visible page comes from the server ----
+  // `codes` = every matching lead code in order (for counts, select-all and
+  // range-select); `rows` = only the leads on the current page.
+  const [serverView, setServerView] = useState(() => ({
+    key: serverPaging ? JSON.stringify(DEFAULT_LEAD_FILTERS) : '',
+    snapshotId: serverPaging?.snapshotId ?? '',
+    codes: serverPaging?.codes ?? [],
+    rows: serverPaging?.rows ?? [],
+    page: 1,
+    pageSize: serverPaging?.pageSize ?? 0,
+  }))
+  const [serverLoading, setServerLoading] = useState(false)
+  const [serverError, setServerError] = useState('')
+  const requestSeq = useRef(0)
+
+  // After an action calls router.refresh(), the page sends a new snapshot.
+  const incomingSnapshotId = serverPaging?.snapshotId
+  useEffect(() => {
+    if (!serverPaging || serverPaging.snapshotId === serverSnapshotId) return
+    setServerSnapshotId(serverPaging.snapshotId)
+    setServerOverview(serverPaging.overview)
+    setServerView({
+      key: JSON.stringify(DEFAULT_LEAD_FILTERS), snapshotId: serverPaging.snapshotId,
+      codes: serverPaging.codes ?? [], rows: serverPaging.rows, page: 1, pageSize: serverPaging.pageSize,
+    })
+    // Only a new snapshot id matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSnapshotId])
+
+  useEffect(() => {
+    if (!serverPaging || !filtersRestored) return
+    const wantCodes = serverView.key !== filtersKey || serverView.snapshotId !== serverSnapshotId
+    if (!wantCodes && serverView.page === page && serverView.pageSize === pageSize) return
+    const seq = ++requestSeq.current
+    // Filter changes (e.g. typing in search) wait briefly; page changes don't.
+    const timer = setTimeout(async () => {
+      setServerLoading(true)
+      try {
+        const res = await queryLeadPage({
+          snapshotId: serverSnapshotId, filters, page, pageSize, wantCodes,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        })
+        if (seq !== requestSeq.current) return   // a newer request replaced this one
+        if (!res.ok) { setServerError(res.message); return }
+        if (res.overview) setServerOverview(res.overview)
+        if (res.snapshotId !== serverSnapshotId) setServerSnapshotId(res.snapshotId)
+        setServerView((prev) => ({
+          key: filtersKey, snapshotId: res.snapshotId, codes: res.codes ?? prev.codes,
+          rows: res.rows as Practice[], page: res.page, pageSize: res.pageSize,
+        }))
+        setServerError('')
+        if (res.page !== page) setPage(res.page)
+      } catch {
+        if (seq === requestSeq.current) setServerError('Could not load leads. Please try again.')
+      } finally {
+        if (seq === requestSeq.current) setServerLoading(false)
+      }
+    }, wantCodes ? 200 : 0)
+    return () => clearTimeout(timer)
+  }, [serverPaging, filtersRestored, filters, filtersKey, page, pageSize, serverSnapshotId, serverView])
+
+  const filteredCodes = useMemo(
+    () => (serverPaging ? serverView.codes : filtered.map((p) => p.practiceCode)),
+    [serverPaging, serverView.codes, filtered],
+  )
+  const filteredCount = filteredCodes.length
+  const totalPages = Math.max(1, Math.ceil(filteredCount / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageStart = (safePage - 1) * pageSize
-  const pageRows = filtered.slice(pageStart, pageStart + pageSize)
+  const pageRows = serverPaging ? serverView.rows : filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
   useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
@@ -475,15 +398,15 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   }
 
   // Select-all: reflects the currently FILTERED rows.
-  const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.practiceCode))
+  const allSelected = filteredCount > 0 && filteredCodes.every((code) => selected.has(code))
   const toggleSelectAll = () => {
     void loadOptions()
     setSelected((prev) => {
       const next = new Set(prev)
       if (allSelected) {
-        for (const p of filtered) next.delete(p.practiceCode)   // clear filtered
+        for (const code of filteredCodes) next.delete(code)   // clear filtered
       } else {
-        for (const p of filtered) next.add(p.practiceCode)      // select all filtered
+        for (const code of filteredCodes) next.add(code)      // select all filtered
       }
       return next
     })
@@ -492,7 +415,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   // Select rows N..M (1-based, inclusive) of the currently filtered list.
   const applyRange = () => {
     void loadOptions()
-    const total = filtered.length
+    const total = filteredCount
     let from = parseInt(rangeFrom, 10)
     let to = parseInt(rangeTo, 10)
     if (isNaN(from)) from = 1
@@ -503,7 +426,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     setSelected((prev) => {
       const next = new Set(prev)
       for (let i = from - 1; i <= to - 1; i++) {
-        if (filtered[i]) next.add(filtered[i].practiceCode)
+        if (filteredCodes[i]) next.add(filteredCodes[i])
       }
       return next
     })
@@ -584,9 +507,9 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
           <div className="lead-engine-subnav-tabs" aria-label="Lead status views">
             {([
-              { key: 'All Leads', label: 'All', count: practices.length, icon: Inbox },
-              { key: 'New Leads', label: 'New', count: newLeadSet.size, icon: Sparkles },
-              { key: 'Worked Leads', label: 'Worked', count: workedLeadSet.size, icon: TimerReset },
+              { key: 'All Leads', label: 'All', count: summaryCounts.total, icon: Inbox },
+              { key: 'New Leads', label: 'New', count: overview.newCount, icon: Sparkles },
+              { key: 'Worked Leads', label: 'Worked', count: overview.workedCount, icon: TimerReset },
             ] as const).map((item) => {
               const Icon = item.icon
               const active = poolTab === item.key
@@ -686,7 +609,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
           <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '8px 12px', background: C.panelAlt }}>
             <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5, fontWeight: 700 }}>PRACTICE SIZE</div>
             <div style={{ fontSize: 13, marginTop: 4, color: C.text, fontWeight: 700 }}>
-              {filtered.length === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + pageSize, filtered.length)}`}
+              {filteredCount === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + pageSize, filteredCount)}`}
             </div>
           </div>
         </div>
@@ -695,7 +618,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       {/* ---- Lead Pool bar ---- */}
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filtered.length} leads)</span></h2>
+          <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filteredCount} leads)</span></h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
         {hasPriority && (
@@ -766,7 +689,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             <h2 className="leads-section-title">Refine Leads</h2>
             <p>Narrow the selected queue by state, specialty, disposition, or advanced criteria.</p>
           </div>
-          <span className="filter-result-count">{filtered.length} result{filtered.length === 1 ? '' : 's'}</span>
+          <span className="filter-result-count">{filteredCount} result{filteredCount === 1 ? '' : 's'}{serverLoading ? ' · loading…' : ''}</span>
+          {serverError && <span role="alert" style={{ color: 'var(--danger, #f66)', fontSize: 12 }}>{serverError}</span>}
         </div>
         <div className="quick-filter-row">
           <label className="filter-control"><span>State</span><select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} style={input}>
@@ -859,7 +783,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               style={{ ...input, width: 74, padding: '6px 8px' }}
             />
             <button onClick={applyRange} style={btnGhost}>Select range</button>
-            <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
+            <span style={{ fontSize: 11, color: C.faint }}>of {filteredCount}</span>
           </div>
           <select aria-label="Company" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)} style={input}>
             <option value="">{optionsBusy ? 'Loading companies…' : 'Choose company…'}</option>
@@ -897,7 +821,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               style={{ ...input, width: 74, padding: '6px 8px' }}
             />
             <button onClick={applyRange} style={btnGhost}>Select range</button>
-            <span style={{ fontSize: 11, color: C.faint }}>of {filtered.length}</span>
+            <span style={{ fontSize: 11, color: C.faint }}>of {filteredCount}</span>
           </div>
           <select aria-label="Assign to team member" onFocus={() => void loadOptions()} onPointerEnter={() => void loadOptions()} value={targetAgent} onChange={(e) => setTargetAgent(e.target.value)} style={input}>
             <option value="">{optionsBusy ? 'Loading team…' : 'Assign to…'}</option>
@@ -984,7 +908,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                 <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
               </tr>
             ))}
-            {filtered.length === 0 && (
+            {filteredCount === 0 && (
               <tr><td colSpan={tableColumnCount} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
             )}
           </tbody>
@@ -994,7 +918,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span>
-            {filtered.length === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, filtered.length)} of ${filtered.length} leads`}
+            {filteredCount === 0 ? 'Showing 0 leads' : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, filteredCount)} of ${filteredCount} leads`}
           </span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: C.text, fontWeight: 700 }}>
             Rows per page

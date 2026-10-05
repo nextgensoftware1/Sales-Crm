@@ -183,61 +183,6 @@ export async function createUser(input: {
   return { ok: true }
 }
 
-export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; message?: string }> {
-  if (!userId) return { ok: false, message: 'Choose a user to remove.' }
-  const me = await whoAmI()
-  if (!me) return { ok: false, message: 'Not signed in.' }
-  if (!['company_admin', 'manager', 'team_lead'].includes(me.roleKey) || !me.tenantId) {
-    return { ok: false, message: 'You are not allowed to remove company users.' }
-  }
-  if (userId === me.id) return { ok: false, message: 'You cannot remove your own account.' }
-
-  let admin
-  try {
-    admin = createSupabaseAdmin()
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : 'User management is not configured.' }
-  }
-
-  const { data: row, error: readError } = await admin.from('users')
-    .select('id, auth_id, tenant_id, status, roles(key, level)')
-    .eq('id', userId).maybeSingle()
-  if (readError) return { ok: false, message: `Could not load that user: ${readError.message}` }
-  if (!row) return { ok: false, message: 'User not found.' }
-
-  const target = row as unknown as {
-    id: string
-    auth_id: string | null
-    tenant_id: string | null
-    status: string
-    roles: { key: string; level: number } | null
-  }
-  if (target.tenant_id !== me.tenantId || target.roles?.key === 'super_admin') {
-    return { ok: false, message: 'You can only remove users from your own company.' }
-  }
-  if ((target.roles?.level ?? 0) <= me.level) {
-    return { ok: false, message: 'You can only remove users with a more junior role.' }
-  }
-  if (target.status !== 'active') return { ok: false, message: 'This user is already inactive or suspended.' }
-
-  const { error: deactivateError } = await admin.from('users').update({ status: 'suspended' })
-    .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'active')
-  if (deactivateError) return { ok: false, message: `Could not deactivate this user: ${deactivateError.message}` }
-
-  if (target.auth_id) {
-    const { error: banError } = await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: '876000h' })
-    if (banError) {
-      const { error: restoreError } = await admin.from('users').update({ status: 'active' })
-        .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'suspended')
-      return { ok: false, message: restoreError
-        ? `Could not revoke login (${banError.message}) or restore the profile (${restoreError.message}). Contact support.`
-        : `Could not revoke this user's login: ${banError.message}` }
-    }
-  }
-
-  return { ok: true, message: 'User removed from the active team. Their worksheet and activity history were kept.' }
-}
-
 // ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----
 
 async function requireSuperAdmin() {

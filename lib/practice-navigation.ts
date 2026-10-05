@@ -27,7 +27,7 @@ export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): P
         allRows<{ practice_id: string }>(() => db.from('lead_assignments').select('practice_id')
           .eq('assigned_to', scope.userId).eq('status', 'active').order('practice_id')),
         scope.role === 'closer' ? allRows<{ practice_id: string }>(() => db.from('lead_transfers').select('practice_id')
-          .eq('to_user_id', scope.userId).order('practice_id')) : [],
+          .eq('to_user_id', scope.userId).order('practice_id').order('id')) : [],
       ])
       ids = [...assignments, ...transfers].map(row => row.practice_id).filter(Boolean)
     }

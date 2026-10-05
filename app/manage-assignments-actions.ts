@@ -72,30 +72,27 @@ export async function getCompanyAllocationSummary(): Promise<{
   // Independent of each other — the allocations query doesn't need the
   // tenant list to run, so run them together instead of tenants finishing
   // fully before allocations even starts.
-  const [{ data: tenants, error: tenantError }, allocationsSettled] = await Promise.all([
-    supabase.from('tenants').select('id, name').eq('is_platform', false).eq('status', 'active').order('name'),
-    allRows<{ tenant_id: string }>(() => supabase
-      .from('lead_allocations')
-      .select('tenant_id')
-      .eq('status', 'active')
-      .order('tenant_id')).then(
-      (data) => ({ ok: true as const, data }),
-      (error) => ({ ok: false as const, error }),
-    ),
-  ])
+  // Only the per-company totals are shown, so ask the database to count them
+  // (one tiny COUNT request per company, run in parallel) instead of
+  // downloading every allocation row (~17 pages) and counting in JavaScript.
+  const { data: tenants, error: tenantError } = await supabase
+    .from('tenants').select('id, name').eq('is_platform', false).eq('status', 'active').order('name')
   if (tenantError) return { ok: false, message: tenantError.message }
 
-  let allocations: Array<{ tenant_id: string }>
+  const counts = new Map<string, number>()
   try {
-    if (!allocationsSettled.ok) throw allocationsSettled.error
-    allocations = allocationsSettled.data
+    const totals = await mapConcurrent(tenants ?? [], 6, async (tenant) => {
+      const { count, error } = await supabase
+        .from('lead_allocations')
+        .select('practice_id', { count: 'exact', head: true })
+        .eq('tenant_id', tenant.id)
+        .eq('status', 'active')
+      if (error) throw error
+      return [tenant.id, count ?? 0] as const
+    })
+    for (const [tenantId, count] of totals) counts.set(tenantId, count)
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'Could not load company allocation totals.' }
-  }
-
-  const counts = new Map<string, number>()
-  for (const allocation of allocations ?? []) {
-    counts.set(allocation.tenant_id, (counts.get(allocation.tenant_id) ?? 0) + 1)
   }
 
   return {
@@ -122,7 +119,10 @@ export async function getCompanyAllocatedLeads(companyId: string): Promise<{
       .select('allocated_at, status, master_practices(practice_code, name, state, specialty)')
       .eq('tenant_id', companyId)
       .eq('status', 'active')
-      .order('allocated_at', { ascending: false }))
+      .order('allocated_at', { ascending: false })
+      // Tie-breaker: a bulk allocation gives many rows the same allocated_at,
+      // and without a unique sort, pages could skip or repeat leads.
+      .order('practice_id'))
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'Could not load allocated leads.' }
   }
