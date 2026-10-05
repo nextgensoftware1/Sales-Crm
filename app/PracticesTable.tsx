@@ -1,12 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Eye, Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
+import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
-import WorksheetPreviewModal from './WorksheetPreviewModal'
 
 type Practice = {
   practiceCode: string
@@ -144,8 +143,6 @@ const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
 export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
-  const [previewPractice, setPreviewPractice] = useState<{ code: string; name: string } | null>(null)
-  const closeWorksheetPreview = useCallback(() => setPreviewPractice(null), [])
   const filtersStorageKey = `${LEAD_FILTERS_STORAGE_KEY}:${viewerUserId ?? 'unknown'}`
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -424,6 +421,8 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     }
     return rows
   }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
+
+  const tableColumnCount = 11 + ((isSuperAdmin || canAssign) ? 1 : 0) + (isSuperAdmin ? 1 : 0)
 
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
@@ -904,8 +903,6 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
               <th style={th}>State</th>
               <th style={thLeft}>Specialty</th>
-              <th style={{ ...th, minWidth: 150 }}>NPPES Enumeration Date</th>
-              <th style={{ ...th, minWidth: 140 }}>NPPES Last Updated</th>
               <th style={th}>Sex</th>
               <th style={thLeft}>Org Name</th>
               <th style={th}>Risk</th>
@@ -936,15 +933,6 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
                   <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
-                  <button
-                    type="button"
-                    className="worksheet-preview-trigger"
-                    title="View saved worksheet"
-                    aria-label={`View saved worksheet for ${p.name}`}
-                    onClick={() => setPreviewPractice({ code: p.practiceCode, name: p.name })}
-                  >
-                    <Eye size={14} />
-                  </button>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
                   {p.assignedAwayTo && (
                     <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
@@ -974,18 +962,11 @@ export default function PracticesTable({ practices, companies: initialCompanies 
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={15} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
+              <tr><td colSpan={tableColumnCount} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
             )}
           </tbody>
         </table>
       </section>
-      {previewPractice && (
-        <WorksheetPreviewModal
-          practiceCode={previewPractice.code}
-          practiceName={previewPractice.name}
-          onClose={closeWorksheetPreview}
-        />
-      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
