@@ -942,8 +942,6 @@ export default function PracticesTable({ practices, companies: initialCompanies 
                 </td>
                 <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
-                <td style={{ ...td, color: p.enumerationDate ? C.dim : C.faint, fontSize: 12, whiteSpace: 'nowrap' }}>{p.enumerationDate || '—'}</td>
-                <td style={{ ...td, color: p.lastUpdated ? C.dim : C.faint, fontSize: 12, whiteSpace: 'nowrap' }}>{p.lastUpdated || '—'}</td>
                 <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12 }}>{p.orgName ?? '—'}</td>
                 <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>

@@ -95,6 +95,7 @@ as $$
       || case when p_assigned_by is null then '{}'::jsonb else jsonb_build_object(
         'assigned_away', coalesce((
           select jsonb_agg(jsonb_build_object(
+            'assigned_at', a.assigned_at,
             'users', case when u.id is null then null else jsonb_build_object(
               'full_name', u.full_name,
               'roles', case when r.id is null then null
@@ -134,6 +135,7 @@ as $$
   select coalesce(jsonb_agg(jsonb_build_object(
     'practice_id', a.practice_id,
     'tenant_id', a.tenant_id,
+    'allocated_at', a.allocated_at,
     'master_practices', case when mp.id is null then null
                              else jsonb_build_object('practice_code', mp.practice_code) end,
     'tenants', case when tn.id is null then null else jsonb_build_object('name', tn.name) end

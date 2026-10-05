@@ -26,7 +26,7 @@ export default async function Home() {
 
   const SELECT = `
     id, practice_code, name, state, specialty, owner_tenant_id, created_at, lead_activity(created_at),
-    ${canAssign ? 'assigned_away:lead_assignments(users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
+    ${canAssign ? 'assigned_away:lead_assignments(assigned_at, users!lead_assignments_assigned_to_fkey(full_name, roles(key, label))),' : ''}
     practice_providers (
       providers (
         npi, org_name, nppes_sex, nppes_last_updated, payment_adj_pct, at_risk, record_source, entity_type, enumeration_date,
@@ -117,7 +117,7 @@ export default async function Home() {
     const tenantScope = !isSuperAdmin && myTenantId ? myTenantId : null
     const rows = await rowsViaRpc<any>(supabase, 'crm_active_allocations', { p_tenant: tenantScope }, () => fetchPagedRows((from, to, withCount) => {
       let query = supabase.from('lead_allocations')
-        .select('practice_id, tenant_id, master_practices(practice_code), tenants(name)', withCount ? { count: 'exact' } : undefined)
+        .select('practice_id, tenant_id, allocated_at, master_practices(practice_code), tenants(name)', withCount ? { count: 'exact' } : undefined)
         .eq('status', 'active')
       if (!isSuperAdmin && myTenantId) query = query.eq('tenant_id', myTenantId)
       return query.order('practice_id').order('tenant_id').range(from, to)
@@ -147,6 +147,7 @@ export default async function Home() {
   } : null
 
   const allocatedOn: Record<string, string> = {}
+  const allocationDatesByPractice: Record<string, { tenantId: string; allocatedAt: string | null }[]> = {}
   const leadStatus: Record<string, string> = {}
   for (const a of (assignmentsResult.data ?? []) as any[]) {
     if (a.practice_id && assignmentScoped) {
@@ -158,6 +159,12 @@ export default async function Home() {
     if (t.practice_id) {
       if (!allocatedOn[t.practice_id]) allocatedOn[t.practice_id] = t.created_at
       if (!leadStatus[t.practice_id]) leadStatus[t.practice_id] = 'Transferred'
+    }
+  }
+  for (const allocation of (allocationsResult.data ?? []) as any[]) {
+    if (allocation.practice_id && allocation.tenant_id) {
+      const dates = allocationDatesByPractice[allocation.practice_id] ??= []
+      dates.push({ tenantId: allocation.tenant_id, allocatedAt: allocation.allocated_at ?? null })
     }
   }
   const myAssignedCodes = canAssign ? (assignmentsResult.data ?? [])
@@ -289,6 +296,12 @@ export default async function Home() {
   const practices = data.map((p: any) => {
     const provider = p.practice_providers?.[0]?.providers
     const s = provider?.provider_signals ?? {}
+    const assignedAwayRows: {
+      assigned_at?: string | null
+      users?: { full_name: string | null; roles?: { key: string | null } | null } | null
+    }[] = Array.isArray(p.assigned_away) ? p.assigned_away : []
+    const latestAssignedAway = assignedAwayRows.reduce<(typeof assignedAwayRows)[number] | null>((latest, assignment) =>
+      !latest || String(assignment.assigned_at ?? '') > String(latest.assigned_at ?? '') ? assignment : latest, null)
     const mipsRows = Array.isArray(provider?.provider_mips) ? provider.provider_mips : []
     // Both "NPPES - Found" and "NPPES - Not Found" count as having
     // credentialing data — only a genuinely blank Record_Source (no NPPES
@@ -315,13 +328,12 @@ export default async function Home() {
 
     return {
       practiceCode: p.practice_code,
-      allocatedOn: allocatedOn[p.id] ?? null,
+      allocatedOn: (canAssign ? latestAssignedAway?.assigned_at : null) ?? allocatedOn[p.id] ?? null,
+      allocationDates: allocationDatesByPractice[p.id] ?? [],
       status: leadStatus[p.id] ?? null,
-      assignedAwayTo: canAssign && p.assigned_away?.length
-        ? (() => {
-            const person = p.assigned_away.filter((a: any) => a.users).at(-1)?.users
-            return person ? { name: person.full_name, role: roleLabel(person.roles?.key) } : null
-          })() : null,
+      assignedAwayTo: canAssign && latestAssignedAway?.users
+        ? { name: latestAssignedAway.users.full_name ?? '', role: roleLabel(latestAssignedAway.users.roles?.key) }
+        : null,
       source: allocatedCodeSet.has(p.practice_code) ? 'Allocated' : 'Uploaded',
       allocatedTo: allocatedCompanyByCode[p.practice_code]?.map(company => company.name).join(', ') ?? null,
       allocatedCompanies: allocatedCompanyByCode[p.practice_code] ?? [],
@@ -382,6 +394,3 @@ export default async function Home() {
     </AppShell>
   )
 }
-
-
-

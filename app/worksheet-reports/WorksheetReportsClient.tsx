@@ -320,23 +320,26 @@ export default function WorksheetReportsClient({
   // rather than shown with one meaningless option.
   const showFilledBy = scope !== 'personal'
   const [specialtyFilter, setSpecialtyFilter] = useState('')
+  const [dispositionFilter, setDispositionFilter] = useState('')
   const [filledByFilter, setFilledByFilter] = useState('')
   const [callbackFilter, setCallbackFilter] = useState('') // YYYY-MM-DD
   const [lastUpdateFilter, setLastUpdateFilter] = useState('') // YYYY-MM-DD
 
   const specialties = useMemo(() => Array.from(new Set(rows.map((r) => r.specialty).filter((v): v is string => !!v))).sort(), [rows])
+  const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
   const filteredRows = useMemo(() => rows.filter((r) => {
     if (specialtyFilter && r.specialty !== specialtyFilter) return false
+    if (dispositionFilter && r.disposition !== dispositionFilter) return false
     if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
     if (callbackFilter && !sameCalendarDate(r.callbackAt, callbackFilter)) return false
     if (lastUpdateFilter && !sameCalendarDate(r.lastUpdatedAt, lastUpdateFilter)) return false
     return true
-  }), [rows, specialtyFilter, filledByFilter, showFilledBy, callbackFilter, lastUpdateFilter])
+  }), [rows, specialtyFilter, dispositionFilter, filledByFilter, showFilledBy, callbackFilter, lastUpdateFilter])
 
-  const resetFilters = () => { setSpecialtyFilter(''); setFilledByFilter(''); setCallbackFilter(''); setLastUpdateFilter('') }
-  const activeFilterCount = [specialtyFilter, showFilledBy ? filledByFilter : '', callbackFilter, lastUpdateFilter].filter(Boolean).length
+  const resetFilters = () => { setSpecialtyFilter(''); setDispositionFilter(''); setFilledByFilter(''); setCallbackFilter(''); setLastUpdateFilter('') }
+  const activeFilterCount = [specialtyFilter, dispositionFilter, showFilledBy ? filledByFilter : '', callbackFilter, lastUpdateFilter].filter(Boolean).length
 
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
@@ -391,6 +394,12 @@ export default function WorksheetReportsClient({
             <select className="input" value={specialtyFilter} onChange={(e) => setSpecialtyFilter(e.target.value)}>
               <option value="">All Specialties</option>
               {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label className="filter-control"><span>Call Disposition</span>
+            <select className="input" value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)}>
+              <option value="">All Call Dispositions</option>
+              {dispositions.map((disposition) => <option key={disposition} value={disposition}>{disposition}</option>)}
             </select>
           </label>
           {showFilledBy && (
