@@ -82,6 +82,16 @@ function isWithinDateRange(value: string | null | undefined, from: string, to: s
   return (!from || date >= from) && (!to || date <= to)
 }
 
+function toLocalCalendarDate(value: string | null | undefined): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const hasRealMips = (p: Practice) => {
   const v = (p.mipsByYear?.[2026] ?? '').toString().trim().toLowerCase()
   if (!v) return false
@@ -137,12 +147,14 @@ type PersistedLeadFilters = {
   lastUpdatedTo: string
   enumDateFrom: string
   enumDateTo: string
+  assignedDateFilter: string
 }
 
 const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
 export default function PracticesTable({ practices, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
+  const canFilterAssignedDate = ['company_admin', 'manager', 'team_lead', 'agent', 'closer'].includes(viewerRole)
   const filtersStorageKey = `${LEAD_FILTERS_STORAGE_KEY}:${viewerUserId ?? 'unknown'}`
   const [companies, setCompanies] = useState(initialCompanies)
   const [myAgents, setMyAgents] = useState(initialAgents)
@@ -235,6 +247,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const [lastUpdatedTo, setLastUpdatedTo] = useState('')
   const [enumDateFrom, setEnumDateFrom] = useState('')
   const [enumDateTo, setEnumDateTo] = useState('')
+  const [assignedDateFilter, setAssignedDateFilter] = useState('')
   const [filtersRestored, setFiltersRestored] = useState(false)
 
   useEffect(() => {
@@ -260,6 +273,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
         if (typeof filters.lastUpdatedTo === 'string') setLastUpdatedTo(filters.lastUpdatedTo)
         if (typeof filters.enumDateFrom === 'string') setEnumDateFrom(filters.enumDateFrom)
         if (typeof filters.enumDateTo === 'string') setEnumDateTo(filters.enumDateTo)
+        if (typeof filters.assignedDateFilter === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(filters.assignedDateFilter)) setAssignedDateFilter(filters.assignedDateFilter)
       }
     } catch {
     } finally {
@@ -272,14 +286,14 @@ export default function PracticesTable({ practices, companies: initialCompanies 
     const filters: PersistedLeadFilters = {
       search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter,
       activeSignals: Array.from(activeSignals), assignedView, poolTab, sourceTab, catTab,
-      enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo,
+      enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     }
     try {
       localStorage.setItem(filtersStorageKey, JSON.stringify(filters))
     } catch {
       // Keep filtering usable when browser storage is unavailable.
     }
-  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
+  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   const states = useMemo(
     () => Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
@@ -406,6 +420,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
       // "My assigned" view: only leads assigned to me (priority).
       if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
+      if (assignedDateFilter && toLocalCalendarDate(p.allocatedOn) !== assignedDateFilter) return false
 
       return true
     })
@@ -420,7 +435,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
       })
     }
     return rows
-  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
+  }, [practices, search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, newLeadSet, workedLeadSet, assignedView, prioritySet, hasPriority, isSuperAdmin, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   const tableColumnCount = 11 + ((isSuperAdmin || canAssign) ? 1 : 0) + (isSuperAdmin ? 1 : 0)
 
@@ -435,7 +450,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
   const pageRows = filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -537,12 +552,12 @@ export default function PracticesTable({ practices, companies: initialCompanies 
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
   }
 
   const activeFilterCount = [
     search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, companyFilter,
-    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo,
+    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
     poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
   ].filter(Boolean).length + activeSignals.size
@@ -766,6 +781,15 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             <option value="">All Dispositions</option>
             {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
           </select></label>
+          {canFilterAssignedDate && <label className="filter-control"><span>Assigned on</span>
+            <input
+              aria-label="Filter leads by assigned date"
+              type="date"
+              value={assignedDateFilter}
+              onChange={event => setAssignedDateFilter(event.target.value)}
+              style={{ ...input, minWidth: 145 }}
+            />
+          </label>}
         </div>
 
         <details className="advanced-lead-tools">
@@ -801,6 +825,7 @@ export default function PracticesTable({ practices, companies: initialCompanies 
             {specialtyFilter && <button onClick={() => setSpecialtyFilter('')}>{specialtyFilter} ×</button>}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
+            {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {assignedDateFilter} ×</button>}
             {enumTypeFilter && <button onClick={() => setEnumTypeFilter('')}>Enumeration: {enumTypeFilter} ×</button>}
             {(lastUpdatedFrom || lastUpdatedTo) && <button onClick={() => { setLastUpdatedFrom(''); setLastUpdatedTo('') }}>Last updated: {lastUpdatedFrom || 'Any'} to {lastUpdatedTo || 'Any'} ×</button>}
             {(enumDateFrom || enumDateTo) && <button onClick={() => { setEnumDateFrom(''); setEnumDateTo('') }}>Enumeration date: {enumDateFrom || 'Any'} to {enumDateTo || 'Any'} ×</button>}
