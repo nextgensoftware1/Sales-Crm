@@ -15,7 +15,6 @@ export default async function ManageAssignmentsPage() {
   const { data: me } = await getCurrentProfile(user.id)
 
   const isSuperAdmin = (me as any)?.roles?.key === 'super_admin'
-  const isCompanyAdmin = (me as any)?.roles?.key === 'company_admin'
   // Fetched here (server-side) instead of each client component fetching
   // its own initial data after mount — same requests, same results, just
   // no longer a visible extra round-trip after the page has already loaded.
@@ -37,7 +36,7 @@ export default async function ManageAssignmentsPage() {
   return (
     <AppShell
       title="Assigned Leads"
-      subtitle={isSuperAdmin ? 'Review leads successfully allocated to each company.' : isCompanyAdmin ? 'Review active assignments across your company.' : 'Review leads assigned to your team.'}
+      subtitle={isSuperAdmin ? 'Review leads successfully allocated to each company.' : 'Review leads assigned to your team.'}
       currentUser={currentUser}
       active="/assignments"
       showAdmin={isSuperAdmin}
@@ -47,7 +46,7 @@ export default async function ManageAssignmentsPage() {
         <Link prefetch={false} href="/dashboard" className="btn" style={{ textDecoration: 'none' }}>← Back to dashboard</Link>
       }
     >
-      {isSuperAdmin ? <CompanyAllocationsClient initialData={companyAllocationsData} /> : <AssignmentsClient initialData={assignmentsData} companyWide={isCompanyAdmin} />}
+      {isSuperAdmin ? <CompanyAllocationsClient initialData={companyAllocationsData} /> : <AssignmentsClient initialData={assignmentsData} />}
     </AppShell>
   )
 }
