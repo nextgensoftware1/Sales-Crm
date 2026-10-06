@@ -8,6 +8,7 @@ import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
 import { unpackRows, type PackedRows } from '../lib/lead-pack'
 import { queryLeadPage } from './leads-page-actions'
+import { formatCalendarDate } from '../lib/assigned-dates'
 import {
   SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
@@ -749,7 +750,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             {specialtyFilter && <button onClick={() => setSpecialtyFilter('')}>{specialtyFilter} ×</button>}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
-            {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {assignedDateFilter} ×</button>}
+            {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {formatCalendarDate(assignedDateFilter)} ×</button>}
             {enumTypeFilter && <button onClick={() => setEnumTypeFilter('')}>Enumeration: {enumTypeFilter} ×</button>}
             {(lastUpdatedFrom || lastUpdatedTo) && <button onClick={() => { setLastUpdatedFrom(''); setLastUpdatedTo('') }}>Last updated: {lastUpdatedFrom || 'Any'} to {lastUpdatedTo || 'Any'} ×</button>}
             {(enumDateFrom || enumDateTo) && <button onClick={() => { setEnumDateFrom(''); setEnumDateTo('') }}>Enumeration date: {enumDateFrom || 'Any'} to {enumDateTo || 'Any'} ×</button>}

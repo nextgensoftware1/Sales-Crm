@@ -1,16 +1,17 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   getMyAssignmentSummary,
   getAssignedLeads,
   unassignLead,
   getMyIncomingCodes,
 } from '../manage-assignments-actions'
+import { toLocalCalendarDate } from '../../lib/lead-filters'
 
 type Person = { id: string; full_name: string; role: string; count: number }
-type Lead = { practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string }
+type Lead = { practiceId: string; practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string; canRemove: boolean }
 
 // When the page already fetched this server-side (the normal case now),
 // initialData arrives pre-populated and the component renders immediately
@@ -26,6 +27,12 @@ export default function AssignmentsClient({ initialData }: {
   const [loading, setLoading] = useState(!initialData)
   const [msg, setMsg] = useState(initialData && !initialData.summary.ok ? (initialData.summary.message ?? 'Could not load assignments.') : '')
   const [incoming, setIncoming] = useState<Set<string>>(new Set(initialData?.incomingCodes ?? []))
+  // "Assigned on" filter (calendar day in the viewer's time zone).
+  const [dateFilter, setDateFilter] = useState('')
+  const visibleLeads = useMemo(
+    () => (dateFilter ? leads.filter((l) => toLocalCalendarDate(l.assignedAt) === dateFilter) : leads),
+    [leads, dateFilter],
+  )
 
   // load the summary of people I've assigned to + which leads came to me from above
   useEffect(() => {
@@ -52,11 +59,11 @@ export default function AssignmentsClient({ initialData }: {
     else setMsg(res.message ?? 'Could not load leads.')
   }
 
-  const remove = async (code: string) => {
-    const res = await unassignLead(code, selected)
+  const remove = async (lead: Lead) => {
+    const res = await unassignLead(lead.practiceId, selected)
     setMsg(res.message)
     if (res.ok) {
-      setLeads((prev) => prev.filter((l) => l.practiceCode !== code))
+      setLeads((prev) => prev.filter((l) => l.practiceId !== lead.practiceId))
       setPeople((prev) => prev.map((p) => p.id === selected ? { ...p, count: p.count - 1 } : p))
     }
   }
@@ -99,6 +106,17 @@ export default function AssignmentsClient({ initialData }: {
             ) : leads.length === 0 ? (
               <p className="subtle">No leads assigned to this person (or all removed).</p>
             ) : (
+              <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <label className="filter-control"><span>Assigned on</span>
+                  <input type="date" className="input" aria-label="Filter by assigned date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} />
+                </label>
+                {dateFilter && <button type="button" className="btn" onClick={() => setDateFilter('')}>Clear</button>}
+                <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }}>{visibleLeads.length} of {leads.length} leads</span>
+              </div>
+              {visibleLeads.length === 0 ? (
+                <p className="subtle">No leads were assigned to this person on that date.</p>
+              ) : (
               <div className="tbl-wrap">
                 <table className="tbl">
                   <thead>
@@ -106,12 +124,13 @@ export default function AssignmentsClient({ initialData }: {
                       <th>Practice</th>
                       <th>State</th>
                       <th>Specialty</th>
+                      <th>Assigned On</th>
                       <th style={{ textAlign: 'right' }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {leads.map((l) => (
-                      <tr key={l.practiceCode}>
+                    {visibleLeads.map((l) => (
+                      <tr key={l.practiceId}>
                         <td style={{ fontWeight: 600 }}>
                           {incoming.has(l.practiceCode) && (
                             <span title="Also assigned to you by your manager" style={{ color: 'var(--warn)', marginRight: 6 }}>★</span>
@@ -120,19 +139,26 @@ export default function AssignmentsClient({ initialData }: {
                         </td>
                         <td>{l.state ?? '—'}</td>
                         <td>{l.specialty ?? '—'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{l.assignedAt ? new Date(l.assignedAt).toLocaleString() : '—'}</td>
                         <td style={{ textAlign: 'right' }}>
+                          {l.canRemove ? (
                           <button
-                            onClick={() => remove(l.practiceCode)}
+                            onClick={() => remove(l)}
                             style={{ background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}
                           >
                             Remove
                           </button>
+                          ) : (
+                            <span className="subtle" style={{ fontSize: 12 }} title="Assigned by someone else">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              )}
+              </>
             )}
           </div>
         </div>

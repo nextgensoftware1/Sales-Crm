@@ -1126,3 +1126,24 @@ test('removed teammates are hidden from "Assign to…" and cannot be assigned le
   const res = await assignLeadsToAgent(['PR-1'], 'a2')
   assert.equal(res.ok, false); assert.match(res.message, /removed from your team/)
 })
+
+// ---------------------------------------------------------------------------
+// "Assigned on" calendar filter (Leads page)
+// ---------------------------------------------------------------------------
+test('assigned-on filter picks exactly the leads assigned that day, in the viewer time zone', () => {
+  const lf = loadTs('lib/lead-filters.ts')
+  const snapshots = loadTs('lib/lead-snapshots.ts')
+  const { formatCalendarDate } = loadTs('lib/assigned-dates.ts')
+  const leads = randomLeads(200, 17).map((l, i) => ({ ...l, allocatedOn: i % 7 === 0 ? null : new Date(Date.UTC(2026, 9, 1 + (i % 6), (i * 7) % 24, (i * 13) % 60)).toISOString() }))
+  const snap = snapshots.saveLeadSnapshot('dates-user', { isSuperAdmin: false, myAssignedCodes: [], newLeadCodes: [], workedLeadCodes: [], practices: leads, completedWorksheetCount: undefined })
+  for (const tz of ['Asia/Karachi', 'UTC', 'America/New_York']) {
+    const toDay = lf.calendarDateIn(tz)
+    for (const day of ['2026-10-01', '2026-10-04', '2026-10-06', '2026-10-07', '2026-12-25']) {
+      const expected = leads.filter(l => toDay(l.allocatedOn) === day).map(l => l.practiceCode).sort()
+      const { codes } = snapshots.queryLeadSnapshot(snap, { ...lf.DEFAULT_LEAD_FILTERS, assignedDateFilter: day }, tz, 1, 20, true)
+      assert.deepEqual([...codes].sort(), expected, `${tz} ${day}`)
+    }
+  }
+  assert.match(formatCalendarDate('2026-10-06'), /2026/)
+  assert.equal(formatCalendarDate('bad'), 'bad')
+})
