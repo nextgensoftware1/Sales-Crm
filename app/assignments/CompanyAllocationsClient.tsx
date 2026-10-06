@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { Building2 } from 'lucide-react'
 import { getCompanyAllocatedLeads, getCompanyAllocationSummary } from '../manage-assignments-actions'
+import WorkspacePanelToggle, { useWorkspacePanel } from '../WorkspacePanelToggle'
 import { toLocalCalendarDate } from '../../lib/lead-filters'
 
 type Company = { id: string; name: string; count: number }
@@ -16,6 +17,7 @@ type AllocatedLead = { practiceCode: string; name: string; state: string | null;
 export default function CompanyAllocationsClient({ initialData }: {
   initialData?: { ok: boolean; message?: string; companies?: Company[] }
 } = {}) {
+  const [panelOpen, togglePanel] = useWorkspacePanel()
   const [companies, setCompanies] = useState<Company[]>(initialData?.ok ? (initialData.companies ?? []) : [])
   const [companyId, setCompanyId] = useState('')
   const [leads, setLeads] = useState<AllocatedLead[]>([])
@@ -53,8 +55,9 @@ export default function CompanyAllocationsClient({ initialData }: {
 
   const selectedCompany = companies.find((company) => company.id === companyId)
   return (
-    <div className="assigned-allocation-layout">
-      <aside className="assigned-company-nav" aria-label="Allocated lead companies">
+    <div className={'assigned-allocation-layout' + (panelOpen ? '' : ' panel-collapsed')}>
+      <aside id="assigned-company-panel" className="assigned-company-nav" aria-label="Allocated lead companies">
+        <WorkspacePanelToggle open={panelOpen} onToggle={togglePanel} panelId="assigned-company-panel" label="Assigned Leads" />
         <div className="assigned-company-nav-head">
           <span>Company queues</span>
           <h2>Assigned Leads</h2>

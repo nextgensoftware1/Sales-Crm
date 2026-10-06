@@ -9,6 +9,7 @@ import { assignLeadsToAgent } from './assign-actions'
 import { unpackRows, type PackedRows } from '../lib/lead-pack'
 import { queryLeadPage } from './leads-page-actions'
 import { formatCalendarDate } from '../lib/assigned-dates'
+import WorkspacePanelToggle, { useWorkspacePanel } from './WorkspacePanelToggle'
 import {
   SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
@@ -88,6 +89,7 @@ const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
 export default function PracticesTable({ practices: practicesProp, packedPractices, serverPaging, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
+  const [panelOpen, togglePanel] = useWorkspacePanel()
   const practices = useMemo<Practice[]>(
     () => (serverPaging ? [] : packedPractices ? unpackRows<Practice>(packedPractices) : practicesProp ?? []),
     [serverPaging, packedPractices, practicesProp],
@@ -488,8 +490,9 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
 
   return (
     <div className="leads-engine" style={{ color: C.text, fontFamily: 'var(--font-sans), ui-sans-serif, system-ui, sans-serif' }}>
-      <div className="lead-engine-workspace">
-        <aside className="lead-engine-subnav" aria-label="Lead views and timezone filters">
+      <div className={'lead-engine-workspace' + (panelOpen ? '' : ' panel-collapsed')}>
+        <aside id="lead-engine-panel" className="lead-engine-subnav" aria-label="Lead views and timezone filters">
+          <WorkspacePanelToggle open={panelOpen} onToggle={togglePanel} panelId="lead-engine-panel" label="Leads" />
           <div className="lead-engine-subnav-head">
             <span className="lead-engine-subnav-kicker">Workspace</span>
             <h2>Leads</h2>

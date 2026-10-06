@@ -6,56 +6,91 @@ import type { WorksheetReportRow } from '../worksheet-reports-actions'
 
 const PAGE_SIZES = [8, 15, 20, 100] as const
 
-// Same date-matching approach used elsewhere in this project (see
-// PracticesTable.tsx's Credentialing date filters) — a direct string
-// comparison on the date portion, not a Date-object parse. These fields
-// come back as plain date/timestamp strings, and parsing them through
-// `new Date()` then reading local getFullYear/getMonth/getDate back out
-// applies the browser's timezone to a value that may have none, which can
-// silently shift the matched day by one. Comparing the strings directly
-// avoids that entirely.
-function sameCalendarDate(value: string | null | undefined, ymd: string): boolean {
-  if (!value) return false
-  return value.trim().slice(0, 10) === ymd
+// "Last Updated" range filter: From (date + time) → To (date + time).
+// The pickers give local date-times ("2026-10-05T20:00"), which the browser
+// reads in the viewer's own time zone — the same time the table shows — so a
+// range can span days (e.g. Oct 5, 8:00 PM → Oct 6, 2:00 AM).
+function localPickerTime(value: string): number | null {
+  if (!value) return null
+  const t = new Date(value).getTime()
+  return Number.isNaN(t) ? null : t
 }
 
-function ImportedSheet({ rows }: { rows: WorksheetReportRow[] }) {
-  const imported = rows.filter(row => row.importData)
-  const columns = useMemo(() => Array.from(new Set(imported.flatMap(row => Object.keys(row.importData ?? {})))), [imported])
+function withinRange(value: string | null | undefined, from: string, to: string): boolean {
+  if (!from && !to) return true
+  if (!value) return false
+  const at = new Date(value).getTime()
+  if (Number.isNaN(at)) return false
+  const start = localPickerTime(from)
+  const end = localPickerTime(to)
+  if (start !== null && at < start) return false
+  // "To" includes that whole minute (e.g. 2:00 AM includes 2:00:59 AM).
+  if (end !== null && at > end + 59_999) return false
+  return true
+}
+
+// Spreadsheet view: EVERY worksheet that matches the filters above (the same
+// rows the Report view shows). Each row has the standard worksheet columns;
+// worksheets that came from an uploaded spreadsheet also show their original
+// uploaded columns and open the imported-worksheet editor when clicked.
+// (Previously only imported worksheets were listed, so a filter that matched
+// only app-saved worksheets made this view look empty.)
+function WorksheetSheet({ rows }: { rows: WorksheetReportRow[] }) {
+  const importedCount = useMemo(() => rows.filter(row => row.importData).length, [rows])
+  const columns = useMemo(() => Array.from(new Set(rows.flatMap(row => Object.keys(row.importData ?? {})))), [rows])
   const [query, setQuery] = useState('')
   const [pageSize, setPageSize] = useState<number>(15)
   const [page, setPage] = useState(1)
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return imported
-    return imported.filter(row => [row.companyName, row.filledBy, row.practiceName, row.practiceCode,
-      ...Object.values(row.importData ?? {})].some(value => String(value ?? '').toLowerCase().includes(needle)))
-  }, [imported, query])
+    if (!needle) return rows
+    return rows.filter(row => [row.companyName, row.filledBy, row.providerName, row.practiceName, row.practiceCode,
+      row.state, row.specialty, row.disposition, ...Object.values(row.importData ?? {})]
+      .some(value => String(value ?? '').toLowerCase().includes(needle)))
+  }, [rows, query])
   const totalPages = Math.max(1, Math.ceil(visible.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageStart = (safePage - 1) * pageSize
   const pageRows = visible.slice(pageStart, pageStart + pageSize)
 
-  if (!imported.length) return <div className="sheet-empty">No imported worksheet rows are available.</div>
+  if (!rows.length) return <div className="sheet-empty">No worksheets match these filters.</div>
+  // Imported rows open their editor; app-saved rows are shown as plain text,
+  // exactly as in the Report view.
+  const cell = (row: WorksheetReportRow, content: React.ReactNode) => row.importData
+    ? <Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{content}</Link>
+    : <span className="sheet-cell-link">{content}</span>
   return <div className="worksheet-sheet">
     <div className="sheet-toolbar">
-      <div><strong>Imported worksheet data</strong><span>{visible.length} of {imported.length} rows · {columns.length} source columns</span></div>
+      <div><strong>Worksheet data</strong><span>{visible.length} of {rows.length} rows · {importedCount} imported · {columns.length} source columns</span></div>
       <div className="sheet-toolbar-controls">
         <label className="sheet-page-size"><span>Rows</span><select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
         <label className="sheet-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} placeholder="Search every column…" /></label>
       </div>
     </div>
-    <div className="sheet-open-hint">Select any cell to open the complete worksheet and edit its uploaded fields.</div>
+    {importedCount > 0 && <div className="sheet-open-hint">Select any cell of an imported row to open the complete worksheet and edit its uploaded fields.</div>}
     <div className="sheet-grid-wrap">
       <table className="sheet-grid">
-        <thead><tr><th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <thead><tr>
+          <th className="sheet-row-number">#</th><th>Company</th><th>Worksheet agent</th>
+          <th>Practice</th><th>State</th><th>Specialty</th><th>Disposition</th><th>Callback</th><th>Last Updated</th>
+          {columns.map(column => <th key={column}>{column}</th>)}
+        </tr></thead>
         <tbody>{pageRows.map((row, index) => <tr key={`${row.companyName}:${row.practiceId}`}>
           <th className="sheet-row-number">{pageStart + index + 1}</th>
-          <td className="sheet-frozen"><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}><strong>{row.companyName ?? '—'}</strong></Link></td>
-          <td><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{row.filledBy ?? '—'}</Link></td>
+          <td className="sheet-frozen">{cell(row, <strong>{row.companyName ?? '—'}</strong>)}</td>
+          <td>{cell(row, row.filledBy ?? '—')}</td>
+          <td>{cell(row, <>
+            {row.importData ? (row.providerName ?? row.practiceName) : row.practiceName}
+            {row.importData && <span className="badge badge-blue" style={{ marginLeft: 6, fontSize: 9.5 }}>Imported</span>}
+          </>)}</td>
+          <td>{cell(row, row.state ?? '—')}</td>
+          <td>{cell(row, row.specialty ?? '—')}</td>
+          <td>{cell(row, row.disposition ?? '—')}</td>
+          <td>{cell(row, row.callbackAt ? `${fmtDate(row.callbackAt)}${row.timezone ? ` ${row.timezone}` : ''}` : '—')}</td>
+          <td>{cell(row, fmtDate(row.lastUpdatedAt))}</td>
           {columns.map(column => {
             const value = row.importData?.[column]
-            return <td key={column}><Link prefetch={false} className="sheet-cell-link" href={`/worksheet-reports/${row.tenantId}/${row.practiceId}`}>{value || '—'}</Link></td>
+            return <td key={column}>{cell(row, value || '—')}</td>
           })}
         </tr>)}</tbody>
       </table>
@@ -258,7 +293,9 @@ export default function WorksheetReportsClient({
   const showFilledBy = scope !== 'personal'
   const [dispositionFilter, setDispositionFilter] = useState('')
   const [filledByFilter, setFilledByFilter] = useState('')
-  const [lastUpdateFilter, setLastUpdateFilter] = useState('') // YYYY-MM-DD
+  const [updatedFrom, setUpdatedFrom] = useState('') // YYYY-MM-DDTHH:MM (local)
+  const [updatedTo, setUpdatedTo] = useState('')     // YYYY-MM-DDTHH:MM (local)
+  const rangeReversed = !!updatedFrom && !!updatedTo && updatedFrom > updatedTo
 
   const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
@@ -266,12 +303,12 @@ export default function WorksheetReportsClient({
   const filteredRows = useMemo(() => rows.filter((r) => {
     if (dispositionFilter && r.disposition !== dispositionFilter) return false
     if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
-    if (lastUpdateFilter && !sameCalendarDate(r.lastUpdatedAt, lastUpdateFilter)) return false
+    if (!withinRange(r.lastUpdatedAt, updatedFrom, updatedTo)) return false
     return true
-  }), [rows, dispositionFilter, filledByFilter, showFilledBy, lastUpdateFilter])
+  }), [rows, dispositionFilter, filledByFilter, showFilledBy, updatedFrom, updatedTo])
 
-  const resetFilters = () => { setDispositionFilter(''); setFilledByFilter(''); setLastUpdateFilter('') }
-  const activeFilterCount = [dispositionFilter, showFilledBy ? filledByFilter : '', lastUpdateFilter].filter(Boolean).length
+  const resetFilters = () => { setDispositionFilter(''); setFilledByFilter(''); setUpdatedFrom(''); setUpdatedTo('') }
+  const activeFilterCount = [dispositionFilter, showFilledBy ? filledByFilter : '', updatedFrom || updatedTo].filter(Boolean).length
 
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
@@ -336,15 +373,20 @@ export default function WorksheetReportsClient({
               </select>
             </label>
           )}
-          <label className="filter-control"><span>Last Updated</span>
-            <input type="date" className="input" value={lastUpdateFilter} onChange={(e) => setLastUpdateFilter(e.target.value)} />
-          </label>
+          <div className="filter-control"><span>Last Updated (from – to)</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <input type="datetime-local" className="input" aria-label="Last updated from date and time" value={updatedFrom} max={updatedTo || undefined} onChange={(e) => setUpdatedFrom(e.target.value)} />
+              <span className="subtle">to</span>
+              <input type="datetime-local" className="input" aria-label="Last updated to date and time" value={updatedTo} min={updatedFrom || undefined} onChange={(e) => setUpdatedTo(e.target.value)} />
+            </div>
+            {rangeReversed && <small role="alert" style={{ color: 'var(--danger)', fontSize: 11 }}>“From” is after “To” — no worksheets can match.</small>}
+          </div>
           {activeFilterCount > 0 && <button type="button" className="btn" onClick={resetFilters}>Clear filters ({activeFilterCount})</button>}
           <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }}>{filteredRows.length} of {rows.length} worksheets match</span>
         </div>
       )}
 
-      {view === 'sheet' ? <ImportedSheet rows={filteredRows} /> : rows.length === 0 ? (
+      {view === 'sheet' ? <WorksheetSheet key={`${dispositionFilter}|${filledByFilter}|${updatedFrom}|${updatedTo}`} rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : filteredRows.length === 0 ? (
         <p className="subtle">No worksheets match these filters. <button type="button" className="report-practice-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={resetFilters}>Clear filters</button> to see all {rows.length}.</p>

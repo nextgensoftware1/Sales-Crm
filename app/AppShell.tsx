@@ -7,6 +7,7 @@ import BrandLogo from './BrandLogo'
 import ThemeToggle from './ThemeToggle'
 import SignOutButton from './SignOutButton'
 import NotificationBell from './NotificationBell'
+import WorkspacePanelToggle, { useWorkspacePanel } from './WorkspacePanelToggle'
 import type { Reminder } from './reminders-actions'
 import {
   Activity, AlertTriangle, BadgeDollarSign, BarChart3, Building2, CalendarClock,
@@ -176,6 +177,7 @@ export default function AppShell({
   const adminItems = items.filter((n) => n.admin && (n.href !== '/worksheet-reports' || hasManagementAccess))
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
+  const [panelOpen, togglePanel] = useWorkspacePanel()
   const pathname = usePathname()
   const rawContextNav = CONTEXT_NAV[active]
   const contextNav = rawContextNav ? {
@@ -312,8 +314,9 @@ export default function AppShell({
         </header>
         <main className={'content' + (contextNav ? ' has-context-nav' : '')}>
           {contextNav ? (
-            <div className="page-context-workspace">
-              <aside className="page-context-nav" aria-label={`${contextNav.title} navigation`}>
+            <div className={'page-context-workspace' + (panelOpen ? '' : ' panel-collapsed')}>
+              <aside id="page-context-panel" className="page-context-nav" aria-label={`${contextNav.title} navigation`}>
+                <WorkspacePanelToggle open={panelOpen} onToggle={togglePanel} panelId="page-context-panel" label={contextNav.title} />
                 <div className="page-context-head">
                   <span>{contextNav.kicker}</span>
                   <h2>{contextNav.title}</h2>
