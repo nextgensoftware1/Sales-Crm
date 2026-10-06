@@ -3,6 +3,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import WorksheetReportsClient from './WorksheetReportsClient'
+import WorksheetSearchBox from './WorksheetSearchBox'
 import { getWorksheetReports } from '../worksheet-reports-actions'
 import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
 import WorksheetCompanyFilter, { type WorksheetCompanyOption } from './WorksheetCompanyFilter'
@@ -78,7 +79,7 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
       showAdmin={isSuperAdmin}
       canManageUsers={canManageUsers}
       headerRight={isSuperAdmin ? <UploadWorksheetCsvButton /> : null}
-      contextExtra={worksheetReports.ok ? <WorksheetCompanyFilter companies={companies} selected={selectedCompany} showAll={isSuperAdmin} /> : null}
+      contextExtra={worksheetReports.ok ? <><WorksheetSearchBox /><WorksheetCompanyFilter companies={companies} selected={selectedCompany} showAll={isSuperAdmin} /></> : null}
       contextItemsHidden
       contextHelpText="Choose a company to filter both Report View and Spreadsheet View. Row-count controls are available inside each view."
     >

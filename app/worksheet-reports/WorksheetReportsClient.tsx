@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { createContext, Fragment, useContext, useMemo, useState } from 'react'
 import { Eye } from 'lucide-react'
+import { useWorksheetSearch } from '../../lib/worksheet-search-store'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import WorksheetDetailModal from './WorksheetDetailModal'
 
@@ -33,6 +34,28 @@ function withinRange(value: string | null | undefined, from: string, to: string)
   // "To" includes that whole minute (e.g. 2:00 AM includes 2:00:59 AM).
   if (end !== null && at > end + 59_999) return false
   return true
+}
+
+// Search box: matches anything on the worksheet — name, NPI / code, phone
+// numbers in any format, email, contact person, call details, state,
+// specialty, company, agent, closer, disposition and imported values.
+// Runs in the browser on rows already loaded, so it's instant.
+function worksheetMatchesSearch(r: WorksheetReportRow, search: string): boolean {
+  const needle = search.trim().toLowerCase()
+  if (!needle) return true
+  const fields = [
+    r.providerName, r.practiceName, r.practiceCode, r.state, r.specialty, r.companyName, r.filledBy,
+    r.assignedCloser, r.disposition, r.timezone, r.email, r.concernedPerson, r.callDetails,
+    r.additionalPhone, r.directLine, r.lastUpdatedBy, ...Object.values(r.importData ?? {}),
+  ]
+  if (fields.some((value) => value != null && String(value).toLowerCase().includes(needle))) return true
+  // Phone numbers: compare digits only, so "(555) 123-4567", "555.123.4567"
+  // and "5551234567" all match each other.
+  const digits = needle.replace(/\D/g, '')
+  if (digits.length >= 4 && !/[a-z@]/.test(needle)) {
+    return fields.some((value) => value != null && String(value).replace(/\D/g, '').includes(digits))
+  }
+  return false
 }
 
 // Spreadsheet view: EVERY worksheet that matches the filters above (the same
@@ -306,6 +329,8 @@ export default function WorksheetReportsClient({
   // view every row is already theirs, so the filter is hidden there
   // rather than shown with one meaningless option.
   const showFilledBy = scope !== 'personal'
+  // The search box is in the left Worksheets panel (WorksheetSearchBox).
+  const [searchText, setSearchText] = useWorksheetSearch()
   const [dispositionFilter, setDispositionFilter] = useState('')
   const [filledByFilter, setFilledByFilter] = useState('')
   const [updatedFrom, setUpdatedFrom] = useState('') // YYYY-MM-DDTHH:MM (local)
@@ -316,14 +341,15 @@ export default function WorksheetReportsClient({
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
   const filteredRows = useMemo(() => rows.filter((r) => {
+    if (searchText && !worksheetMatchesSearch(r, searchText)) return false
     if (dispositionFilter && r.disposition !== dispositionFilter) return false
     if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
     if (!withinRange(r.lastUpdatedAt, updatedFrom, updatedTo)) return false
     return true
-  }), [rows, dispositionFilter, filledByFilter, showFilledBy, updatedFrom, updatedTo])
+  }), [rows, searchText, dispositionFilter, filledByFilter, showFilledBy, updatedFrom, updatedTo])
 
-  const resetFilters = () => { setDispositionFilter(''); setFilledByFilter(''); setUpdatedFrom(''); setUpdatedTo('') }
-  const activeFilterCount = [dispositionFilter, showFilledBy ? filledByFilter : '', updatedFrom || updatedTo].filter(Boolean).length
+  const resetFilters = () => { setSearchText(''); setDispositionFilter(''); setFilledByFilter(''); setUpdatedFrom(''); setUpdatedTo('') }
+  const activeFilterCount = [searchText.trim(), dispositionFilter, showFilledBy ? filledByFilter : '', updatedFrom || updatedTo].filter(Boolean).length
 
   const toggleRow = (id: string) => {
     setExpanded((prev) => {
@@ -402,7 +428,7 @@ export default function WorksheetReportsClient({
         </div>
       )}
 
-      {view === 'sheet' ? <WorksheetSheet key={`${dispositionFilter}|${filledByFilter}|${updatedFrom}|${updatedTo}`} rows={filteredRows} /> : rows.length === 0 ? (
+      {view === 'sheet' ? <WorksheetSheet key={`${searchText}|${dispositionFilter}|${filledByFilter}|${updatedFrom}|${updatedTo}`} rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : filteredRows.length === 0 ? (
         <p className="subtle">No worksheets match these filters. <button type="button" className="report-practice-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={resetFilters}>Clear filters</button> to see all {rows.length}.</p>

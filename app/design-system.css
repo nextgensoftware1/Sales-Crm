@@ -894,3 +894,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .wsm-foot-actions { justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) { .wsm-backdrop, .wsm-dialog { animation: none; } .wsm-body { scroll-behavior: auto; } }
+/* ---- Worksheet Reports: search box in the left Worksheets panel ---- */
+.page-context-nav .worksheet-panel-search { margin: 12px 12px 4px; }
+.worksheet-panel-search input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
+/* The whole box shows the focus ring (:focus-within), so the input inside it
+   doesn't need a second outline (applies to the Leads panel search too). */
+.lead-engine-subnav-search input:focus-visible { outline: none; }
+.lead-engine-subnav-search input[type="search"] { -webkit-appearance: none; appearance: none; }
