@@ -180,13 +180,33 @@ export type LeadContext = {
   prioritySet: Set<string>
   newLeadSet: Set<string>
   workedLeadSet: Set<string>
+  /**
+   * Extra search matches found on the server (phone numbers, email, city,
+   * ZIP, contact person — details that are not part of the list rows).
+   * A lead also matches the search box when its code is in this set.
+   */
+  searchExtraCodes?: Set<string>
+}
+
+/**
+ * Search box match on everything a lead row carries: name, NPI / lead code,
+ * state, specialty, org name, status, assigned company and assigned person.
+ */
+export function leadMatchesSearch(p: LeadRow, search: string): boolean {
+  const needle = search.trim().toLowerCase()
+  if (!needle) return true
+  const haystack = [
+    p.name, p.practiceCode, p.state, p.specialty, p.orgName, p.status, p.entityType,
+    p.allocatedTo, p.assignedAwayTo?.name, ...(p.allocatedCompanies ?? []).map((c) => c.name),
+  ]
+  return haystack.some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))
 }
 
 /** The Lead Pool filter + priority sort (unchanged from PracticesTable). */
 export function filterLeads<T extends LeadRow>(
   practices: T[],
   f: LeadFilters,
-  { isSuperAdmin, prioritySet, newLeadSet, workedLeadSet }: LeadContext,
+  { isSuperAdmin, prioritySet, newLeadSet, workedLeadSet, searchExtraCodes }: LeadContext,
   toCalendarDate: (value: string | null | undefined) => string = toLocalCalendarDate,
 ): T[] {
   const { search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, catTab, sourceTab, poolTab,
@@ -201,7 +221,7 @@ export function filterLeads<T extends LeadRow>(
       if (companyFilter && companyFilter !== '__unassigned__'
         && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
     }
-    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
+    if (search && !leadMatchesSearch(p, search) && !searchExtraCodes?.has(p.practiceCode)) return false
     if (stateFilter && p.state !== stateFilter) return false
     if (zoneFilter) {
       const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'

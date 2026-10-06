@@ -503,7 +503,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <Search size={15} strokeWidth={2} aria-hidden="true" />
             <input
               aria-label="Search leads from sidebar"
-              placeholder="Search leads…"
+              placeholder="Name, NPI, phone, city…" title="Search by provider name, NPI / lead code, phone number, email, city, ZIP, specialty, state, status or contact person"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />

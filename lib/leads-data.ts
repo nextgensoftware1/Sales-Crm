@@ -369,6 +369,7 @@ export async function loadLeadsData() {
   return {
     kind: 'ok' as const,
     authUserId: user.id as string,
+    tenantId: (myTenantId ?? null) as string | null,
     currentUser, roleKey, isSuperAdmin, canUpload, canAssign, showTransfers, canManageUsers,
     myUserId: myUserId as string | undefined,
     practices,

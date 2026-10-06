@@ -84,7 +84,7 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
     >
       <div className="card">
         {visibleReports.ok ? (
-          <WorksheetReportsClient rows={visibleReports.rows} scope={visibleReports.scope} companyName={selectedCompanyName ?? visibleReports.companyName} truncated={visibleReports.truncated} />
+          <WorksheetReportsClient rows={visibleReports.rows} scope={visibleReports.scope} companyName={selectedCompanyName ?? visibleReports.companyName} truncated={visibleReports.truncated} viewerTenantId={me?.tenant_id ?? null} />
         ) : (
           <p className="subtle">{visibleReports.message}</p>
         )}

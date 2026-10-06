@@ -793,7 +793,12 @@ function referenceFilter(practices, f, { isSuperAdmin, prioritySet, newLeadSet, 
       if (companyFilter === '__unassigned__' && (p.allocatedCompanies?.length ?? 0) > 0) return false
       if (companyFilter && companyFilter !== '__unassigned__' && !p.allocatedCompanies?.some(company => company.id === companyFilter)) return false
     }
-    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.practiceCode.toLowerCase().includes(search.toLowerCase())) return false
+    // Search box (broadened on purpose): name, code, state, specialty, org, status, type, assigned company/person.
+    if (search) {
+      const needle = search.trim().toLowerCase()
+      const hay = [p.name, p.practiceCode, p.state, p.specialty, p.orgName, p.status, p.entityType, p.allocatedTo, p.assignedAwayTo?.name, ...(p.allocatedCompanies ?? []).map(c => c.name)]
+      if (needle && !hay.some(v => typeof v === 'string' && v.toLowerCase().includes(needle))) return false
+    }
     if (stateFilter && p.state !== stateFilter) return false
     if (zoneFilter) { const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'; if (practiceZone !== zoneFilter) return false }
     if (specialtyFilter && p.specialty !== specialtyFilter) return false
@@ -841,7 +846,7 @@ function randomLeads(count, seed = 7) {
 function randomFilters(rnd, pick) {
   const maybe = (v, p = .3) => (rnd() < p ? v : undefined)
   return {
-    search: maybe(pick(['alpha', 'PR-10', 'é', 'zzz', 'CARE'])) ?? '', stateFilter: maybe(pick(['NY', 'TX', 'ZZ'])) ?? '',
+    search: maybe(pick(['alpha', 'PR-10', 'é', 'zzz', 'CARE', 'cardio', 'ny', 'qualified', 'acme', 'ann', 'npi-2', '  '])) ?? '', stateFilter: maybe(pick(['NY', 'TX', 'ZZ'])) ?? '',
     zoneFilter: maybe(pick(['EST', 'CST', 'PST', 'Other'])) ?? '', specialtyFilter: maybe(pick(['Cardiology', 'Family'])) ?? '',
     dispositionFilter: maybe(pick(['Qualified', 'Follow Up'])) ?? '', activeSignals: rnd() < .4 ? ['ccm', 'mips', 'rcmFit', 'pcm'].filter(() => rnd() < .4) : [],
     catTab: pick(['All Categories', 'All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing']), sourceTab: pick(['All', 'All', 'Allocated', 'Uploaded']),
@@ -1146,4 +1151,76 @@ test('assigned-on filter picks exactly the leads assigned that day, in the viewe
   }
   assert.match(formatCalendarDate('2026-10-06'), /2026/)
   assert.equal(formatCalendarDate('bad'), 'bad')
+})
+
+// ---------------------------------------------------------------------------
+// Leads search: phone / email / city / ZIP / contact person (deep search)
+// ---------------------------------------------------------------------------
+test('search patterns: any phone format, safe text', () => {
+  const { phonePattern, textPattern } = loadTs('lib/lead-deep-search.ts')
+  for (const typed of ['5551234567', '555-123-4567', '(555) 123 4567', '+1 555.123.4567'])
+    assert.ok(phonePattern(typed).includes('%5%5%5%1%2%3%4%5%6%7%'), typed)
+  assert.equal(phonePattern('555'), null)            // too short to be a phone search
+  assert.equal(phonePattern('suite 12345'), null)    // has letters: not a phone search
+  assert.equal(textPattern('ab'), null)
+  assert.equal(textPattern('Boston'), '%Boston%')
+  assert.equal(textPattern('50%_off'), '%50\\%\\_off%')
+  assert.equal(textPattern('12345'), null)           // digits-only goes to phone/ZIP lookups
+})
+
+test('deep search: phone/email/city/ZIP lookups, own-company worksheets, never adds unseen leads', async () => {
+  const calls = []
+  const rowsFor = { 'master_practices.phone': [{ practice_code: 'PR-1' }], 'practice_providers.providers.mailing_phone': [{ master_practices: { practice_code: 'PR-2' } }],
+    'lead_worksheets.direct_line': [{ master_practices: { practice_code: 'PR-OTHER' } }], 'master_practices.city': [{ practice_code: 'PR-3' }],
+    'lead_worksheets.email': [{ master_practices: { practice_code: 'PR-4' } }] }
+  const db = { from(table) {
+    const q = { table, filters: {}, ilikeCol: null, pattern: null }
+    const api = { select() { return api }, eq(k, v) { q.filters[k] = v; return api }, ilike(col, pat) { q.ilikeCol = col; q.pattern = pat; return api },
+      limit() { calls.push(q); const key = `${table}.${q.ilikeCol}`; if (key === 'master_practices.postal') return Promise.resolve({ data: null, error: { message: 'column "postal" does not exist' } })
+        return Promise.resolve({ data: rowsFor[key] ?? [], error: null }) } }
+    return api } }
+  const { deepSearchLeadCodes } = loadTs('lib/lead-deep-search.ts')
+  const phoneHits = await deepSearchLeadCodes(db, '(555) 123-4567', { tenantId: 'T1', isSuperAdmin: false })
+  assert.deepEqual([...phoneHits].sort(), ['PR-1', 'PR-2', 'PR-OTHER'])
+  const cols = calls.map(c => `${c.table}.${c.ilikeCol}`).sort()
+  assert.deepEqual(cols, ['lead_worksheets.additional_phone', 'lead_worksheets.direct_line', 'master_practices.phone', 'master_practices.postal', 'practice_providers.providers.mailing_phone', 'practice_providers.providers.phone'])
+  for (const c of calls.filter(c => c.table === 'lead_worksheets')) assert.equal(c.filters.tenant_id, 'T1')   // only my company's worksheets
+  assert.ok(calls.every(c => c.ilikeCol === 'postal' || c.pattern === '%5%5%5%1%2%3%4%5%6%7%'))
+  calls.length = 0
+  const textHits = await deepSearchLeadCodes(db, 'boston', { tenantId: null, isSuperAdmin: true })
+  assert.deepEqual([...textHits].sort(), ['PR-3', 'PR-4'])
+  assert.ok(calls.filter(c => c.table === 'lead_worksheets').every(c => !('tenant_id' in c.filters)))   // super admin: all companies
+  // Results only widen the existing list: a code that is not in the list never appears.
+  const lf = loadTs('lib/lead-filters.ts')
+  const leads = [{ practiceCode: 'PR-1', name: 'Alpha' }, { practiceCode: 'PR-2', name: 'Beta' }, { practiceCode: 'PR-9', name: 'Gamma' }]
+  const shown = lf.filterLeads(leads, { ...lf.DEFAULT_LEAD_FILTERS, search: '(555) 123-4567' },
+    { isSuperAdmin: false, prioritySet: new Set(), newLeadSet: new Set(), workedLeadSet: new Set(), searchExtraCodes: phoneHits })
+  assert.deepEqual(shown.map(p => p.practiceCode), ['PR-1', 'PR-2'])
+})
+
+test('leads page action: phone search finds leads, is cached across pages, and is skipped for short text', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'
+  try {
+    const { me, tables } = homeFixture('super_admin')
+    const deepCalls = []
+    const mocks = {
+      '../lib/supabase-server': { createSupabaseServer: async () => database(tables, []),
+        getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }), getCurrentProfile: async () => ({ data: me }) },
+      'next/navigation': { redirect: () => { throw Error('redirect') } },
+    }
+    const snapshots = loadTs('lib/lead-snapshots.ts', mocks)
+    const { loadLeadsData } = loadTs('lib/leads-data.ts', mocks)
+    const data = await loadLeadsData()
+    const target = data.practices[data.practices.length - 1].practiceCode
+    const { queryLeadPage } = loadTs('app/leads-page-actions.ts', { ...mocks, '../lib/lead-snapshots': snapshots,
+      '../lib/lead-deep-search': { deepSearchLeadCodes: async (_db, term) => { deepCalls.push(term); return new Set(term.includes('555') ? [target, 'PR-NOT-IN-MY-LIST'] : []) } } })
+    const first = await queryLeadPage({ snapshotId: 'x', filters: { search: '555-123-4567' }, page: 1, pageSize: 1, wantCodes: true })
+    assert.equal(first.ok, true); assert.deepEqual(first.codes, [target])
+    const again = await queryLeadPage({ snapshotId: first.snapshotId, filters: { search: '555-123-4567' }, page: 1, pageSize: 1, wantCodes: false })
+    assert.deepEqual(again.rows.map(r => r.practiceCode), [target]); assert.deepEqual(deepCalls, ['555-123-4567'])   // cached
+    await queryLeadPage({ snapshotId: first.snapshotId, filters: { search: 'ab' }, page: 1, pageSize: 1, wantCodes: true })
+    assert.deepEqual(deepCalls, ['555-123-4567'])   // too short: no deep lookup
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'
+  }
 })

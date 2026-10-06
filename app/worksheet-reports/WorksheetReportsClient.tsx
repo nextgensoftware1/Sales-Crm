@@ -1,8 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { Fragment, useMemo, useState } from 'react'
+import { createContext, Fragment, useContext, useMemo, useState } from 'react'
+import { Eye } from 'lucide-react'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
+import WorksheetDetailModal from './WorksheetDetailModal'
+
+// Opens the worksheet details popup; provided by WorksheetReportsClient so
+// every table (including each company group) can use it.
+const ViewWorksheetContext = createContext<((row: WorksheetReportRow) => void) | null>(null)
 
 const PAGE_SIZES = [8, 15, 20, 100] as const
 
@@ -127,6 +133,7 @@ function ReportTable({
   const pageStart = (safePage - 1) * pageSize
   const pageRows = rows.slice(pageStart, pageStart + pageSize)
   const colSpan = showCompanyColumn ? 8 : 7
+  const viewWorksheet = useContext(ViewWorksheetContext)
 
   return (
     <>
@@ -155,13 +162,18 @@ function ReportTable({
               return (
                 <Fragment key={r.practiceId}>
                   <tr>
-                    <td style={{ width: 20 }}>
+                    <td style={{ width: 20, whiteSpace: 'nowrap' }}>
                       <button type="button" className="report-row-toggle" aria-expanded={isOpen} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${r.practiceName}`} onClick={() => onToggleRow(r.practiceId)}>
                         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
                           style={{ transition: 'transform .15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>
                           <path d="m9 18 6-6-6-6" />
                         </svg>
                       </button>
+                      {viewWorksheet && (
+                        <button type="button" className="report-row-view" title="View details" aria-label={`View details for ${r.providerName ?? r.practiceName}`} onClick={() => viewWorksheet(r)}>
+                          <Eye size={15} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                      )}
                     </td>
                     <td>
                       <strong>{r.importData
@@ -276,13 +288,16 @@ function CompanySection({
 }
 
 export default function WorksheetReportsClient({
-  rows, scope, companyName, truncated,
+  rows, scope, companyName, truncated, viewerTenantId = null,
 }: {
   rows: WorksheetReportRow[]
   scope: 'all' | 'company' | 'personal'
   companyName: string | null
   truncated: boolean
+  /** The signed-in user's company: only its worksheets can be edited here. */
+  viewerTenantId?: string | null
 }) {
+  const [viewing, setViewing] = useState<WorksheetReportRow | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
@@ -335,6 +350,7 @@ export default function WorksheetReportsClient({
   }, [filteredRows, scope])
 
   return (
+    <ViewWorksheetContext.Provider value={setViewing}>
     <div>
       <div className="report-commandbar">
         <div><h2 className="h-section" style={{ margin: 0 }}>Worksheet Reports</h2><span>{rows.length}{truncated ? '+' : ''} saved worksheets</span></div>
@@ -405,5 +421,15 @@ export default function WorksheetReportsClient({
         <ReportTable rows={filteredRows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} />
       )}
     </div>
+      {viewing && (
+        <WorksheetDetailModal
+          key={viewing.practiceId + viewing.tenantId}
+          row={viewing}
+          canEdit={!!viewerTenantId && viewing.tenantId === viewerTenantId}
+          readOnlyReason={`View only — this worksheet belongs to ${viewing.companyName ?? 'another company'}. Worksheets can only be edited by their own company.`}
+          onClose={() => setViewing(null)}
+        />
+      )}
+    </ViewWorksheetContext.Provider>
   )
 }

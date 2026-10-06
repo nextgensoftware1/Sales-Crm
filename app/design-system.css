@@ -801,3 +801,96 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .panel-collapsed .workspace-panel-toggle { flex-direction: row; justify-content: flex-start; padding: 0 12px; gap: 10px; }
   .workspace-panel-rail-label { writing-mode: horizontal-tb; transform: none; }
 }
+
+/* ---- Worksheet Reports: "view details" eye button + details popup ---- */
+.report-row-view {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: 4px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted);
+  cursor: pointer; vertical-align: middle; transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.report-row-view:hover { color: var(--accent); border-color: rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .08); }
+.report-row-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wsm-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+  padding: 24px; overflow: hidden; overscroll-behavior: contain;
+  background: rgba(5, 20, 33, .52); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  animation: wsm-fade .18s ease-out;
+}
+.wsm-dialog {
+  position: relative; display: flex; flex-direction: column; width: min(780px, 100%);
+  max-height: min(calc(100dvh - 48px), 920px); overflow: hidden;
+  border: 1px solid var(--border); border-radius: 16px; background: var(--surface); color: var(--ink);
+  box-shadow: 0 30px 70px rgba(5, 28, 45, .32), 0 2px 6px rgba(5, 28, 45, .08); outline: none;
+  animation: wsm-pop .22s cubic-bezier(.2, .8, .2, 1);
+}
+.wsm-dialog::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, var(--accent), rgba(var(--accent-rgb), .35)); }
+.wsm-head { display: flex; align-items: flex-start; gap: 14px; flex: none; padding: 22px 22px 16px; border-bottom: 1px solid var(--border); }
+.wsm-avatar {
+  display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none;
+  border-radius: 12px; background: rgba(var(--accent-rgb), .12); color: var(--accent); font-weight: 850; font-size: 15px; letter-spacing: .02em;
+}
+.wsm-head-text { flex: 1; min-width: 0; }
+.wsm-kicker { display: block; margin-bottom: 3px; color: var(--accent); font-size: 9.5px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+.wsm-head h2 { margin: 0; overflow: hidden; color: var(--ink-strong); font: 800 21px/1.2 var(--font-display), Georgia, serif; text-overflow: ellipsis; white-space: nowrap; }
+.wsm-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.wsm-chip { padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 10.5px; font-weight: 700; }
+.wsm-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--muted); cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.wsm-icon-btn:hover { color: var(--danger); border-color: var(--danger); background: rgba(220, 38, 38, .06); }
+.wsm-icon-btn:focus-visible, .wsm-dialog .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Only the body scrolls; header and footer stay put. Soft shadows hint at more content. */
+.wsm-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  padding: 18px 22px 20px; scroll-behavior: smooth; scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 35%, transparent) transparent;
+  background:
+    linear-gradient(var(--surface) 30%, transparent) center top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) center bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(5, 28, 45, .14), transparent) center top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(5, 28, 45, .14), transparent) center bottom / 100% 10px no-repeat scroll;
+  background-color: var(--surface);
+}
+.wsm-body::-webkit-scrollbar { width: 8px; }
+.wsm-body::-webkit-scrollbar-thumb { border: 2px solid var(--surface); border-radius: 999px; background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.wsm-section { padding: 14px 16px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.wsm-section + .wsm-section { margin-top: 14px; }
+.wsm-section h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 12px; color: var(--muted-2); font-size: 10px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; }
+.wsm-section h3 svg { color: var(--accent); }
+.wsm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.wsm-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.wsm-field > span { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.wsm-field > div { color: var(--ink-strong); font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.wsm-field .input { width: 100%; min-height: 38px; }
+.wsm-field .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15); outline: none; }
+.wsm-field textarea.input { resize: vertical; min-height: 110px; padding: 10px 12px; font: inherit; line-height: 1.5; }
+.wsm-wide { grid-column: 1 / -1; }
+.wsm-notes { margin: 0; padding: 11px 13px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface-2); white-space: pre-wrap; line-height: 1.55; }
+.wsm-error { color: var(--danger); font-size: 11px; }
+.wsm-field .input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, .12); }
+.wsm-ok, .wsm-error-box { margin: 0 0 14px; padding: 10px 13px; border-radius: 10px; font-size: 12.5px; font-weight: 600; }
+.wsm-ok { border: 1px solid rgba(var(--accent-rgb), .3); background: rgba(var(--accent-rgb), .1); color: var(--ok, var(--accent)); }
+.wsm-error-box { border: 1px solid rgba(220, 38, 38, .3); background: rgba(220, 38, 38, .07); color: var(--danger); }
+.wsm-note { margin: 14px 0 0; padding: 9px 12px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 11.5px; }
+.wsm-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; padding: 13px 22px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.wsm-foot-meta { min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.wsm-foot-actions { display: flex; gap: 10px; flex: none; }
+.wsm-dialog.is-editing .wsm-section:last-of-type { border-color: rgba(var(--accent-rgb), .4); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .07); }
+@keyframes wsm-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes wsm-pop { from { opacity: 0; transform: translateY(10px) scale(.98) } to { opacity: 1; transform: none } }
+@keyframes wsm-sheet { from { transform: translateY(100%) } to { transform: none } }
+/* Phones: a bottom sheet that slides up. */
+@media (max-width: 640px) {
+  .wsm-backdrop { align-items: flex-end; padding: 0; }
+  .wsm-dialog { width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; animation: wsm-sheet .26s cubic-bezier(.2, .8, .2, 1); }
+  .wsm-grid { grid-template-columns: 1fr; }
+  .wsm-head { padding: 20px 16px 14px; }
+  .wsm-body { padding: 14px 16px 16px; }
+  .wsm-foot { flex-direction: column-reverse; align-items: stretch; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .wsm-foot-actions { justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) { .wsm-backdrop, .wsm-dialog { animation: none; } .wsm-body { scroll-behavior: auto; } }

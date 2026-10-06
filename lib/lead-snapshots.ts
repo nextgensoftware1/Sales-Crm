@@ -18,10 +18,13 @@ import { compactRow } from './query-utils'
 export type LeadSnapshot = {
   id: string
   userId: string
+  tenantId: string | null
   createdAt: number
   practices: LeadRow[]
   ctx: LeadContext
   overview: LeadOverview
+  /** Deep-search results per search text (phone/email/city/ZIP/contact). */
+  deepSearch: Map<string, Set<string>>
 }
 
 const TTL_MS = 30 * 60 * 1000
@@ -50,10 +53,12 @@ export function saveLeadSnapshot(userId: string, data: LeadsData): LeadSnapshot 
   const snap: LeadSnapshot = {
     id: globalThis.crypto.randomUUID(),
     userId,
+    tenantId: data.tenantId ?? null,
     createdAt: now,
     practices,
     ctx,
     overview: leadOverview(practices, { ...ctx, completedWorksheetCount: data.completedWorksheetCount }),
+    deepSearch: new Map(),
   }
   // Keep only this user's newest snapshots.
   const mine = [...store.values()].filter((s) => s.userId === userId).sort((a, b) => a.createdAt - b.createdAt)
@@ -79,9 +84,10 @@ export function queryLeadSnapshot(
   page: number,
   pageSize: number,
   wantCodes: boolean,
+  searchExtraCodes?: Set<string>,
 ) {
   const size = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize) || 1))
-  const filtered = filterLeads(snap.practices, filters, snap.ctx, calendarDateIn(timeZone))
+  const filtered = filterLeads(snap.practices, filters, { ...snap.ctx, searchExtraCodes }, calendarDateIn(timeZone))
   const totalPages = Math.max(1, Math.ceil(filtered.length / size))
   const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages)
   const start = (safePage - 1) * size

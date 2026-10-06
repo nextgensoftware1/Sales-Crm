@@ -5,22 +5,22 @@ import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
 import { getClosers, transferToCloser, markAsSold } from './actions'
 
-const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Meeting', 'Qualified', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow Up', 'Proposal', 'Contract', 'Sold']
-const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
+export const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Meeting', 'Qualified', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow Up', 'Proposal', 'Contract', 'Sold']
+export const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 
 // All of these fields are optional — an empty value is always valid. These
 // only fire once something is actually typed in.
 // US phone: optional +1/1 prefix, then a 3-3-4 digit number, with any mix
 // of spaces/dashes/dots/parentheses as separators (or none at all).
-const US_PHONE_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/
+export const US_PHONE_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/
 // Same, but allows a trailing extension — matches the "Direct Phone /
 // Extension" placeholder on that specific field.
-const US_PHONE_EXT_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(\s*(x|ext\.?|extension)\s*\d{1,6})?$/i
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+export const US_PHONE_EXT_RE = /^\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(\s*(x|ext\.?|extension)\s*\d{1,6})?$/i
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // Letters (incl. accented), spaces, hyphens, apostrophes, periods, commas —
 // covers names, titles like "Dr." and suffixes like ", MD".
-const NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ'.,\s-]+$/
+export const NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ'.,\s-]+$/
 
 function isValidUSPhone(v: string) { return !v.trim() || US_PHONE_RE.test(v.trim()) }
 function isValidUSPhoneWithExt(v: string) { return !v.trim() || US_PHONE_EXT_RE.test(v.trim()) }
