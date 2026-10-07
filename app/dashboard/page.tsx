@@ -1,6 +1,8 @@
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../lib/supabase-server'
 import { roleLabel as canonicalRoleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
+import { readAllPages } from '../../lib/query-utils'
+import { rangeBounds } from '../../lib/date-range'
 import DashboardView from './DashboardView'
 
 // First/last day of the current month, as YYYY-MM-DD — the picker's
@@ -32,11 +34,13 @@ export default async function DashboardPage({
   const myUserId = (me as any)?.id
 
   const sp = await searchParams
+  // from/to are plain dates (older links, the default month) or exact moments
+  // chosen with the date + time picker. Anything invalid falls back to this month.
   const defaults = currentMonthRange()
-  const fromDate = sp.from || defaults.from
-  const toDate = sp.to || defaults.to
-  const fromISO = `${fromDate}T00:00:00.000Z`
-  const toISO = `${toDate}T23:59:59.999Z`
+  const requested = rangeBounds(sp.from, sp.to)
+  const fromDate = requested ? (sp.from as string) : defaults.from
+  const toDate = requested ? (sp.to as string) : defaults.to
+  const { fromISO, toISO } = requested ?? rangeBounds(defaults.from, defaults.to)!
 
   // Helper: apply the right scope to a query on a table that has tenant_id + agent_id
   const scope = (q: any, agentCol = 'agent_id') => {
@@ -52,9 +56,14 @@ export default async function DashboardPage({
   // filtered by date yet — their schema wasn't confirmed to have a
   // comparable date column. DashboardView flags which metrics are
   // date-scoped vs. all-time so nothing is silently inconsistent.
-  let actQ = supabase.from('lead_activity').select('disposition', { count: 'exact' })
-    .gte('created_at', fromISO).lte('created_at', toISO)
-  actQ = scope(actQ)
+  // Every page of activities in the range (a single request is capped at
+  // 1,000 rows, which used to undercount the disposition breakdown).
+  const actQ = readAllPages<{ disposition: string | null }>((from, to, withCount) => {
+    let q = supabase.from('lead_activity').select('disposition', withCount ? { count: 'exact' } : undefined)
+      .gte('created_at', fromISO).lte('created_at', toISO)
+    q = scope(q)
+    return q.order('created_at').order('practice_id').order('agent_id').range(from, to)
+  }).then((data) => ({ data, count: data.length }))
 
   let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
     .gte('created_at', fromISO).lte('created_at', toISO)

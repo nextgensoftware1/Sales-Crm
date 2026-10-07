@@ -67,7 +67,7 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   const hasFieldErrors = Object.values(fieldErrors).some(Boolean)
 
   // Transfer
-  const [closers, setClosers] = useState<{ id: string; name: string; email: string }[]>([])
+  const [closers, setClosers] = useState<{ id: string; name: string; email: string; role?: string }[]>([])
   const [closerId, setCloserId] = useState('')
   const [handoffStatus, setHandoffStatus] = useState('')
   const [transferMsg, setTransferMsg] = useState('')
@@ -101,6 +101,14 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
 
   // Save the worksheet. Also logs an activity (disposition + call details as the note)
   // so Activity History records it, and creates a reminder if a callback is set.
+  const formSnapshot = JSON.stringify([callDetails, additionalPhone, email, concernedPerson, directLine, callbackAt, timezone, disposition])
+  // The form as last saved: the loaded worksheet, then each successful save.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(() =>
+    String(initial?.callDetails ?? '').trim() ? JSON.stringify([
+      initial?.callDetails ?? '', initial?.additionalPhone ?? '', initial?.email ?? '', initial?.concernedPerson ?? '',
+      initial?.directLine ?? '', initial?.callbackAt ?? '', initial?.timezone ?? 'Eastern', initial?.disposition ?? 'New',
+    ]) : null)
+
   const save = async () => {
     if (!callDetails.trim()) { setMsg('Call details are required before saving.'); return }
     setTouched(new Set(['additionalPhone', 'email', 'concernedPerson', 'directLine']))
@@ -111,11 +119,26 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
     })
     setSaving(false)
     setMsg(res.message)
-    if (res.ok) router.refresh()
+    if (res.ok) {
+      setSavedSnapshot(formSnapshot)
+      router.refresh()
+    }
   }
 
+  // A lead can only be transferred after its worksheet is saved (the server
+  // enforces this too). Unsaved edits must be saved first so the receiver
+  // sees the latest notes.
+  // Compared with a snapshot of the form as it was last saved (not with the
+  // reloaded values), so formatting differences after a save can't block it.
+  const savedOnce = savedSnapshot !== null
+  const hasUnsavedChanges = savedSnapshot !== null && formSnapshot !== savedSnapshot
+  const transferBlockedReason = !savedOnce
+    ? 'Save the worksheet (with call details) before transferring this lead.'
+    : hasUnsavedChanges ? 'You have unsaved worksheet changes — save the worksheet first, then transfer.' : ''
+
   const doTransfer = async () => {
-    if (!closerId) { setTransferMsg('Pick a closer.'); return }
+    if (transferBlockedReason) { setTransferMsg(transferBlockedReason); return }
+    if (!closerId) { setTransferMsg('Pick a closer or manager.'); return }
     if (!handoffStatus) { setTransferMsg('Pick a handoff status.'); return }
     const res = await transferToCloser(practiceCode, closerId, handoffStatus)
     setTransferMsg(res.message)
@@ -243,15 +266,19 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
           <>
             <div className="grid-fields-2">
               <select value={closerId} onFocus={loadClosers} onChange={(e) => setCloserId(e.target.value)} className="lead-select">
-                <option value="">-- Choose Closer --</option>
-                {closers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
+                <option value="">-- Choose Closer or Manager --</option>
+                {closers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.role ? ` — ${c.role}` : ''} ({c.email})</option>)}
               </select>
               <select value={handoffStatus} onChange={(e) => setHandoffStatus(e.target.value)} className="lead-select">
                 <option value="">Handoff status…</option>
                 {HANDOFF_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <button onClick={doTransfer} className="lead-transfer-btn" style={{ marginTop: 10 }}>
+            {transferBlockedReason && (
+              <p role="status" className="lead-transfer-blocked">{transferBlockedReason}</p>
+            )}
+            <button onClick={doTransfer} className="lead-transfer-btn" style={{ marginTop: 10 }}
+              disabled={!!transferBlockedReason} title={transferBlockedReason || undefined}>
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
               Transfer
             </button>

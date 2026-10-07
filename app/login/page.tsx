@@ -49,7 +49,9 @@ export default function LoginPage() {
     setLoading(false)
     // One navigation after the auth boundary, clearing any previous user's
     // browser/router caches. push + refresh used to request the home page twice.
-    window.location.replace('/')
+    // Agents start on the Leads page; everyone else on their Dashboard
+    // (decided on the server from the verified role — see lib/home-path.ts).
+    window.location.replace(status.home === '/' ? '/' : '/dashboard')
   }
 
   return (

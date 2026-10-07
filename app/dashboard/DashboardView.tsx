@@ -5,6 +5,8 @@ import { useMemo } from 'react'
 import AppShell from '../AppShell'
 import DateRangePicker from './DateRangePicker'
 import { SalesFunnel, DispositionDonut } from './Charts'
+import TransferKpiPanel from './TransferKpiPanel'
+import WorkOverviewPanel from './WorkOverviewPanel'
 
 type Props = {
   scopeLabel: string
@@ -57,18 +59,16 @@ export default function DashboardView(p: Props) {
       showAdmin={!!p.isSuperAdmin}
       showTransfers
       canManageUsers={!!p.isSuperAdmin || !!p.canManageAssignments}
-      headerRight={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <DateRangePicker from={p.fromDate} to={p.toDate} />
-          {p.canManageAssignments && (
-            <Link prefetch={false} href="/assignments" className="btn btn-primary" style={{ textDecoration: 'none' }}>
-              Manage assigned leads
-            </Link>
-          )}
-        </div>
-      }
+      headerRight={p.canManageAssignments ? (
+        <Link prefetch={false} href="/assignments" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+          Manage assigned leads
+        </Link>
+      ) : null}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+        {/* ---- Date & time range: in the page (not the top bar), above the numbers ---- */}
+        <DateRangePicker from={p.fromDate} to={p.toDate} />
+
         {/* ---- Hero stats: the headline numbers, given real visual weight
              instead of sitting equal-sized next to nine other cards ---- */}
         <div className="hero-stats-row page-anchor" id="overview">
@@ -86,6 +86,12 @@ export default function DashboardView(p: Props) {
           <Kpi label="Proposals Shared" value={p.proposalsCount} sub="Standard pitches delivered, in range" color="proposals" icon={<IconFileText />} />
           <Kpi label="Contracts Signed" value={p.contractsCount} sub="Pending closes signed, in range" color="contracts" icon={<IconFileCheck />} />
         </div>
+
+        {/* ---- Worksheets, transfers and Call Disposition breakdown (follows the date range) ---- */}
+        <WorkOverviewPanel fromDate={p.fromDate} toDate={p.toDate} />
+
+        {/* ---- Transfer KPI: PKR 500 per verified transfer (this month + all-time) ---- */}
+        <TransferKpiPanel />
 
         {/* ---- Charts row ---- */}
         <div className="grid-dash-a page-anchor" id="pipeline">

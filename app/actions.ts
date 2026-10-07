@@ -580,17 +580,25 @@ export async function getClosers() {
     .eq('tenant_id', (me as any).tenant_id)
     .eq('status', 'active')
 
-  const closers = (people ?? [])
-    .filter((c: any) => c.roles?.key === 'closer')
-    .map((c: any) => ({ id: c.id, name: c.full_name, email: c.email }))
-
+  // Transfer recipients: closers and managers of my company (closers first).
   const meId = (me as any).id
+  const closers = (people ?? [])
+    .filter((c: any) => c.roles?.key === 'closer' || c.roles?.key === 'manager')
+    .map((c: any) => ({
+      id: c.id,
+      name: c.id === meId ? `${c.full_name} (myself)` : c.full_name,
+      email: c.email,
+      role: c.roles?.key === 'manager' ? 'Manager' : 'Closer',
+    }))
+    .sort((a: any, b: any) => (a.role === b.role ? String(a.name).localeCompare(String(b.name)) : a.role === 'Closer' ? -1 : 1))
+
   const alreadyIncluded = closers.some((c) => c.id === meId)
   if (!alreadyIncluded) {
     closers.unshift({
       id: meId,
       name: `${(me as any).full_name} (myself)`,
       email: (me as any).email,
+      role: (me as any).roles?.label ?? '',
     })
   }
 
@@ -619,9 +627,22 @@ export async function transferToCloser(
     .maybeSingle()
   const target = recipient as unknown as { id: string; tenant_id: string | null; status: string; roles: { key: string } | null } | null
   const transferringToSelf = closerId === me.id
+  // A lead can go to a closer or a manager of the same company.
   if (!target || target.tenant_id !== me.tenant_id || target.status !== 'active'
-      || (!transferringToSelf && target.roles?.key !== 'closer')) {
-    return { ok: false, message: 'Choose an active closer from your company.' }
+      || (!transferringToSelf && target.roles?.key !== 'closer' && target.roles?.key !== 'manager')) {
+    return { ok: false, message: 'Choose an active closer or manager from your company.' }
+  }
+
+  // A lead can only be transferred once its worksheet has been saved (with
+  // call details) for this company — the receiver needs that context.
+  const { data: savedWorksheet, error: worksheetError } = await supabase.from('lead_worksheets')
+    .select('call_details')
+    .eq('practice_id', practice.id)
+    .eq('tenant_id', me.tenant_id)
+    .maybeSingle()
+  if (worksheetError) return { ok: false, message: `Could not check the worksheet: ${worksheetError.message}` }
+  if (!String((savedWorksheet as { call_details?: string | null } | null)?.call_details ?? '').trim()) {
+    return { ok: false, message: 'Save the worksheet (with call details) before transferring this lead.' }
   }
 
   // Update the existing handoff in place so a failed replacement never
@@ -678,7 +699,7 @@ export async function transferToCloser(
     note: note || null,
   })
 
-  return { ok: true, message: 'Transferred to closer' }
+  return { ok: true, message: target.roles?.key === 'manager' ? 'Transferred to manager' : 'Transferred to closer' }
 }
 
 export async function markAsSold(

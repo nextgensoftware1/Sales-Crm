@@ -1224,3 +1224,386 @@ test('leads page action: phone search finds leads, is cached across pages, and i
     process.env.CRM_SERVER_PAGED_LEADS = '0'
   }
 })
+
+// ---------------------------------------------------------------------------
+// Transfer KPI (PKR 500 per verified transfer)
+// ---------------------------------------------------------------------------
+function kpiDb(tables, { failures = {}, rpc = () => ({ data: null, error: null }), calls = [] } = {}) {
+  return { rpc(name, payload) { calls.push({ rpc: name, payload }); return Promise.resolve(rpc(name, payload)) },
+    from(table) {
+      const filters = []; let single = false
+      const q = {
+        select() { return q }, order() { return q }, limit() { return q },
+        eq(k, v) { calls.push({ table, eq: [k, v] }); filters.push(r => r[k] === v); return q },
+        in(k, vs) { filters.push(r => vs.includes(r[k])); return q },
+        or(expr) { const parts = expr.split(',').map(p => p.split('.eq.')); filters.push(r => parts.some(([k, v]) => r[k] === v)); return q },
+        maybeSingle() { single = true; return q },
+        then(res, rej) {
+          const error = failures[table] ?? null
+          const rows = error ? null : (tables[table] ?? []).filter(r => filters.every(f => f(r)))
+          return Promise.resolve({ data: single ? (rows?.[0] ?? null) : rows, error }).then(res, rej)
+        },
+      }
+      return q
+    } }
+}
+const T = 'T1'
+function kpiTables() {
+  return {
+    lead_transfers: [
+      { id: 'f1', practice_id: 'p1', tenant_id: T, from_user_id: 'a1', to_user_id: 'c1', note: null, created_at: '2026-10-06T10:00:00Z' },
+      { id: 'f2', practice_id: 'p2', tenant_id: T, from_user_id: 'a2', to_user_id: 'c1', note: null, created_at: '2026-10-05T10:00:00Z' },
+      { id: 'f3', practice_id: 'p3', tenant_id: T, from_user_id: 'm1', to_user_id: 'c2', note: null, created_at: '2026-10-04T10:00:00Z' },
+    ],
+    master_practices: ['p1', 'p2', 'p3'].map((id, i) => ({ id, practice_code: 'PR-' + i, name: 'Lead ' + i, state: 'TX', specialty: null, is_roster: false, practice_providers: [] })),
+    users: [['a1', 'Aqsam Agent'], ['a2', 'Other Agent'], ['c1', 'Cal Closer'], ['c2', 'Other Closer'], ['m1', 'Mia Manager']].map(([id, full_name]) => ({ id, full_name })),
+    tenants: [{ id: T, name: 'HBS' }], lead_worksheets: [],
+    transfer_kpi_credits: [{ practice_id: 'p2', tenant_id: T, verified_at: '2026-10-06T12:00:00Z', verified_by_name: 'Cal Closer', amount: '500.00', currency: 'PKR', status: 'verified', note: 'Confirmed on call' }],
+  }
+}
+async function transfersAs(roleKey, userId, opts = {}) {
+  const { getTransfers } = loadTs('app/transfers-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => kpiDb(kpiTables(), opts),
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { id: userId, tenant_id: T, roles: { key: roleKey } } }) } })
+  const res = await getTransfers()
+  return Object.fromEntries((res.transfers ?? []).map(t => [t.id, t]))
+}
+
+test('transfer KPI: Verify button follows the same rules as the database', async () => {
+  const can = (rows) => Object.fromEntries(Object.entries(rows).map(([id, t]) => [id, t.canVerify]))
+  assert.deepEqual(can(await transfersAs('manager', 'm1')), { f1: true, f2: false, f3: false })        // f2 verified; f3 is the manager's own
+  assert.deepEqual(can(await transfersAs('company_admin', 'e1')), { f1: true, f2: false, f3: true })
+  assert.deepEqual(can(await transfersAs('closer', 'c1')), { f1: true, f2: false })                     // only transfers they received
+  assert.deepEqual(can(await transfersAs('closer', 'c2')), { f3: true })
+  assert.deepEqual(can(await transfersAs('agent', 'a1')), { f1: false })                                // agents never verify
+  assert.deepEqual(can(await transfersAs('team_lead', 'd2')), { f1: false, f2: false, f3: false })
+  assert.deepEqual(can(await transfersAs('super_admin', 's1')), { f1: false, f2: false, f3: false })
+  const verified = (await transfersAs('manager', 'm1')).f2.kpi
+  assert.deepEqual(verified, { status: 'verified', note: 'Confirmed on call', verifiedAt: '2026-10-06T12:00:00Z', verifiedByName: 'Cal Closer', amount: 500, currency: 'PKR' })
+})
+
+test('transfer KPI: before the SQL is installed, Transfers works and shows no Verify buttons', async () => {
+  const rows = await transfersAs('manager', 'm1', { failures: { transfer_kpi_credits: { code: '42P01', message: 'relation "transfer_kpi_credits" does not exist' } } })
+  assert.equal(Object.keys(rows).length, 3)
+  assert.ok(Object.values(rows).every(t => !t.canVerify && !t.kpiAvailable && t.kpi === null))
+})
+
+test('transfer KPI: verify / reject with a required note, and KPI scopes', async () => {
+  const server = (db, role = 'manager', id = 'm1') => ({ '../lib/supabase-server': { createSupabaseServer: async () => db,
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { id, tenant_id: T, roles: { key: role } } }) } })
+  const credit = { transfer_id: 'f1', agent_id: 'a1', agent_name: 'Aqsam Agent', amount: '500.00', currency: 'PKR', verified_at: '2026-10-06T12:00:00Z', verified_by_name: 'Mia Manager', status: 'verified', note: 'Customer confirmed interest' }
+  const calls = []
+  let mod = loadTs('app/kpi-actions.ts', server(kpiDb({ transfer_kpi_credits: [credit] }, { calls, rpc: () => ({ data: { decided: true, status: 'verified' }, error: null }) })))
+  let res = await mod.verifyTransfer('f1', 'verified', '  Customer confirmed interest  ')
+  assert.equal(res.ok, true); assert.match(res.message, /PKR 500 added to Aqsam Agent's KPI/)
+  assert.deepEqual(res.kpi, { status: 'verified', note: 'Customer confirmed interest', verifiedAt: '2026-10-06T12:00:00Z', verifiedByName: 'Mia Manager', amount: 500, currency: 'PKR' })
+  assert.deepEqual(calls.find(c => c.rpc), { rpc: 'verify_transfer', payload: { p_transfer_id: 'f1', p_decision: 'verified', p_note: 'Customer confirmed interest' } })
+  // Reject: no KPI.
+  const rejected = { ...credit, status: 'rejected', amount: '0.00', note: 'Wrong contact' }
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({ transfer_kpi_credits: [rejected] }, { rpc: () => ({ data: { decided: true, status: 'rejected' }, error: null }) })))
+  res = await mod.verifyTransfer('f1', 'rejected', 'Wrong contact')
+  assert.equal(res.ok, true); assert.match(res.message, /rejected — no KPI/); assert.equal(res.kpi.status, 'rejected'); assert.equal(res.kpi.amount, 0)
+  // Already decided.
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({ transfer_kpi_credits: [rejected] }, { rpc: () => ({ data: { decided: false, already_decided: true, status: 'rejected' }, error: null }) })))
+  assert.match((await mod.verifyTransfer('f1', 'verified', 'trying again')).message, /already rejected earlier/)
+  // Note is required; bad decisions are refused — before anything is sent.
+  const noCalls = []
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({}, { calls: noCalls })))
+  assert.match((await mod.verifyTransfer('f1', 'verified', '  ')).message, /add a note/)
+  assert.match((await mod.verifyTransfer('f1', 'approved', 'fine')).message, /Verify or Reject/)
+  assert.match((await mod.verifyTransfer('f1', 'verified', 'x'.repeat(1001))).message, /too long/)
+  assert.equal(noCalls.filter(c => c.rpc).length, 0)
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({}, { rpc: () => ({ data: null, error: { code: 'P0001', message: 'You cannot review your own transfer' } }) })))
+  assert.deepEqual(await mod.verifyTransfer('f3', 'verified', 'looks good'), { ok: false, message: 'You cannot review your own transfer' })
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({}, { rpc: () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }) })))
+  assert.match((await mod.verifyTransfer('f1', 'verified', 'looks good')).message, /transfer-kpi-v2\.sql/)
+
+  const agentCalls = []
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({ transfer_kpi_credits: [credit, { ...credit, agent_id: 'a2', agent_name: 'Other' }] }, { calls: agentCalls }), 'agent', 'a1'))
+  const own = await mod.getTransferKpi()
+  assert.equal(own.scope, 'own'); assert.deepEqual(own.credits.map(c => c.agentName), ['Aqsam Agent'])   // only my own earnings
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({ transfer_kpi_credits: [credit, { ...credit, agent_id: 'a2', agent_name: 'Other' }] }), 'manager', 'm1'))
+  const team = await mod.getTransferKpi()
+  assert.equal(team.scope, 'team'); assert.equal(team.credits.length, 2)
+  mod = loadTs('app/kpi-actions.ts', server(kpiDb({}, { failures: { transfer_kpi_credits: { code: '42P01', message: 'missing' } } })))
+  assert.equal((await mod.getTransferKpi()).available, false)
+})
+
+test('KPI page data: super admin sees every company with company names', async () => {
+  const credit = (agent, tenant) => ({ agent_id: agent, agent_name: agent, amount: '500.00', currency: 'PKR', verified_at: '2026-10-06T12:00:00Z', practice_code: 'PR-1', practice_name: 'Lead', verified_by_name: 'X', tenant_id: tenant })
+  const tables = { transfer_kpi_credits: [credit('a1', 'T1'), credit('b1', 'T2')], tenants: [{ id: 'T1', name: 'HBS' }, { id: 'T2', name: 'A1 Healthcare' }] }
+  const mod = loadTs('app/kpi-actions.ts', { '../lib/supabase-server': { createSupabaseServer: async () => kpiDb(tables),
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { id: 's1', tenant_id: null, roles: { key: 'super_admin' } } }) } })
+  const res = await mod.getTransferKpi()
+  assert.equal(res.isSuperAdmin, true); assert.equal(res.scope, 'team')
+  assert.deepEqual(res.credits.map(c => [c.agentName, c.companyName]), [['a1', 'HBS'], ['b1', 'A1 Healthcare']])
+})
+
+test('transfer recipients: closers and managers of my company', async () => {
+  const people = [
+    { id: 'c1', full_name: 'Cal Closer', email: 'c@x', roles: { key: 'closer', label: 'Closer' }, tenant_id: 'T1', status: 'active' },
+    { id: 'm1', full_name: 'Mia Manager', email: 'm@x', roles: { key: 'manager', label: 'Manager' }, tenant_id: 'T1', status: 'active' },
+    { id: 'a2', full_name: 'Other Agent', email: 'o@x', roles: { key: 'agent', label: 'Agent' }, tenant_id: 'T1', status: 'active' },
+    { id: 'tl', full_name: 'Team Lead', email: 't@x', roles: { key: 'team_lead', label: 'Team Lead' }, tenant_id: 'T1', status: 'active' },
+  ]
+  const { getClosers } = loadTs('app/actions.ts', { '../lib/supabase-server': { createSupabaseServer: async () => kpiDb({ users: people }),
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { id: 'a1', full_name: 'Aqsam', email: 'a@x', tenant_id: 'T1', roles: { key: 'agent', label: 'Agent' } } }) } })
+  const list = await getClosers()
+  assert.deepEqual(list.map(p => [p.name, p.role]), [['Aqsam (myself)', 'Agent'], ['Cal Closer', 'Closer'], ['Mia Manager', 'Manager']])
+})
+
+test('provider name + NPI: real names first, placeholders skipped', () => {
+  const { providerDisplayName, leadNpi } = loadTs('lib/provider-identity.ts')
+  assert.equal(providerDisplayName({ importData: { 'Provider Name': 'ABUL H SHIRAZI' }, practiceName: 'Practice (PR-1205903242)' }), 'ABUL H SHIRAZI')
+  assert.equal(providerDisplayName({ importData: { provider_name: 'Practice (PR-1)' }, providerName: 'ANIL SHARMA', practiceName: 'Practice (PR-1)' }), 'ANIL SHARMA')
+  assert.equal(providerDisplayName({ providerName: 'Practice (PR-1356495915)', practiceName: 'Practice (PR-1356495915)', orgName: 'Sharma Clinic LLC' }), 'Sharma Clinic LLC')
+  assert.equal(providerDisplayName({ practiceName: 'KENNETH S SCHOR, MD' }), 'KENNETH S SCHOR, MD')
+  assert.equal(providerDisplayName({ practiceName: 'Practice (PR-1356495915)' }), null)
+  assert.equal(providerDisplayName({ importData: { Provider: 'DR JANE ROE' } }), 'DR JANE ROE')
+  assert.equal(providerDisplayName({ importData: { 'Physician Name': 'RAJ PATEL' } }), 'RAJ PATEL')
+  assert.equal(providerDisplayName({ importData: { 'First Name': 'ANIL', 'Last Name': 'SHARMA' } }), 'ANIL SHARMA')
+  assert.equal(providerDisplayName({ importData: { 'NPPES_Provider_First_Name': 'ANN', 'NPPES_Provider_Last_Name': 'KHARRAT' } }), null) // unrelated long labels are not guessed
+  assert.equal(providerDisplayName({ importData: { Name: '', 'Full Name': 'MARIA LOPEZ' } }), 'MARIA LOPEZ')
+  assert.equal(leadNpi('1356495915', null), '1356495915')
+  assert.equal(leadNpi(null, 'PR-1356495915'), '1356495915')
+  assert.equal(leadNpi(null, 'PR-12'), null)
+})
+
+test('transfers list carries provider name and NPI (no placeholder names)', async () => {
+  const tables = kpiTables()
+  tables.master_practices[0] = { ...tables.master_practices[0], practice_code: 'PR-1356495915', name: 'Practice (PR-1356495915)',
+    practice_providers: [{ providers: { org_name: null, name: 'Practice (PR-1356495915)', npi: '1356495915' } }] }
+  tables.lead_worksheets = [{ practice_id: 'p1', tenant_id: T, import_data: { 'Provider Name': 'ANIL SHARMA' } }]
+  const { getTransfers } = loadTs('app/transfers-actions.ts', { '../lib/supabase-server': { createSupabaseServer: async () => kpiDb(tables),
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { id: 'm1', tenant_id: T, roles: { key: 'manager' } } }) } })
+  const f1 = (await getTransfers()).transfers.find(t => t.id === 'f1')
+  assert.equal(f1.providerName, 'ANIL SHARMA'); assert.equal(f1.npi, '1356495915')
+})
+
+test('sidebar: Dashboard is the first item (users land there after login)', () => {
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server')
+  const stub = () => null
+  const { default: AppShell } = loadTs('app/AppShell.tsx', {
+    'next/navigation': { usePathname: () => '/dashboard' },
+    'next/link': ({ href, children, prefetch, ...rest }) => React.createElement('a', { href, ...rest }, children),
+    './BrandLogo': stub, './ThemeToggle': stub, './SignOutButton': stub, './NotificationBell': stub,
+  })
+  const html = renderToStaticMarkup(React.createElement(AppShell, { title: 'Dashboard', active: '/dashboard', showTransfers: true }, 'x'))
+  const navHrefs = [...html.split('class="sidebar-nav"')[1].matchAll(/href="([^"]+)"/g)].map(m => m[1])
+  assert.equal(navHrefs[0], '/dashboard')
+  assert.ok(navHrefs.indexOf('/') > 0)
+})
+
+test('after login: agents land on Leads, every other role on the Dashboard', async () => {
+  const { homePathForRole } = loadTs('lib/home-path.ts')
+  const expectedHome = { agent: '/', closer: '/dashboard', team_lead: '/dashboard', manager: '/dashboard', company_admin: '/dashboard', super_admin: '/dashboard' }
+  for (const [role, home] of Object.entries(expectedHome)) assert.equal(homePathForRole(role), home, role)
+  assert.equal(homePathForRole(undefined), '/dashboard')
+  for (const [role, home] of Object.entries(expectedHome)) {
+    const { checkAccountStatus } = loadTs('app/auth-actions.ts', { '../lib/supabase-server': {
+      getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+      getCurrentProfile: async () => ({ data: { status: 'active', roles: { key: role }, tenants: { status: 'active' } } }) } })
+    assert.deepEqual(await checkAccountStatus(), { ok: true, home }, role)
+  }
+  // Suspended accounts are still stopped before any landing page.
+  const { checkAccountStatus } = loadTs('app/auth-actions.ts', { '../lib/supabase-server': {
+    getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { status: 'suspended', roles: { key: 'agent' }, tenants: { status: 'active' } } }) } })
+  assert.deepEqual(await checkAccountStatus(), { ok: false, reason: 'suspended' })
+})
+
+test('transfer needs a saved worksheet (with call details) first', async () => {
+  const run = async (worksheet) => {
+    const writes = []
+    const db = { from(table) {
+      const filters = {}; let op = 'select'
+      const q = {
+        select() { return q }, eq(k, v) { filters[k] = v; return q }, limit() { return q },
+        insert(v) { op = 'insert'; writes.push([table, op, v]); return q }, update(v) { op = 'update'; writes.push([table, op, v]); return q },
+        upsert(v) { op = 'upsert'; writes.push([table, op, v]); return q },
+        maybeSingle() {
+          if (table === 'users') return Promise.resolve({ data: { id: 'c1', tenant_id: 'T1', status: 'active', roles: { key: 'manager' } }, error: null })
+          if (table === 'lead_worksheets') return Promise.resolve({ data: worksheet, error: null })
+          return Promise.resolve({ data: null, error: null })
+        },
+        then(res, rej) { return Promise.resolve({ data: null, error: null }).then(res, rej) },
+      }
+      return q
+    } }
+    const { transferToCloser } = loadTs('app/actions.ts', {
+      '../lib/supabase-server': { createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+        getCurrentProfile: async () => ({ data: { id: 'a1', tenant_id: 'T1', roles: { key: 'agent' } } }) },
+      '../lib/lead-access': { authorizePractice: async () => ({ id: 'p1' }) },
+      'next/cache': { revalidatePath() {} },
+    })
+    return { res: await transferToCloser('PR-1', 'c1', 'Pending'), writes }
+  }
+  for (const ws of [null, { call_details: '' }, { call_details: '   ' }]) {
+    const { res, writes } = await run(ws)
+    assert.equal(res.ok, false); assert.match(res.message, /Save the worksheet/)
+    assert.equal(writes.length, 0)   // nothing transferred
+  }
+  const { res, writes } = await run({ call_details: 'Spoke with office manager' })
+  assert.equal(res.ok, true); assert.equal(res.message, 'Transferred to manager')
+  assert.ok(writes.some(([table]) => table === 'lead_transfers'))
+})
+
+// ---------------------------------------------------------------------------
+// Dashboard: Worksheets & Transfers overview
+// ---------------------------------------------------------------------------
+function overviewDb(tables) {
+  return { from(table) {
+    const filters = []; let lo = 0, hi = Infinity
+    const q = {
+      select() { return q }, order() { return q },
+      eq(k, v) { filters.push(r => r[k] === v); return q },
+      in(k, vs) { filters.push(r => vs.includes(r[k])); return q },
+      gte(k, v) { filters.push(r => r[k] >= v); return q }, lte(k, v) { filters.push(r => r[k] <= v); return q },
+      or(expr) { const parts = expr.split(',').map(p => p.split('.eq.')); filters.push(r => parts.some(([k, v]) => r[k] === v)); return q },
+      range(a, b) { lo = a; hi = b; return q },
+      then(res, rej) {
+        const rows = (tables[table] ?? []).filter(r => filters.every(f => f(r)))
+        return Promise.resolve({ data: rows.slice(lo, hi + 1), error: null, count: rows.length }).then(res, rej)
+      },
+    }
+    return q
+  } }
+}
+function overviewTables() {
+  const day = '2026-10-05T10:00:00Z', old = '2026-08-01T10:00:00Z'
+  const ws = (practice, tenant, by, disposition, updated_at = day) => ({ practice_id: practice, tenant_id: tenant, updated_by: by, disposition, updated_at })
+  return {
+    lead_worksheets: [
+      ws('p1', 'T1', 'a1', 'Interested'), ws('p2', 'T1', 'a1', 'Voicemail'), ws('p3', 'T1', 'a2', 'Interested'),
+      ws('p4', 'T1', 'a2', 'No Answer'), ws('p5', 'T1', 'a2', null), ws('p6', 'T2', 'b1', 'Interested'),
+      ws('p7', 'T1', 'a1', 'Interested', old),            // outside the date range
+    ],
+    lead_transfers: [
+      { id: 'f1', practice_id: 'p1', tenant_id: 'T1', from_user_id: 'a1', to_user_id: 'c1', note: 'Pending', created_at: day },
+      { id: 'f2', practice_id: 'p3', tenant_id: 'T1', from_user_id: 'a2', to_user_id: 'c1', note: 'Sent', created_at: day },
+      { id: 'f3', practice_id: 'p4', tenant_id: 'T1', from_user_id: 'a2', to_user_id: 'm1', note: 'Pending', created_at: day },
+      { id: 'f4', practice_id: 'p6', tenant_id: 'T2', from_user_id: 'b1', to_user_id: 'c9', note: 'Signed', created_at: day },
+    ],
+    transfer_kpi_credits: [{ transfer_id: 'f1', status: 'verified' }, { transfer_id: 'f2', status: 'rejected' }, { transfer_id: 'f4', status: 'verified' }],
+    users: [['a1', 'Aqsam', 'T1'], ['a2', 'Sam', 'T1'], ['b1', 'Bilal', 'T2'], ['c1', 'Cal', 'T1'], ['m1', 'Mia', 'T1']].map(([id, full_name, tenant_id]) => ({ id, full_name, tenant_id })),
+    tenants: [{ id: 'T1', name: 'HBS', is_platform: false }, { id: 'T2', name: 'A1 Healthcare', is_platform: false }],
+  }
+}
+async function overviewAs(role, id, tenant, input = {}, tables = overviewTables()) {
+  const { getWorkOverview } = loadTs('app/dashboard/overview-actions.ts', { '../../lib/supabase-server': {
+    createSupabaseServer: async () => overviewDb(tables), getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { id, tenant_id: tenant, roles: { key: role } } }) } })
+  return getWorkOverview({ from: '2026-10-01', to: '2026-10-31', ...input })
+}
+
+test('overview (manager): worksheets, transfers, outcomes, dispositions, by agent', async () => {
+  const o = await overviewAs('manager', 'm1', 'T1')
+  assert.equal(o.scope, 'team')
+  assert.deepEqual([o.worksheets, o.transfers, o.verified, o.rejected, o.pending], [5, 3, 1, 1, 1])
+  assert.deepEqual(o.dispositions, [{ name: 'Interested', count: 2 }, { name: 'No Answer', count: 1 }, { name: 'No disposition', count: 1 }, { name: 'Voicemail', count: 1 }])
+  assert.deepEqual(o.handoff, [{ name: 'Pending', count: 2 }, { name: 'Sent', count: 1 }])
+  const sam = o.agents.find(a => a.name === 'Sam')
+  assert.deepEqual([sam.worksheets, sam.transfers, sam.verified, sam.rejected, sam.dispositions.Interested], [3, 2, 0, 1, 1])
+  assert.deepEqual(o.people.map(p => p.name).sort(), ['Aqsam', 'Cal', 'Mia', 'Sam'])
+  const onlySam = await overviewAs('manager', 'm1', 'T1', { agentId: 'a2' })
+  assert.deepEqual([onlySam.worksheets, onlySam.transfers], [3, 2])
+})
+
+test('overview (agent): only their own work, no agent table', async () => {
+  const o = await overviewAs('agent', 'a1', 'T1', { agentId: 'a2', companyId: 'T2' })   // filters are ignored for agents
+  assert.equal(o.scope, 'own')
+  assert.deepEqual([o.worksheets, o.transfers, o.verified], [2, 1, 1])
+  assert.deepEqual(o.agents, []); assert.deepEqual(o.people, [])
+})
+
+test('overview (super admin): every company, company filter', async () => {
+  const all = await overviewAs('super_admin', 's1', null)
+  assert.equal(all.scope, 'all'); assert.deepEqual([all.worksheets, all.transfers], [6, 4])
+  assert.deepEqual(all.companies.map(c => c.name), ['A1 Healthcare', 'HBS'])
+  const a1 = await overviewAs('super_admin', 's1', null, { companyId: 'T2' })
+  assert.deepEqual([a1.worksheets, a1.transfers, a1.verified], [1, 1, 1]); assert.deepEqual(a1.people.map(p => p.name), ['Bilal'])
+})
+
+test('overview: no 1,000-row cut-off, and bad dates are refused', async () => {
+  const tables = overviewTables()
+  tables.lead_worksheets = Array.from({ length: 2350 }, (_, i) => ({ practice_id: 'x' + i, tenant_id: 'T1', updated_by: 'a1', disposition: i % 2 ? 'Voicemail' : 'Interested', updated_at: '2026-10-05T10:00:00Z' }))
+  const o = await overviewAs('manager', 'm1', 'T1', {}, tables)
+  assert.equal(o.worksheets, 2350); assert.deepEqual(o.dispositions.map(d => d.count), [1175, 1175])
+  const bad = await overviewAs('manager', 'm1', 'T1', { from: 'yesterday' })
+  assert.equal(bad.ok, false)
+})
+
+test('dashboard date + time range: plain dates, exact moments, inclusive minute, presets in local time', () => {
+  const saved = process.env.TZ
+  try {
+    process.env.TZ = 'Asia/Karachi'
+    const r = loadTs('lib/date-range.ts')
+    assert.deepEqual(r.rangeBounds('2026-10-01', '2026-10-31'), { fromISO: '2026-10-01T00:00:00.000Z', toISO: '2026-10-31T23:59:59.999Z' })   // old links unchanged
+    // Oct 5, 8:00 PM → Oct 6, 2:00 AM Pakistan time, through the picker:
+    const from = r.fromPickerValue('2026-10-05T20:00'), to = r.fromPickerValue('2026-10-06T02:00')
+    assert.equal(from, '2026-10-05T15:00:00.000Z'); assert.equal(to, '2026-10-05T21:00:00.000Z')
+    assert.deepEqual(r.rangeBounds(from, to), { fromISO: '2026-10-05T15:00:00.000Z', toISO: '2026-10-05T21:00:59.999Z' })   // 2:00 AM includes 2:00:59
+    assert.equal(r.toPickerValue(from, false), '2026-10-05T20:00'); assert.equal(r.toPickerValue('2026-10-06', true), '2026-10-06T23:59')
+    assert.equal(r.rangeBounds(to, from), null)                       // reversed
+    assert.equal(r.rangeBounds('2026-10-01', 'tomorrow'), null)       // garbage
+    assert.equal(r.rangeBounds("2026-10-01'); drop table x;--", '2026-10-02'), null)
+    assert.equal(r.fromPickerValue('2026-10-05 20:00'), null)
+    // "This month" starts at local midnight Oct 1 (19:00 UTC on Sep 30), not Sep 30 in local time.
+    const month = r.presetRange('month', new Date(2026, 9, 6, 12))
+    assert.equal(month.from, '2026-09-30T19:00:00.000Z'); assert.equal(r.toPickerValue(month.from, false), '2026-10-01T00:00')
+    assert.equal(r.toPickerValue(month.to, true), '2026-10-31T23:59')
+    assert.equal(r.toPickerValue(r.presetRange('today', new Date(2026, 9, 6, 12)).from, false), '2026-10-06T00:00')
+  } finally {
+    if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved
+  }
+})
+
+test('overview follows an exact date + time range across midnight', async () => {
+  const tables = overviewTables()
+  const at = (iso, d) => ({ practice_id: 'q' + iso, tenant_id: 'T1', updated_by: 'a1', disposition: d, updated_at: iso })
+  tables.lead_worksheets = [at('2026-10-05T14:59:59Z', 'Too early'), at('2026-10-05T15:00:00Z', 'Interested'), at('2026-10-05T19:30:00Z', 'Voicemail'),
+    at('2026-10-05T21:00:30Z', 'No Answer'), at('2026-10-05T21:01:00Z', 'Too late')]
+  tables.lead_transfers = []
+  const o = await overviewAs('manager', 'm1', 'T1', { from: '2026-10-05T15:00:00.000Z', to: '2026-10-05T21:00:00.000Z' }, tables)
+  assert.equal(o.worksheets, 3); assert.deepEqual(o.dispositions.map(d => d.name).sort(), ['Interested', 'No Answer', 'Voicemail'])
+})
+
+test('Clients page: Active clients / Sold leads tabs; Sold Leads gone from the sidebar', async () => {
+  const React = require('react')
+  const me = { id: 'u1', tenant_id: 'T1', full_name: 'Boss', roles: { key: 'company_admin' }, tenants: { name: 'HBS' } }
+  const queries = []
+  const db = { from(table) {
+    const q = { _head: false, select(_c, o) { q._head = !!o?.head; return q }, eq() { return q }, order() { return q },
+      then(res, rej) { queries.push([table, q._head]); return Promise.resolve(q._head ? { count: 2, data: null } : { data: [{ master_practices: { name: 'ABUL H SHIRAZI', practice_code: 'PR-1' }, sales: {} }] }).then(res, rej) } }
+    return q
+  } }
+  const SoldStub = function SoldLeadsSection() { return null }
+  const mocks = {
+    '../../lib/supabase-server': { createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: me }) },
+    '../AppShell': function AppShell() { return null },
+    './SoldLeadsSection': { __esModule: true, default: SoldStub, loadSoldLeadCount: async () => 3 },
+    'next/navigation': { redirect: () => { throw Error('redirect') } },
+    'next/link': ({ children }) => children,
+  }
+  const { default: ClientsPage } = loadTs('app/clients/page.tsx', mocks)
+  const find = (node, pred) => { if (!node || typeof node !== 'object') return null; if (Array.isArray(node)) { for (const n of node) { const r = find(n, pred); if (r) return r } return null } if (pred(node)) return node; return find(node.props?.children, pred) }
+  const activeView = await ClientsPage({ searchParams: Promise.resolve({}) })
+  assert.equal(activeView.props.contextActive, '/clients')
+  assert.match(activeView.props.subtitle, /2 active clients · 3 sold leads/)
+  assert.equal(find(activeView.props.children, n => n.type === SoldStub), null)
+  assert.ok(queries.some(([t, head]) => t === 'client_ownership' && !head))           // active tab loads client rows
+  queries.length = 0
+  const soldView = await ClientsPage({ searchParams: Promise.resolve({ tab: 'sold' }) })
+  assert.equal(soldView.props.contextActive, '/clients?tab=sold')
+  assert.ok(find(soldView.props.children, n => n.type === SoldStub))
+  assert.equal(queries.some(([t, head]) => t === 'client_ownership' && !head), false)  // sold tab doesn't load client rows
+  // Old /sold-leads links forward to the tab.
+  let target = null
+  const { default: SoldPage } = loadTs('app/sold-leads/page.tsx', { 'next/navigation': { redirect: (u) => { target = u } } })
+  SoldPage(); assert.equal(target, '/clients?tab=sold')
+  // Sidebar no longer lists Sold Leads; the Clients side panel switches tabs.
+  const shell = require('fs').readFileSync(require('path').join(__dirname, '..', 'app/AppShell.tsx'), 'utf8')
+  assert.equal(/href: '\/sold-leads'/.test(shell), false)
+  assert.match(shell, /href: '\/clients\?tab=sold', label: 'Sold leads'/)
+})

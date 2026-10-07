@@ -3,8 +3,12 @@ import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../l
 import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
+import SoldLeadsSection, { loadSoldLeadCount } from './SoldLeadsSection'
 
-export default async function ClientsPage() {
+// Clients page with two tabs: Active clients (default) and Sold leads
+// (?tab=sold). Only the selected tab's rows are loaded.
+export default async function ClientsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const tab: 'active' | 'sold' = (await searchParams)?.tab === 'sold' ? 'sold' : 'active'
   const supabase = await createSupabaseServer()
 
   const { data: { user } } = await getCurrentUser()
@@ -23,6 +27,9 @@ export default async function ClientsPage() {
       }
     : null
 
+  const roleKey: string = (me as any)?.roles?.key ?? ''
+  const soldScope = { userId: (me as any)?.id ?? '', tenantId: (me as any)?.tenant_id ?? null, tenantName: (me as any)?.tenants?.name ?? null, roleKey }
+
   // Super Admin sees all clients; others see only their company's clients
   let query = supabase
     .from('client_ownership')
@@ -34,18 +41,36 @@ export default async function ClientsPage() {
     query = query.eq('owner_tenant_id', (me as any).tenant_id)
   }
 
-  const { data: clients } = await query
+  // Rows for the open tab only; the other tab just needs its count.
+  let clientsCountQuery = supabase.from('client_ownership').select('locked_at', { count: 'exact', head: true }).eq('active', true)
+  if (!isSuperAdmin) clientsCountQuery = clientsCountQuery.eq('owner_tenant_id', (me as any).tenant_id)
+  const [{ data: clients }, { count: clientCount }, soldCount] = await Promise.all([
+    tab === 'active' ? query : Promise.resolve({ data: null as any[] | null }),
+    clientsCountQuery,
+    loadSoldLeadCount(soldScope),
+  ])
+  const activeCount = clientCount ?? clients?.length ?? 0
 
   return (
     <AppShell
       title={isSuperAdmin ? 'Global Client Registry' : 'Active Clients'}
-      subtitle={`${clients?.length ?? 0} active client${(clients?.length ?? 0) === 1 ? '' : 's'}`}
+      subtitle={`${activeCount} active client${activeCount === 1 ? '' : 's'} · ${soldCount} sold lead${soldCount === 1 ? '' : 's'}`}
       currentUser={currentUser}
       active="/clients"
+      contextActive={tab === 'sold' ? '/clients?tab=sold' : '/clients'}
       showAdmin={isSuperAdmin}
       showTransfers={showTransfers}
       canManageUsers={canManageUsers}
     >
+      <nav className="page-tabs" aria-label="Clients views">
+        <Link prefetch={false} href="/clients" className={'page-tab' + (tab === 'active' ? ' is-active' : '')} aria-current={tab === 'active' ? 'page' : undefined}>
+          Active clients <span className="page-tab-count">{activeCount}</span>
+        </Link>
+        <Link prefetch={false} href="/clients?tab=sold" className={'page-tab' + (tab === 'sold' ? ' is-active' : '')} aria-current={tab === 'sold' ? 'page' : undefined}>
+          Sold leads <span className="page-tab-count">{soldCount}</span>
+        </Link>
+      </nav>
+      {tab === 'sold' ? <SoldLeadsSection scope={soldScope} /> : (
       <div className="card">
         {(!clients || clients.length === 0) ? (
           <p className="subtle">No clients yet.</p>
@@ -86,6 +111,7 @@ export default async function ClientsPage() {
           </div>
         )}
       </div>
+      )}
     </AppShell>
   )
 }

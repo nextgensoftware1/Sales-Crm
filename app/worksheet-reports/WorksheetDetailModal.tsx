@@ -7,6 +7,7 @@ import { Building2, ClipboardList, Pencil, X } from 'lucide-react'
 import { saveWorksheet } from '../worksheet-actions'
 import { DISPOSITIONS, TIMEZONES, US_PHONE_RE, US_PHONE_EXT_RE, EMAIL_RE, NAME_RE } from '../Worksheet'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
+import { lockPageScroll, unlockPageScroll } from '../../lib/scroll-lock'
 
 // Same field rules as the practice-page worksheet (app/Worksheet.tsx).
 const phoneOk = (v: string) => !v.trim() || US_PHONE_RE.test(v.trim())
@@ -30,28 +31,6 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-// Freeze the page behind the popup. The scrollbar's width is kept as padding so
-// the page doesn't jump sideways; everything is restored exactly on close.
-// Counted, so two popups at once can't unlock the page too early.
-let scrollLocks = 0
-let savedStyles: { htmlOverflow: string; bodyOverflow: string; bodyPaddingRight: string } | null = null
-function lockPageScroll() {
-  if (scrollLocks++ > 0) return
-  const html = document.documentElement, body = document.body
-  const scrollbar = window.innerWidth - html.clientWidth
-  savedStyles = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow, bodyPaddingRight: body.style.paddingRight }
-  html.style.overflow = 'hidden'
-  body.style.overflow = 'hidden'
-  if (scrollbar > 0) body.style.paddingRight = `${(parseFloat(getComputedStyle(body).paddingRight) || 0) + scrollbar}px`
-}
-function unlockPageScroll() {
-  if (--scrollLocks > 0 || !savedStyles) return
-  const html = document.documentElement, body = document.body
-  html.style.overflow = savedStyles.htmlOverflow
-  body.style.overflow = savedStyles.bodyOverflow
-  body.style.paddingRight = savedStyles.bodyPaddingRight
-  savedStyles = null
-}
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 const initials = (name: string) => name.split(/[\s,]+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('') || '?'

@@ -1,6 +1,7 @@
 'use server'
 
 import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { homePathForRole } from '../lib/home-path'
 
 // Called immediately after a successful Supabase Auth sign-in. Auth alone
 // doesn't know about our own users.status column or whether the users row
@@ -12,6 +13,8 @@ import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 export async function checkAccountStatus(): Promise<{
   ok: boolean
   reason?: 'not_found' | 'suspended'
+  /** Page to open after signing in (agents: Leads; everyone else: Dashboard). */
+  home?: string
 }> {
   const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, reason: 'not_found' }
@@ -29,5 +32,5 @@ export async function checkAccountStatus(): Promise<{
     return { ok: false, reason: 'suspended' }
   }
 
-  return { ok: true }
+  return { ok: true, home: homePathForRole((me as any).roles?.key) }
 }

@@ -15,7 +15,7 @@ export default async function DeletedLeads() {
   const { data: me } = await getCurrentProfile(user.id)
 
   const roleKey = (me as any)?.roles?.key ?? ''
-  if (roleKey !== 'super_admin') redirect('/')
+  if (roleKey !== 'super_admin') redirect('/dashboard')
 
   const currentUser = me
     ? {

@@ -12,7 +12,7 @@ import type { Reminder } from './reminders-actions'
 import {
   Activity, AlertTriangle, BadgeDollarSign, BarChart3, Building2, CalendarClock,
   ChartNoAxesCombined, CircleCheckBig, FileCheck2, FileText, Gauge, History,
-  ListChecks, RotateCcw, ShieldCheck, UserRoundCheck, UsersRound,
+  ListChecks, RotateCcw, ShieldCheck, Trophy, UserRoundCheck, UsersRound, Wallet,
 } from 'lucide-react'
 
 // Hand-authored, stroke-based icons (matches the style already used
@@ -27,7 +27,6 @@ const IconLeads = () => <svg {...iconProps}><path d="M9 2h6a2 2 0 0 1 2 2v16a2 2
 const IconDashboard = () => <svg {...iconProps}><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></svg>
 const IconClock = () => <svg {...iconProps}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
 const IconUsers = () => <svg {...iconProps}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-const IconSold = () => <svg {...iconProps}><circle cx="12" cy="12" r="10" /><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8M12 6v12" /></svg>
 const IconTransfer = () => <svg {...iconProps}><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></svg>
 const IconSettings = () => <svg {...iconProps}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></svg>
 const IconTrash = () => <svg {...iconProps}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
@@ -35,13 +34,14 @@ const IconReport = () => <svg {...iconProps}><path d="M15 2H6a2 2 0 0 0-2 2v16a2
 
 type NavItem = { href: string; label: string; icon: React.ReactNode; admin?: boolean }
 const NAV: NavItem[] = [
+  // Dashboard first: it's where everyone lands after signing in.
+  { href: '/dashboard',     label: 'Dashboard',      icon: <IconDashboard /> },
   { href: '/',              label: 'Leads Engine',   icon: <IconLeads /> },
   { href: '/assignments',   label: 'Assigned Leads', icon: <UsersRound aria-hidden="true" /> },
-  { href: '/dashboard',     label: 'Dashboard',      icon: <IconDashboard /> },
   { href: '/reminders',     label: 'My Reminders',   icon: <IconClock /> },
   { href: '/clients',       label: 'Active Clients', icon: <IconUsers /> },
-  { href: '/sold-leads',    label: 'Sold Leads',     icon: <IconSold /> },
   { href: '/transfers',     label: 'Transfers',      icon: <IconTransfer /> },
+  { href: '/kpi',           label: 'KPI',            icon: <Trophy aria-hidden="true" /> },
   // Grouped under an "Admin" section header below — same items, hrefs, and
   // visibility rules as before, just visually separated to match the
   // reference image's sidebar grouping.
@@ -76,16 +76,8 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     kicker: 'Relationships', title: 'Clients', description: 'Review active and completed customer work.',
     items: [
       { href: '/clients', label: 'Active clients', description: 'Current ownership', icon: UserRoundCheck },
-      { href: '/sold-leads', label: 'Sold leads', description: 'Completed sales', icon: BadgeDollarSign },
+      { href: '/clients?tab=sold', label: 'Sold leads', description: 'Completed sales', icon: BadgeDollarSign },
       { href: '/transfers', label: 'Transfers', description: 'Qualified handoffs', icon: FileCheck2 },
-    ],
-  },
-  '/sold-leads': {
-    kicker: 'Revenue', title: 'Sales', description: 'Review closed work and related client records.',
-    items: [
-      { href: '/sold-leads', label: 'Closed sales', description: 'Contract details', icon: BadgeDollarSign },
-      { href: '/clients', label: 'Active clients', description: 'Current ownership', icon: UserRoundCheck },
-      { href: '/dashboard', label: 'Performance', description: 'Sales analytics', icon: BarChart3 },
     ],
   },
   '/transfers': {
@@ -103,6 +95,14 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
       { href: '/worksheet-updates', label: 'Worksheet updates', description: 'Saved edit history', icon: History },
       { href: '/', label: 'Leads Engine', description: 'Return to lead work', icon: ListChecks },
       { href: '/reminders', label: 'Reminders', description: 'Follow-up schedule', icon: CalendarClock },
+    ],
+  },
+  '/kpi': {
+    kicker: 'Incentives', title: 'KPI', description: 'PKR 500 for every verified transfer.',
+    items: [
+      { href: '/kpi', label: 'KPI records', description: 'Verified transfer earnings', icon: Wallet },
+      { href: '/transfers', label: 'Transfers', description: 'Verify pending transfers', icon: FileCheck2 },
+      { href: '/dashboard', label: 'Dashboard', description: 'Performance overview', icon: BarChart3 },
     ],
   },
   '/worksheet-updates': {
@@ -141,7 +141,7 @@ function initials(name: string): string {
 }
 
 export default function AppShell({
-  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, contextExtra = null, contextItemsHidden = false, contextHelpText, initialReminders,
+  title, subtitle, currentUser, active, children, showAdmin = false, showTransfers = false, canManageUsers = false, headerRight = null, contextExtra = null, contextItemsHidden = false, contextActive, contextHelpText, initialReminders,
 }: {
   title: string
   subtitle?: string
@@ -154,6 +154,8 @@ export default function AppShell({
   headerRight?: React.ReactNode
   contextExtra?: React.ReactNode
   contextItemsHidden?: boolean
+  /** Which side-panel item is selected (e.g. a tab like '/clients?tab=sold'). Defaults to the first item. */
+  contextActive?: string
   contextHelpText?: string
   initialReminders?: Reminder[]
 }) {
@@ -326,7 +328,7 @@ export default function AppShell({
                 {!contextItemsHidden && <nav>
                   {contextNav.items.map((item, index) => {
                     const itemPath = item.href.split('#')[0]
-                    const selected = index === 0 && itemPath === active
+                    const selected = contextActive ? item.href === contextActive : index === 0 && itemPath === active
                     const ItemIcon = item.icon
                     return (
                       <Link key={item.href} href={item.href} className={selected ? 'active' : ''}>
