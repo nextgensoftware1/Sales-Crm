@@ -1697,3 +1697,76 @@ test('page-shared value: two separate copies of the module share one value (pane
     if (savedWindow === undefined) delete global.window; else global.window = savedWindow
   }
 })
+
+// ---------------------------------------------------------------------------
+// Worksheet Reports: every worksheet is shown (no 300 cap)
+// ---------------------------------------------------------------------------
+function worksheetDb(tables, log) {
+  return { from(table) {
+    const rec = { table, eqs: [], ins: null, head: false, range: null, count: false }; log.push(rec)
+    const q = {
+      select(_c, o) { rec.head = !!o?.head; rec.count = o?.count === 'exact'; return q },
+      is() { return q }, order() { return q },
+      eq(k, v) { rec.eqs.push([k, v]); return q },
+      in(k, vs) { rec.ins = [k, vs]; return q },
+      range(a, b) { rec.range = [a, b]; return q },
+      then(res, rej) {
+        let rows = (tables[table] ?? []).filter(r => rec.eqs.every(([k, v]) => r[k] === v) && (!rec.ins || rec.ins[1].includes(r[rec.ins[0]])))
+        const total = rows.length
+        if (rec.range) rows = rows.slice(rec.range[0], rec.range[1] + 1)
+        return Promise.resolve(rec.head ? { count: total, data: null, error: null } : { data: rows, count: rec.count ? total : null, error: null }).then(res, rej)
+      },
+    }
+    return q
+  } }
+}
+function worksheetTables(n) {
+  const worksheets = Array.from({ length: n }, (_, i) => ({
+    practice_id: 'p' + i, tenant_id: i % 3 === 0 ? 'T2' : 'T1', updated_by: i % 2 ? 'a1' : 'a2', disposition: 'Voicemail',
+    call_details: 'x', additional_phone: null, email: null, concerned_person: null, direct_line: null, callback_at: null, timezone: null,
+    updated_at: new Date(Date.UTC(2026, 9, 1, 0, 0, n - i)).toISOString(), import_data: null, tenants: { name: i % 3 === 0 ? 'TEST' : 'HBS' },
+    users: { full_name: 'Agent', tenants: { name: 'HBS' } },
+    master_practices: { practice_code: 'PR-' + i, name: 'Lead ' + i, state: 'TX', specialty: null, deleted_at: null, practice_providers: [] },
+  }))
+  const transfers = worksheets.filter((_, i) => i % 10 === 0).map(w => ({ practice_id: w.practice_id, tenant_id: w.tenant_id, to_user_id: 'c1', note: 'Sent', users: { full_name: 'Cal' } }))
+  return { lead_worksheets: worksheets, lead_transfers: transfers }
+}
+async function reportsAs(role, me, tables, options) {
+  const log = []
+  const { getWorksheetReports, getWorksheetCompanyCounts } = loadTs('app/worksheet-reports-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => worksheetDb(tables, log), getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { ...me, roles: { key: role }, tenants: { name: 'HBS' } } }) } })
+  return { res: Array.isArray(options) ? await getWorksheetCompanyCounts(options) : await getWorksheetReports(options), log }
+}
+
+test('worksheet reports: all 2,350 worksheets load (no 300 cap, no 1,000-row cut-off)', async () => {
+  const { res, log } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(2350))
+  assert.equal(res.ok, true); assert.equal(res.rows.length, 2350); assert.equal(res.truncated, false)
+  assert.equal(new Set(res.rows.map(r => r.practiceId)).size, 2350)                       // no duplicates across pages
+  assert.equal(res.rows.filter(r => r.handoffStatus === 'Sent').length, 235)                // every transfer matched
+  const transferCalls = log.filter(c => c.table === 'lead_transfers')
+  assert.ok(transferCalls.length >= 12 && transferCalls.every(c => c.ins[1].length <= 200))   // batched, short requests
+})
+
+test('worksheet reports: company filter in the database; agents see only their own', async () => {
+  let { res, log } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(600), { companyId: '22222222-2222-2222-2222-222222222222' })
+  assert.ok(log.filter(c => c.table === 'lead_worksheets').every(c => c.eqs.some(([k, v]) => k === 'tenant_id' && v === '22222222-2222-2222-2222-222222222222')))
+  ;({ res } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(600), { companyId: "x' or 1=1" }))
+  assert.equal(res.rows.length, 600)                                                        // garbage company id ignored
+  ;({ res, log } = await reportsAs('manager', { id: 'm1', tenant_id: 'T1' }, worksheetTables(600), { companyId: '22222222-2222-2222-2222-222222222222' }))
+  assert.ok(res.rows.every(r => r.tenantId === 'T1')); assert.equal(res.rows.length, 400)  // managers: own company only, all of it
+  ;({ res } = await reportsAs('agent', { id: 'a1', tenant_id: 'T1' }, worksheetTables(600)))
+  assert.equal(res.rows.length, 300); assert.ok(res.rows.length > 0)                       // agent a1 has exactly half (300 here) — all of them
+  ;({ res } = await reportsAs('agent', { id: 'a1', tenant_id: 'T1' }, worksheetTables(1200)))
+  assert.equal(res.rows.length, 600)                                                        // beyond 300: still all of them
+})
+
+test('worksheet company counts: exact, and only for Super Admin', async () => {
+  const U1 = '11111111-1111-1111-1111-111111111111', U2 = '22222222-2222-2222-2222-222222222222'
+  const tables = worksheetTables(900)
+  for (const w of tables.lead_worksheets) w.tenant_id = w.tenant_id === 'T1' ? U1 : U2
+  let { res } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, tables, [U1, U2, 'not-a-company-id'])
+  assert.deepEqual(res, { [U1]: 600, [U2]: 300 })
+  ;({ res } = await reportsAs('manager', { id: 'm1', tenant_id: U1 }, tables, [U1, U2]))
+  assert.deepEqual(res, {})
+})

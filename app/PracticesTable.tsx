@@ -47,7 +47,8 @@ type Props = {
   viewerRole?: string
   completedWorksheetCount?: number
 }
-
+const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
+const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
 // ---- palette (dark, matches the sample) ----
 const C = {
   bg: 'var(--bg)',
@@ -208,7 +209,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
+         setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -728,12 +729,12 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <label className="filter-control"><span>Enrichment</span><select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select></label>
           </div>
           <div className="signal-filter-row">
-            <strong>Signals</strong>
-            {SIGNALS.map((s) => (
-              <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
-            ))}
-            <SampleTag note="MIPS year / enrichment filters are display-only" />
-          </div>
+  {/* <strong>Signals</strong> */}
+  {ADVANCED_SIGNALS.map((s) => (
+    <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+  ))}
+  {/* <SampleTag note="MIPS year / enrichment filters are display-only" /> */}
+</div>
         </details>
 
         {activeFilterCount > 0 && (

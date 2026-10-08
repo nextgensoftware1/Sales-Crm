@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { chunks, mapConcurrent, readAllPages } from '../lib/query-utils'
 
 export type WorksheetReportRow = {
   practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null
@@ -68,7 +69,11 @@ function deriveSignals(provider: {
   }
 }
 
-const REPORT_LIMIT = 300
+// Every worksheet in scope is loaded (no cap). Rows are read in pages of
+// 1,000 — Supabase returns at most 1,000 per request — and transfers are
+// looked up in batches so the request never gets too long.
+const PAGE_SIZE = 1000
+const TRANSFER_BATCH = 200
 
 type RawWorksheet = {
   practice_id: string
@@ -106,7 +111,11 @@ type RawTransfer = {
   users: { full_name: string | null } | null
 }
 
-export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+/**
+ * All worksheets the signed-in user may see. Super Admin can pass a company
+ * to load only that company's worksheets (filtered in the database).
+ */
+export async function getWorksheetReports(options: { companyId?: string } = {}): Promise<WorksheetReportsResult> {
   const supabase = await createSupabaseServer()
   const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
@@ -121,7 +130,8 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   const isPersonal = roleKey === 'agent' || roleKey === 'closer'
   if (!isSuperAdmin && !me.tenant_id) return { ok: false, message: 'Your account is not assigned to a company.' }
 
-  let query = supabase.from('lead_worksheets').select(`
+  const companyId = isSuperAdmin && typeof options.companyId === 'string' && /^[0-9a-f-]{36}$/i.test(options.companyId) ? options.companyId : ''
+  const select = `
     practice_id, tenant_id, call_details, additional_phone, email,
     concerned_person, direct_line, callback_at, timezone, disposition,
     updated_by, updated_at, import_data,
@@ -135,25 +145,37 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
         provider_mips(performance_year, status, reporting_option)
       ))
     )
-  `).is('master_practices.deleted_at', null)
-    .order('updated_at', { ascending: false }).limit(REPORT_LIMIT + 1)
-  if (isPersonal) query = query.eq('updated_by', me.id)
-  else if (!isSuperAdmin) query = query.eq('tenant_id', me.tenant_id!)
-
-  const { data, error } = await query
-  if (error) return { ok: false, message: error.message }
-  const all = (data ?? []) as unknown as RawWorksheet[]
-  const truncated = all.length > REPORT_LIMIT
-  const page = truncated ? all.slice(0, REPORT_LIMIT) : all
+  `
+  // Newest first; practice + company make the order unique so pages never
+  // overlap or skip a worksheet.
+  const readPage = (from: number, to: number, withCount: boolean) => {
+    let q = supabase.from('lead_worksheets').select(select, withCount ? { count: 'exact' } : undefined)
+      .is('master_practices.deleted_at', null)
+    if (isPersonal) q = q.eq('updated_by', me.id)
+    else if (!isSuperAdmin) q = q.eq('tenant_id', me.tenant_id!)
+    if (companyId) q = q.eq('tenant_id', companyId)
+    return q.order('updated_at', { ascending: false }).order('practice_id').order('tenant_id').range(from, to)
+  }
+  let page: RawWorksheet[]
+  try {
+    page = await readAllPages<RawWorksheet>(readPage as never, { pageSize: PAGE_SIZE, concurrency: 4 })
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : (error as { message?: string })?.message ?? 'Could not load worksheets.' }
+  }
+  const truncated = false
 
   const practiceIds = [...new Set(page.map(row => row.practice_id))]
-  let transferQuery = supabase.from('lead_transfers')
-    .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
-  if (practiceIds.length) transferQuery = transferQuery.in('practice_id', practiceIds)
-  if (!isSuperAdmin) transferQuery = transferQuery.eq('tenant_id', me.tenant_id!)
-  const { data: transfers } = practiceIds.length ? await transferQuery : { data: [] }
+  const transferBatches = await mapConcurrent(chunks(practiceIds, TRANSFER_BATCH), 4, async (ids) => {
+    let q = supabase.from('lead_transfers')
+      .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
+      .in('practice_id', ids)
+    if (!isSuperAdmin) q = q.eq('tenant_id', me.tenant_id!)
+    else if (companyId) q = q.eq('tenant_id', companyId)
+    const { data } = await q
+    return (data ?? []) as unknown as RawTransfer[]
+  })
   const transferByKey = new Map<string, RawTransfer>()
-  for (const transfer of (transfers ?? []) as unknown as RawTransfer[]) {
+  for (const transfer of transferBatches.flat()) {
     transferByKey.set(`${transfer.practice_id}:${transfer.tenant_id}`, transfer)
   }
 
@@ -268,4 +290,26 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     importData: Object.fromEntries(Object.entries(item.import_data).map(([key, value]) => [key, String(value ?? '')])),
     ...deriveSignals(provider),
   } }
+}
+
+/**
+ * Super Admin: exact number of worksheets per company (counted in the
+ * database, deleted leads excluded) for the company list on the page.
+ */
+export async function getWorksheetCompanyCounts(companyIds: string[]): Promise<Record<string, number>> {
+  // Callable from the browser like every action here, so check the caller.
+  const { data: { user } } = await getCurrentUser()
+  if (!user) return {}
+  const { data: me } = await getCurrentProfile(user.id)
+  if (me?.roles?.key !== 'super_admin' || !Array.isArray(companyIds)) return {}
+  const ids = companyIds.filter((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)).slice(0, 500)
+  const supabase = await createSupabaseServer()
+  const counts: Record<string, number> = {}
+  await mapConcurrent(ids, 6, async (id) => {
+    const { count } = await supabase.from('lead_worksheets')
+      .select('practice_id, master_practices!inner(deleted_at)', { count: 'exact', head: true })
+      .eq('tenant_id', id).is('master_practices.deleted_at', null)
+    counts[id] = count ?? 0
+  })
+  return counts
 }
