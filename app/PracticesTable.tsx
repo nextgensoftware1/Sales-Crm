@@ -7,7 +7,8 @@ import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
 import { assignLeadsToAgent } from './assign-actions'
 import { unpackRows, type PackedRows } from '../lib/lead-pack'
-import { queryLeadPage } from './leads-page-actions'
+import { queryLeadPage, refreshLeadSnapshot } from './leads-page-actions' // ← CHANGED: + refreshLeadSnapshot
+import { markLeadsChanged } from '../lib/leads-fresh' // ← ADDED
 import { formatCalendarDate } from '../lib/assigned-dates'
 import WorkspacePanelToggle, { useWorkspacePanel } from './WorkspacePanelToggle'
 import {
@@ -32,6 +33,7 @@ type Props = {
     rows: Practice[]
     codes?: string[]
     pageSize: number
+    stale?: boolean // ← ADDED: opened from a recent snapshot; refresh in the background
   }
   companies?: Company[]
   isSuperAdmin?: boolean
@@ -45,8 +47,7 @@ type Props = {
   viewerRole?: string
   completedWorksheetCount?: number
 }
-const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
-const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
+
 // ---- palette (dark, matches the sample) ----
 const C = {
   bg: 'var(--bg)',
@@ -207,7 +208,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-         setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
+          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -319,6 +320,31 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const [serverLoading, setServerLoading] = useState(false)
   const [serverError, setServerError] = useState('')
   const requestSeq = useRef(0)
+
+  // ← ADDED: background refresh after an instant (snapshot) page open.
+  // "Updating…" shows until the refresh for this page load has finished.
+  const [refreshDoneFor, setRefreshDoneFor] = useState('')
+  const refreshing = Boolean(serverPaging?.stale) && refreshDoneFor !== serverPaging?.snapshotId
+  const refreshedFor = useRef('')
+  useEffect(() => {
+    const incoming = serverPaging?.snapshotId ?? ''
+    if (!incoming || refreshedFor.current === incoming) return
+    // Any newer page load (e.g. after allocating) makes an older background
+    // refresh irrelevant — its result is ignored below.
+    refreshedFor.current = incoming
+    if (!serverPaging?.stale) return
+    refreshLeadSnapshot().then((res) => {
+      if (refreshedFor.current !== incoming) return // a newer page load replaced this one
+      if (res.ok) {
+        // A new snapshot id makes the effect below re-read the current
+        // filters and page from the fresh data.
+        setServerOverview(res.overview)
+        setServerSnapshotId(res.snapshotId)
+      }
+    }).catch(() => { /* keep showing the recent data; a reload fetches fresh */ })
+      .finally(() => setRefreshDoneFor(incoming))
+    // Runs once per page load (StrictMode's second run is skipped by refreshedFor).
+  }, [serverPaging?.snapshotId, serverPaging?.stale])
 
   // After an action calls router.refresh(), the page sends a new snapshot.
   const incomingSnapshotId = serverPaging?.snapshotId
@@ -443,6 +469,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     setAllocMsg(res.message)
     if (res.ok) {
       setSelected(new Set())
+      markLeadsChanged() // ← ADDED: show this change immediately (no instant snapshot)
       router.refresh()
     }
   }
@@ -462,6 +489,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     setIsDeleting(false)
     if (res.ok) {
       setSelected(new Set())
+      markLeadsChanged() // ← ADDED: show this change immediately (no instant snapshot)
       router.refresh()
     }
   }
@@ -473,6 +501,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     setAssignMsg(res.message)
     if (res.ok) {
       setSelected(new Set())
+      markLeadsChanged() // ← ADDED: show this change immediately (no instant snapshot)
       router.refresh()
     }
   }
@@ -580,12 +609,12 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         ))}
       </section>
 
-      
-
       {/* ---- Lead Pool bar ---- */}
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filteredCount} leads)</span></h2>
+          <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filteredCount} leads)</span>
+            {refreshing && <span role="status" className="leads-section-count" style={{ marginLeft: 8, fontSize: 12 }}>· Updating…</span>}{/* ← ADDED */}
+          </h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
         {hasPriority && (
@@ -698,13 +727,13 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <label className="filter-control"><span>MIPS year</span><select disabled style={{ ...input, opacity: 0.6 }}><option>MIPS Year 2026</option></select></label>
             <label className="filter-control"><span>Enrichment</span><select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select></label>
           </div>
-        <div className="signal-filter-row">
-  {/* <strong>Signals</strong> */}
-  {ADVANCED_SIGNALS.map((s) => (
-    <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
-  ))}
-  {/* <SampleTag note="MIPS year / enrichment filters are display-only" /> */}
-</div>
+          <div className="signal-filter-row">
+            <strong>Signals</strong>
+            {SIGNALS.map((s) => (
+              <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+            ))}
+            <SampleTag note="MIPS year / enrichment filters are display-only" />
+          </div>
         </details>
 
         {activeFilterCount > 0 && (
@@ -942,17 +971,6 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     </div>
   )
 
-  // ---- small components ----
-  function LabeledSelect({ label, options }: { label: string; options: string[] }) {
-    return (
-      <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 12px', background: C.panelAlt }}>
-        <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5 }}>{label}</div>
-        <select disabled style={{ ...input, border: 'none', background: 'transparent', padding: '4px 0', width: '100%' }}>
-          {options.map((o) => <option key={o}>{o}</option>)}
-        </select>
-      </div>
-    )
-  }
 }
 
 // Format an ISO timestamp as "12 Sep 2026, 3:04 PM" (blank if none).

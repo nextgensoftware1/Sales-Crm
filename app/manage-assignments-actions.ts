@@ -139,6 +139,84 @@ export async function getCompanyAllocatedLeads(companyId: string): Promise<{
   return { ok: true, leads }
 }
 
+// ← ADDED: one page of a company's allocated leads (Assigned Leads page).
+// Before, choosing a company downloaded EVERY allocated lead (thousands for a
+// big company, ~1,000 rows per request) and drew them all in one table. Now
+// the database returns only the requested page plus the total count. The
+// optional date range is the chosen "Allocated on" day in the viewer's own
+// time zone, converted to UTC by the browser.
+const ALLOCATED_PAGE_MAX = 200
+export async function getCompanyAllocatedLeadsPage(input: {
+  companyId: string
+  page: number
+  pageSize: number
+  fromIso?: string | null
+  toIso?: string | null
+}): Promise<{
+  ok: boolean
+  message?: string
+  total?: number
+  page?: number
+  pageSize?: number
+  leads?: { practiceCode: string; name: string; state: string | null; specialty: string | null; allocatedAt: string; status: string }[]
+}> {
+  const supabase = await createSupabaseServer()
+  const me = await whoAmI()
+  if (!me) return { ok: false, message: 'Not signed in.' }
+  if (me.roleKey !== 'super_admin') return { ok: false, message: 'Only Super Admin can view company allocations.' }
+  const companyId = String(input?.companyId ?? '')
+  if (!/^[0-9a-f-]{36}$/i.test(companyId)) return { ok: false, message: 'Choose a company.' }
+
+  const pageSize = Math.min(ALLOCATED_PAGE_MAX, Math.max(1, Math.floor(Number(input?.pageSize)) || 50))
+  const page = Math.max(1, Math.floor(Number(input?.page)) || 1)
+  const validIso = (value: unknown) => (typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null)
+  const fromIso = validIso(input?.fromIso)
+  const toIso = validIso(input?.toIso)
+
+  const runQuery = (pageNumber: number) => {
+    const start = (pageNumber - 1) * pageSize
+    // !inner: leads whose practice row no longer exists are left out of both
+    // the rows and the count (the old code also skipped them).
+    let query = supabase
+      .from('lead_allocations')
+      .select('allocated_at, status, master_practices!inner(practice_code, name, state, specialty)', { count: 'exact' })
+      .eq('tenant_id', companyId)
+      .eq('status', 'active')
+    if (fromIso) query = query.gte('allocated_at', fromIso)
+    if (toIso) query = query.lt('allocated_at', toIso)
+    // Same order as before; practice_id breaks ties from bulk allocations.
+    return query.order('allocated_at', { ascending: false }).order('practice_id').range(start, start + pageSize - 1)
+  }
+
+  const first = await runQuery(page)
+  let { data, error } = first
+  const total = first.count ?? 0
+  const lastPage = Math.max(1, Math.ceil(total / pageSize))
+  let safePage = page
+  // Asked past the end (e.g. leads were removed): return the last page instead.
+  if (!error && page > lastPage) {
+    safePage = lastPage
+    ;({ data, error } = await runQuery(lastPage))
+  }
+  if (error) return { ok: false, message: error.message }
+
+  type AllocatedRow = {
+    allocated_at: string
+    status: string
+    master_practices: { practice_code: string; name: string | null; state: string | null; specialty: string | null } | null
+  }
+  const leads = ((data ?? []) as unknown as AllocatedRow[]).map((row) => ({
+    practiceCode: row.master_practices?.practice_code ?? '',
+    name: row.master_practices?.name ?? 'Unnamed practice',
+    state: row.master_practices?.state ?? null,
+    specialty: row.master_practices?.specialty ?? null,
+    allocatedAt: row.allocated_at,
+    status: row.status,
+  })).filter((lead) => lead.practiceCode)
+
+  return { ok: true, total, page: safePage, pageSize, leads }
+}
+
 // People with active assignments in my scope, with a count.
 export async function getMyAssignmentSummary(): Promise<{
   ok: boolean

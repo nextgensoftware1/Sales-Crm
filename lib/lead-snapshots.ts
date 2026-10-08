@@ -25,6 +25,10 @@ export type LeadSnapshot = {
   overview: LeadOverview
   /** Deep-search results per search text (phone/email/city/ZIP/contact). */
   deepSearch: Map<string, Set<string>>
+  // ← ADDED: everything the Leads page needs to render from this snapshot,
+  // plus the signed-in profile (id|status|role|company) it was built for.
+  data: LeadsData
+  profileKey: string | null
 }
 
 const TTL_MS = 30 * 60 * 1000
@@ -41,7 +45,7 @@ function prune(now: number) {
   while (store.size > MAX_TOTAL) store.delete(store.keys().next().value as string)
 }
 
-export function saveLeadSnapshot(userId: string, data: LeadsData): LeadSnapshot {
+export function saveLeadSnapshot(userId: string, data: LeadsData, profileKey: string | null = null): LeadSnapshot { // ← CHANGED: + profileKey
   const now = Date.now()
   const ctx: LeadContext = {
     isSuperAdmin: data.isSuperAdmin,
@@ -59,6 +63,8 @@ export function saveLeadSnapshot(userId: string, data: LeadsData): LeadSnapshot 
     ctx,
     overview: leadOverview(practices, { ...ctx, completedWorksheetCount: data.completedWorksheetCount }),
     deepSearch: new Map(),
+    data, // ← ADDED
+    profileKey, // ← ADDED
   }
   // Keep only this user's newest snapshots.
   const mine = [...store.values()].filter((s) => s.userId === userId).sort((a, b) => a.createdAt - b.createdAt)
@@ -73,6 +79,27 @@ export function getLeadSnapshot(id: string, userId: string): LeadSnapshot | null
   if (!snap || snap.userId !== userId) return null
   if (Date.now() - snap.createdAt > TTL_MS) { store.delete(id); return null }
   return snap
+}
+
+// ← ADDED: identifies the profile a snapshot was built for. If the user's
+// role, company or status changes, old snapshots no longer match.
+export function leadProfileKey(profile: { id?: string | null; status?: string | null; tenant_id?: string | null; roles?: { key?: string | null } | null } | null | undefined): string | null {
+  if (!profile?.id || profile.status !== 'active') return null
+  return [profile.id, profile.status, profile.roles?.key ?? '', profile.tenant_id ?? ''].join('|')
+}
+
+// ← ADDED: the newest snapshot this user can reuse to show the Leads page
+// immediately (the browser then refreshes it in the background).
+export function getReusableLeadSnapshot(userId: string, profileKey: string | null, maxAgeMs: number): LeadSnapshot | null {
+  if (!profileKey) return null
+  const now = Date.now()
+  let best: LeadSnapshot | null = null
+  for (const snap of store.values()) {
+    if (snap.userId !== userId || snap.profileKey !== profileKey) continue
+    if (now - snap.createdAt > Math.min(maxAgeMs, TTL_MS)) continue
+    if (!best || snap.createdAt > best.createdAt) best = snap
+  }
+  return best
 }
 
 export const MAX_PAGE_SIZE = 200

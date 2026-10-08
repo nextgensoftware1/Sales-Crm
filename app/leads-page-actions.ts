@@ -6,10 +6,10 @@
 // restart, expired), the snapshot is rebuilt with the same loader the page uses.
 
 import { loadLeadsData } from '../lib/leads-data'
-import { getLeadSnapshot, saveLeadSnapshot, queryLeadSnapshot } from '../lib/lead-snapshots'
+import { getLeadSnapshot, saveLeadSnapshot, queryLeadSnapshot, leadProfileKey } from '../lib/lead-snapshots' // ← CHANGED: + leadProfileKey
 import { sanitizeLeadFilters } from '../lib/lead-filters'
 import { deepSearchLeadCodes } from '../lib/lead-deep-search'
-import { createSupabaseServer, getCurrentUser } from '../lib/supabase-server'
+import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // ← CHANGED: + getCurrentProfile
 
 export async function queryLeadPage(input: {
   snapshotId: string
@@ -29,7 +29,8 @@ export async function queryLeadPage(input: {
     if (data.kind !== 'ok' || data.authUserId !== user.id) {
       return { ok: false as const, message: 'Could not load leads. Please refresh the page.' }
     }
-    snapshot = saveLeadSnapshot(user.id, data)
+    const { data: me } = await getCurrentProfile(user.id) // ← ADDED
+    snapshot = saveLeadSnapshot(user.id, data, leadProfileKey(me)) // ← CHANGED: + profile key
     rebuilt = true
   }
 
@@ -68,4 +69,20 @@ export async function queryLeadPage(input: {
     overview: rebuilt ? snapshot.overview : undefined,
     ...result,
   }
+}
+
+// ← ADDED: when the Leads page opened instantly from a recent snapshot, the
+// browser calls this right away to load fresh data in the background. It
+// builds a new snapshot with the exact same loader the page uses; the table
+// then re-reads its current filters/page from the new snapshot.
+export async function refreshLeadSnapshot() {
+  const { data: { user } } = await getCurrentUser()
+  if (!user) return { ok: false as const, message: 'Your session has ended. Please sign in again.' }
+  const data = await loadLeadsData()
+  if (data.kind !== 'ok' || data.authUserId !== user.id) {
+    return { ok: false as const, message: 'Could not refresh leads. Please reload the page.' }
+  }
+  const { data: me } = await getCurrentProfile(user.id)
+  const snapshot = saveLeadSnapshot(user.id, data, leadProfileKey(me))
+  return { ok: true as const, snapshotId: snapshot.id, overview: snapshot.overview }
 }

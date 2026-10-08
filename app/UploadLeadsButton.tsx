@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { uploadLeadsCsv } from './upload-actions'
 import { parseCsv, type CsvRow } from '../lib/csv' // ← CHANGED: + CsvRow type
+import { markLeadsChanged } from '../lib/leads-fresh' // ← ADDED
 
 // ← ADDED: big files are sent in parts. One request is capped at 10 MB
 // locally and 4.5 MB on Vercel, so a ~10,000-row CSV in one go fails with
@@ -90,7 +91,7 @@ export default function UploadLeadsButton() {
         setMsg(`Uploading ${parsed.length} rows…`)
         const res = await uploadLeadsCsv(parts[0])
         setMsg(res.message)
-        if (res.ok) router.refresh()
+        if (res.ok) { markLeadsChanged(); router.refresh() } // ← CHANGED
         return
       }
 
@@ -144,7 +145,7 @@ export default function UploadLeadsButton() {
     } finally {
       setBusy(false)
       if (inputRef.current) inputRef.current.value = ''
-      if (anySaved) router.refresh() // ← ADDED: show saved rows even if a later part failed
+      if (anySaved) { markLeadsChanged(); router.refresh() } // ← CHANGED: show saved rows even if a later part failed (fresh, not the instant snapshot)
     }
   }
 
