@@ -1607,3 +1607,93 @@ test('Clients page: Active clients / Sold leads tabs; Sold Leads gone from the s
   assert.equal(/href: '\/sold-leads'/.test(shell), false)
   assert.match(shell, /href: '\/clients\?tab=sold', label: 'Sold leads'/)
 })
+
+// ---------------------------------------------------------------------------
+// Dashboard-wide Company / Agent filters
+// ---------------------------------------------------------------------------
+async function dashboardAs(role, me, sp) {
+  const calls = []
+  const tables = {
+    tenants: [{ id: '11111111-1111-1111-1111-111111111111', name: 'HBS', is_platform: false }, { id: '22222222-2222-2222-2222-222222222222', name: 'TEST', is_platform: false }],
+    users: [{ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', full_name: 'Aqsam', tenant_id: '11111111-1111-1111-1111-111111111111' },
+            { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', full_name: 'Test Agent', tenant_id: '22222222-2222-2222-2222-222222222222' }],
+  }
+  const db = { from(table) {
+    const rec = { table, eqs: [], select: null }; calls.push(rec)
+    const q = {
+      select(cols) { rec.select = cols; return q }, order() { return q }, gte() { return q }, lte() { return q }, range() { return q },
+      eq(k, v) { rec.eqs.push([k, v]); return q },
+      then(res, rej) {
+        const rows = (tables[table] ?? []).filter(r => rec.eqs.every(([k, v]) => !(k in r) || r[k] === v))
+        return Promise.resolve({ data: rows, count: 0, error: null }).then(res, rej)
+      },
+    }
+    return q
+  } }
+  let viewProps = null
+  const { default: Page } = loadTs('app/dashboard/page.tsx', {
+    '../../lib/supabase-server': { createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { ...me, roles: { key: role } } }) },
+    './DashboardView': function DashboardView(props) { viewProps = props; return null },
+    'next/navigation': { redirect: () => { throw Error('redirect') } },
+  })
+  const el = await Page({ searchParams: Promise.resolve(sp) })
+  viewProps = el.props
+  const eqsOf = (table) => calls.filter(c => c.table === table).flatMap(c => c.eqs)
+  return { props: viewProps, eqsOf }
+}
+const HBS = '11111111-1111-1111-1111-111111111111', TEST_CO = '22222222-2222-2222-2222-222222222222'
+const AQSAM = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', TEST_AGENT = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+
+test('dashboard filters (super admin): company + agent apply to every number', async () => {
+  const { props, eqsOf } = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(props.filters.company, TEST_CO); assert.equal(props.filters.agent, TEST_AGENT)
+  assert.deepEqual(props.filters.people.map(p => p.name), ['Test Agent'])
+  assert.match(props.scopeLabel, /TEST · Test Agent/)
+  for (const [table, agentCol, tenantCol] of [['lead_activity', 'agent_id', 'tenant_id'], ['lead_transfers', 'from_user_id', 'tenant_id'], ['sales', 'sold_by', 'tenant_id'], ['client_ownership', 'sales.sold_by', 'owner_tenant_id']]) {
+    const eqs = eqsOf(table)
+    assert.ok(eqs.some(([k, v]) => k === tenantCol && v === TEST_CO), `${table} filtered by company`)
+    assert.ok(eqs.some(([k, v]) => k === agentCol && v === TEST_AGENT), `${table} filtered by agent`)
+  }
+})
+
+test('dashboard filters: an agent from another company is ignored; managers cannot pick a company', async () => {
+  // Super admin: agent must belong to the chosen company.
+  let r = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: HBS, agent: TEST_AGENT })
+  assert.equal(r.props.filters.agent, '')
+  // Manager of HBS: company param ignored; agent from TEST ignored; own agent works.
+  r = await dashboardAs('manager', { id: 'm1', tenant_id: HBS, tenants: { name: 'HBS' } }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(r.props.filters.company, ''); assert.equal(r.props.filters.agent, '')
+  assert.deepEqual(r.props.filters.companies, [])
+  assert.ok(r.eqsOf('lead_transfers').every(([k, v]) => !(k === 'tenant_id' && v === TEST_CO)))
+  r = await dashboardAs('manager', { id: 'm1', tenant_id: HBS, tenants: { name: 'HBS' } }, { agent: AQSAM })
+  assert.equal(r.props.filters.agent, AQSAM)
+  assert.ok(r.eqsOf('lead_transfers').some(([k, v]) => k === 'from_user_id' && v === AQSAM))
+  // Agent: always just their own work, no filters offered.
+  r = await dashboardAs('agent', { id: AQSAM, tenant_id: HBS }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(r.props.filters.canPickAgent, false); assert.deepEqual(r.props.filters.people, [])
+  assert.ok(r.eqsOf('lead_transfers').some(([k, v]) => k === 'from_user_id' && v === AQSAM))
+  assert.ok(r.eqsOf('lead_transfers').every(([, v]) => v !== TEST_AGENT))
+  // Garbage values are ignored.
+  r = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: "x' or 1=1", agent: '../../etc' })
+  assert.equal(r.props.filters.company, ''); assert.equal(r.props.filters.agent, '')
+})
+
+test('page-shared value: two separate copies of the module share one value (panel ↔ page)', () => {
+  const savedWindow = global.window
+  global.window = new EventTarget()
+  try {
+    // Load the helper twice = two bundles, each with its own module copy.
+    const a = loadTs('lib/page-shared-value.ts'), b = loadTs('lib/page-shared-value.ts')
+    assert.notEqual(a, b)
+    let heard = 0
+    window.addEventListener('hbs-shared-value:kpi-company', () => { heard++ })
+    a.setSharedValue('kpi-company', 'T2')
+    assert.equal(window.__hbsSharedValues['kpi-company'], 'T2')
+    b.setSharedValue('kpi-company', 'T2')          // same value: no extra event
+    b.setSharedValue('kpi-company', 'T3')
+    assert.equal(heard, 2)
+    assert.equal(window.__hbsSharedValues['worksheet-search'] ?? '', '')   // separate keys stay separate
+  } finally {
+    if (savedWindow === undefined) delete global.window; else global.window = savedWindow
+  }
+})

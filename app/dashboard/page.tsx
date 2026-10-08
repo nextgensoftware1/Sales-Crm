@@ -17,7 +17,7 @@ function currentMonthRange(): { from: string; to: string } {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>
+  searchParams: Promise<{ from?: string; to?: string; company?: string; agent?: string }>
 }) {
   const supabase = await createSupabaseServer()
 
@@ -42,11 +42,31 @@ export default async function DashboardPage({
   const toDate = requested ? (sp.to as string) : defaults.to
   const { fromISO, toISO } = requested ?? rangeBounds(defaults.from, defaults.to)!
 
-  // Helper: apply the right scope to a query on a table that has tenant_id + agent_id
-  const scope = (q: any, agentCol = 'agent_id') => {
-    if (isSuperAdmin) return q
+  // ---- Dashboard-wide Company / Agent filters (apply to every number) ----
+  // Company: Super Admin only. Agent: Super Admin (within the chosen company)
+  // and company admins / managers / team leads (own company only). Agents and
+  // closers always see just their own work.
+  const isUuid = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v)
+  const { data: companyRows } = isSuperAdmin
+    ? await supabase.from('tenants').select('id, name').eq('is_platform', false).order('name')
+    : { data: null }
+  const companies = ((companyRows ?? []) as { id: string; name: string }[])
+  const companyFilter = isSuperAdmin && isUuid(sp.company) && companies.some((c) => c.id === sp.company) ? sp.company : ''
+  const peopleTenant = isSuperAdmin ? companyFilter || null : isAgentOrCloser ? null : myTenantId
+  const { data: peopleRows } = peopleTenant
+    ? await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).order('full_name')
+    : { data: null }
+  const people = ((peopleRows ?? []) as { id: string; full_name: string | null }[]).map((u) => ({ id: u.id, name: u.full_name ?? 'Unknown' }))
+  const agentFilter = isUuid(sp.agent) && people.some((p) => p.id === sp.agent) ? sp.agent : ''
+
+  // Helper: apply the right scope + filters to a query on a table with a
+  // tenant column and a person column (agent_id, from_user_id, sold_by, ...).
+  const scope = (q: any, agentCol = 'agent_id', tenantCol = 'tenant_id') => {
     if (isAgentOrCloser) return q.eq(agentCol, myUserId)
-    return q.eq('tenant_id', myTenantId)
+    if (!isSuperAdmin) q = q.eq(tenantCol, myTenantId)
+    if (companyFilter) q = q.eq(tenantCol, companyFilter)
+    if (agentFilter) q = q.eq(agentCol, agentFilter)
+    return q
   }
 
   // --- Build all four queries, then run them IN PARALLEL (one latency hit) ---
@@ -65,19 +85,17 @@ export default async function DashboardPage({
     return q.order('created_at').order('practice_id').order('agent_id').range(from, to)
   }).then((data) => ({ data, count: data.length }))
 
-  let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
-    .gte('created_at', fromISO).lte('created_at', toISO)
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) transQ = transQ.eq('from_user_id', myUserId)
-  else transQ = transQ.eq('tenant_id', myTenantId)
+  const transQ = scope(supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
+    .gte('created_at', fromISO).lte('created_at', toISO), 'from_user_id')
 
-  let salesQ = supabase.from('sales').select('contract_value, mrr')
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) salesQ = salesQ.eq('sold_by', myUserId)
-  else salesQ = salesQ.eq('tenant_id', myTenantId)
+  const salesQ = scope(supabase.from('sales').select('contract_value, mrr'), 'sold_by')
 
-  let clientQ = supabase.from('client_ownership').select('id', { count: 'exact', head: true }).eq('active', true)
+  // Active clients: company via owner_tenant_id; agent = who sold it.
+  let clientQ = supabase.from('client_ownership')
+    .select(agentFilter ? 'id, sales!inner(sold_by)' : 'id', { count: 'exact', head: true }).eq('active', true)
   if (!isSuperAdmin) clientQ = clientQ.eq('owner_tenant_id', myTenantId)
+  if (companyFilter) clientQ = clientQ.eq('owner_tenant_id', companyFilter)
+  if (agentFilter) clientQ = clientQ.eq('sales.sold_by', agentFilter)
 
   const [actRes, transRes, salesRes, clientRes] = await Promise.all([actQ, transQ, salesQ, clientQ])
 
@@ -103,7 +121,11 @@ export default async function DashboardPage({
   const proposalsCount = dispoCounts['Proposal'] ?? 0
   const contractsCount = dispoCounts['Contract'] ?? 0
 
-  const scopeLabel = isSuperAdmin
+  const companyLabel = companies.find((c) => c.id === companyFilter)?.name
+  const agentLabel = people.find((p) => p.id === agentFilter)?.name
+  const scopeLabel = (isSuperAdmin || agentFilter) && (companyLabel || agentLabel)
+    ? [isSuperAdmin ? 'Platform-wide' : (me as any)?.tenants?.name, companyLabel, agentLabel].filter(Boolean).join(' · ')
+    : isSuperAdmin
     ? 'Platform-wide · all companies'
     : isAgentOrCloser
     ? `${(me as any)?.full_name} · personal`
@@ -135,6 +157,7 @@ export default async function DashboardPage({
       isSuperAdmin={isSuperAdmin}
       fromDate={fromDate}
       toDate={toDate}
+      filters={{ company: companyFilter, agent: agentFilter, companies, people, canPickAgent: !isAgentOrCloser }}
     />
   )
 }

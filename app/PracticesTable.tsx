@@ -45,7 +45,8 @@ type Props = {
   viewerRole?: string
   completedWorksheetCount?: number
 }
-
+const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
+const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
 // ---- palette (dark, matches the sample) ----
 const C = {
   bg: 'var(--bg)',
@@ -206,7 +207,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
+         setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -579,45 +580,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         ))}
       </section>
 
-      {/* ---- Distribution Console ---- */}
-      <section style={{ ...panel, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-          <div style={{ minWidth: 0 }}>
-            <h2 className="leads-section-title">Leads Distribution Console</h2>
-            <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Choose assignment details here. Use the workspace sidebar for search, status queues, and timezones.</div>
-          </div>
-          {/* <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {['All Leads', 'MIPS Leads', 'RCM Leads', 'CCM Leads'].map((t) => (
-              <span key={t} style={pill(t === 'All Leads')}>{t}</span>
-            ))}
-            <SampleTag />
-          </div> */}
-        </div>
-        <div className="grid-console">
-          {!isSuperAdmin && (
-            <LabeledSelect label="TARGET AGENT" options={['— Select Agent / Closer —']} />
-          )}
-          <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 12px', background: C.panelAlt }}>
-            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5, fontWeight: 700 }}>SPECIALTY</div>
-            <select
-              value={specialtyFilter}
-              onChange={(e) => setSpecialtyFilter(e.target.value)}
-              style={{ ...input, border: 'none', background: 'transparent', padding: '4px 0', width: '100%' }}
-            >
-              <option value="">— All Specialties —</option>
-              {specialties.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          </div>
-          <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, padding: '8px 12px', background: C.panelAlt }}>
-            <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.5, fontWeight: 700 }}>PRACTICE SIZE</div>
-            <div style={{ fontSize: 13, marginTop: 4, color: C.text, fontWeight: 700 }}>
-              {filteredCount === 0 ? '0' : `${pageStart + 1} to ${Math.min(pageStart + pageSize, filteredCount)}`}
-            </div>
-          </div>
-        </div>
-      </section>
+      
 
       {/* ---- Lead Pool bar ---- */}
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -735,13 +698,13 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <label className="filter-control"><span>MIPS year</span><select disabled style={{ ...input, opacity: 0.6 }}><option>MIPS Year 2026</option></select></label>
             <label className="filter-control"><span>Enrichment</span><select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select></label>
           </div>
-          <div className="signal-filter-row">
-            <strong>Signals</strong>
-            {SIGNALS.map((s) => (
-              <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
-            ))}
-            <SampleTag note="MIPS year / enrichment filters are display-only" />
-          </div>
+        <div className="signal-filter-row">
+  {/* <strong>Signals</strong> */}
+  {ADVANCED_SIGNALS.map((s) => (
+    <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+  ))}
+  {/* <SampleTag note="MIPS year / enrichment filters are display-only" /> */}
+</div>
         </details>
 
         {activeFilterCount > 0 && (

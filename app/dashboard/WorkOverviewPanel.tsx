@@ -13,9 +13,11 @@ const pct = (n: number, total: number) => (total ? Math.round((n / total) * 100)
  * it as a sub-filter) and per-agent numbers. Follows the Dashboard's date
  * range; Super Admin can pick a company, managers/admins an agent.
  */
-export default function WorkOverviewPanel({ fromDate, toDate }: { fromDate: string; toDate: string }) {
-  const [companyId, setCompanyId] = useState('')
-  const [agentId, setAgentId] = useState('')
+export default function WorkOverviewPanel({ fromDate, toDate, companyId = '', agentId = '' }: {
+  fromDate: string; toDate: string
+  /** Dashboard-wide filters from the top bar. */
+  companyId?: string; agentId?: string
+}) {
   const [disposition, setDisposition] = useState('')
   const [data, setData] = useState<WorkOverview | null>(null)
   const [loading, setLoading] = useState(true)
@@ -48,8 +50,6 @@ export default function WorkOverviewPanel({ fromDate, toDate }: { fromDate: stri
     return rows.filter((a) => (a.dispositions[disposition] ?? 0) > 0)
       .sort((a, b) => (b.dispositions[disposition] ?? 0) - (a.dispositions[disposition] ?? 0) || a.name.localeCompare(b.name))
   }, [data, disposition])
-  const activeFilters = [companyId, agentId, disposition].filter(Boolean).length
-  const clear = () => { setCompanyId(''); setAgentId(''); setDisposition('') }
 
   return (
     <section className="card wo-panel" aria-labelledby="wo-title" aria-busy={loading}>
@@ -59,27 +59,6 @@ export default function WorkOverviewPanel({ fromDate, toDate }: { fromDate: stri
           <h3 id="wo-title">Worksheets &amp; Transfers</h3>
           <p className="subtle">{label}{data?.scope === 'own' ? ' · your own work' : ''}</p>
         </div>
-        {team && (
-          <div className="wo-filters">
-            {superAdmin && (
-              <label className="filter-control"><span>Company</span>
-                <select className="input" aria-label="Company" value={companyId} onChange={(e) => { setCompanyId(e.target.value); setAgentId('') }}>
-                  <option value="">All companies</option>
-                  {(data?.companies ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </label>
-            )}
-            {(data?.people.length ?? 0) > 0 && (
-              <label className="filter-control"><span>Agent</span>
-                <select className="input" aria-label="Agent" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-                  <option value="">All agents</option>
-                  {data!.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </label>
-            )}
-            {activeFilters > 0 && <button type="button" className="btn" onClick={clear}>Clear ({activeFilters})</button>}
-          </div>
-        )}
       </header>
 
       {!data && loading ? <p className="subtle">Loading…</p>

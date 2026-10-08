@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { BadgeCheck, CalendarDays, Download, Filter, Search, Wallet, XCircle } from 'lucide-react'
+import { BadgeCheck, Building2, CalendarDays, ChevronRight, Download, Filter, Search, Wallet, XCircle } from 'lucide-react'
 import type { KpiCredit } from '../kpi-actions'
+import { useKpiCompany } from '../../lib/kpi-company-store'
 
 type Initial = { ok: boolean; message?: string; available: boolean; scope: 'own' | 'team'; credits: KpiCredit[]; isSuperAdmin: boolean }
 
@@ -21,7 +22,7 @@ const sum = (rows: KpiCredit[]): Totals => {
   return { count: verified.length, amount: verified.reduce((t, r) => t + r.amount, 0) }
 }
 
-export default function KpiClient({ initial }: { initial: Initial }) {
+export default function KpiClient({ initial, allCompanies = [] }: { initial: Initial; allCompanies?: { id: string; name: string }[] }) {
   const team = initial.scope === 'team'
   const superAdmin = initial.isSuperAdmin
   // "This month" and month labels depend on the viewer's time zone, so they
@@ -32,23 +33,38 @@ export default function KpiClient({ initial }: { initial: Initial }) {
     return () => window.clearTimeout(id)
   }, [])
 
-  const [period, setPeriod] = useState('all')
-  const [company, setCompany] = useState('')
-  const [agent, setAgent] = useState('')
+  // Verified-on range: From / To date + time in the viewer's local time
+  // (same as Worksheet Reports). Empty = open-ended; "To" includes its minute.
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
+  const fromMs = rangeFrom ? new Date(rangeFrom).getTime() : null
+  const toMs = rangeTo ? new Date(rangeTo).getTime() + 59_999 : null
+  const rangeReversed = fromMs !== null && toMs !== null && fromMs > toMs
+  // Shared with the company list in the left KPI panel (KpiCompanyNav).
+  const [company, setCompany] = useKpiCompany()
+  // A user pick belongs to the company it was made under, so switching
+  // company (here or in the left panel) clears it for good.
+  const [agentPick, setAgentPick] = useState<{ id: string; company: string }>({ id: '', company: '' })
+  const setAgent = (id: string) => setAgentPick({ id, company })
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<'' | 'verified' | 'rejected'>('')
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
 
   const credits = initial.credits
-  const companies = useMemo(() => Array.from(new Map(credits.filter((c) => c.tenantId).map((c) => [c.tenantId as string, c.companyName ?? 'Unknown company'])))
-    .map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits])
+  // Every company (also those with no KPI yet), so the dropdown always matches the left panel.
+  const companies = useMemo(() => Array.from(new Map([
+    ...allCompanies.map((c) => [c.id, c.name] as [string, string]),
+    ...credits.filter((c) => c.tenantId).map((c) => [c.tenantId as string, c.companyName ?? 'Unknown company'] as [string, string]),
+  ])).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits, allCompanies])
   const agentKey = (c: KpiCredit) => c.agentId ?? `name:${c.agentName ?? ''}`
   const agents = useMemo(() => Array.from(new Map(credits.filter((c) => !company || c.tenantId === company).map((c) => [agentKey(c), c.agentName ?? 'Unknown agent'])))
     .map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits, company])
-  const months = useMemo(() => thisMonth ? Array.from(new Set([thisMonth, ...credits.map((c) => monthKey(c.verifiedAt))])).sort().reverse() : [], [credits, thisMonth])
+  // A chosen user only applies while they belong to the selected company
+  // (e.g. after picking a different company in the left panel).
+  const agent = agentPick.company === company && agents.some((a) => a.id === agentPick.id) ? agentPick.id : ''
 
-  // Company / agent / search narrow everything; the period only narrows the record list.
+  // Company / agent / search narrow everything; the date range only narrows the record list.
   const scoped = useMemo(() => {
     const needle = search.trim().toLowerCase()
     return credits.filter((c) => {
@@ -60,16 +76,32 @@ export default function KpiClient({ initial }: { initial: Initial }) {
       return true
     })
   }, [credits, company, agent, search, status])
-  const filtered = useMemo(() => (period === 'all' ? scoped : scoped.filter((c) => monthKey(c.verifiedAt) === period)), [scoped, period])
+  const filtered = useMemo(() => (fromMs === null && toMs === null ? scoped : scoped.filter((c) => {
+    const at = new Date(c.verifiedAt).getTime()
+    return (fromMs === null || at >= fromMs) && (toMs === null || at <= toMs)
+  })), [scoped, fromMs, toMs])
 
   const monthTotals = useMemo(() => sum(thisMonth ? scoped.filter((c) => monthKey(c.verifiedAt) === thisMonth) : []), [scoped, thisMonth])
   const allTotals = useMemo(() => sum(scoped), [scoped])
   const shownTotals = useMemo(() => sum(filtered), [filtered])
+  // Super Admin drill-down: companies → users → records (click a row).
+  const byCompany = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; totals: Totals; rejected: number; agents: Set<string> }>()
+    for (const c of filtered) {
+      const id = c.tenantId ?? ''
+      const row = map.get(id) ?? { id, name: c.companyName ?? 'Unknown company', totals: { count: 0, amount: 0 }, rejected: 0, agents: new Set<string>() }
+      if (c.status === 'rejected') row.rejected += 1
+      else row.totals = { count: row.totals.count + 1, amount: row.totals.amount + c.amount }
+      row.agents.add(agentKey(c))
+      map.set(id, row)
+    }
+    return Array.from(map.values()).sort((a, b) => b.totals.amount - a.totals.amount || a.name.localeCompare(b.name))
+  }, [filtered])
   const byAgent = useMemo(() => {
-    const map = new Map<string, { name: string; company: string | null; totals: Totals; rejected: number }>()
+    const map = new Map<string, { key: string; name: string; company: string | null; totals: Totals; rejected: number }>()
     for (const c of filtered) {
       const key = agentKey(c)
-      const row = map.get(key) ?? { name: c.agentName ?? 'Unknown agent', company: c.companyName, totals: { count: 0, amount: 0 }, rejected: 0 }
+      const row = map.get(key) ?? { key, name: c.agentName ?? 'Unknown agent', company: c.companyName, totals: { count: 0, amount: 0 }, rejected: 0 }
       if (c.status === 'rejected') row.rejected += 1
       else row.totals = { count: row.totals.count + 1, amount: row.totals.amount + c.amount }
       map.set(key, row)
@@ -81,10 +113,12 @@ export default function KpiClient({ initial }: { initial: Initial }) {
   const safePage = Math.min(page, totalPages)
   const start = (safePage - 1) * pageSize
   const pageRows = filtered.slice(start, start + pageSize)
-  const activeFilters = [period !== 'all', !!company, !!agent, !!status, !!search.trim()].filter(Boolean).length
-  const reset = () => { setPeriod('all'); setCompany(''); setAgent(''); setStatus(''); setSearch(''); setPage(1) }
+  const activeFilters = [!!(rangeFrom || rangeTo), !!company, !!agent, !!status, !!search.trim()].filter(Boolean).length
+  const reset = () => { setRangeFrom(''); setRangeTo(''); setCompany(''); setAgent(''); setStatus(''); setSearch(''); setPage(1) }
   const rejectedShown = filtered.filter((c) => c.status === 'rejected').length
-  const periodName = period === 'all' ? 'All time' : monthLabel(period)
+  const fmtPick = (v: string) => new Date(v).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const periodName = rangeFrom && rangeTo ? `${fmtPick(rangeFrom)} – ${fmtPick(rangeTo)}`
+    : rangeFrom ? `From ${fmtPick(rangeFrom)}` : rangeTo ? `Until ${fmtPick(rangeTo)}` : 'All time'
 
   const downloadCsv = () => {
     const header = ['Reviewed on', 'Status', 'Agent', 'Lead', 'Lead code', ...(superAdmin ? ['Company'] : []), 'Reviewed by', 'Note', 'Amount', 'Currency']
@@ -94,7 +128,7 @@ export default function KpiClient({ initial }: { initial: Initial }) {
     const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = `kpi-records-${period === 'all' ? 'all-time' : period}.csv`
+    a.download = `kpi-records-${rangeFrom || rangeTo ? `${rangeFrom.slice(0, 10) || 'start'}_to_${rangeTo.slice(0, 10) || 'now'}` : 'all-time'}.csv`
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
   }
@@ -127,12 +161,16 @@ export default function KpiClient({ initial }: { initial: Initial }) {
               value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} />
           </div>
         </label>
-        <label className="filter-control"><span>Period</span>
-          <select className="input" aria-label="Period" value={period} onChange={(e) => { setPeriod(e.target.value); setPage(1) }}>
-            <option value="all">All time</option>
-            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}{m === thisMonth ? ' (this month)' : ''}</option>)}
-          </select>
-        </label>
+        <div className="filter-control kpi-range"><span>Verified on (from – to)</span>
+          <div className="kpi-range-inputs">
+            <input type="datetime-local" className="input" aria-label="Verified from date and time" value={rangeFrom} max={rangeTo || undefined}
+              onChange={(e) => { setRangeFrom(e.target.value); setPage(1) }} />
+            <span className="subtle">to</span>
+            <input type="datetime-local" className="input" aria-label="Verified to date and time" value={rangeTo} min={rangeFrom || undefined}
+              onChange={(e) => { setRangeTo(e.target.value); setPage(1) }} />
+          </div>
+          {rangeReversed && <small role="alert" style={{ color: 'var(--danger)', fontSize: 11, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>“From” is after “To” — no records can match.</small>}
+        </div>
         <label className="filter-control"><span>Status</span>
           <select className="input" aria-label="Status" value={status} onChange={(e) => { setStatus(e.target.value as '' | 'verified' | 'rejected'); setPage(1) }}>
             <option value="">Verified &amp; rejected</option>
@@ -140,14 +178,6 @@ export default function KpiClient({ initial }: { initial: Initial }) {
             <option value="rejected">Rejected only</option>
           </select>
         </label>
-        {superAdmin && (
-          <label className="filter-control"><span>Company</span>
-            <select className="input" aria-label="Company" value={company} onChange={(e) => { setCompany(e.target.value); setAgent(''); setPage(1) }}>
-              <option value="">All companies</option>
-              {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </label>
-        )}
         {team && (
           <label className="filter-control"><span>Agent</span>
             <select className="input" aria-label="Agent" value={agent} onChange={(e) => { setAgent(e.target.value); setPage(1) }}>
@@ -162,16 +192,42 @@ export default function KpiClient({ initial }: { initial: Initial }) {
         </div>
       </div>
 
-      {team && byAgent.length > 0 && (
+      {superAdmin && !company && !agent && byCompany.length > 0 && (
         <section className="card">
-          <h3 className="kpi-page-h3">By agent · {periodName}</h3>
+          <h3 className="kpi-page-h3">By company · {periodName}</h3>
+          <p className="subtle" style={{ margin: '-6px 0 10px', fontSize: 12 }}>Click a company to see its users with KPI.</p>
           <div className="tbl-wrap">
             <table className="tbl">
-              <thead><tr><th>Agent</th>{superAdmin && <th>Company</th>}<th>Verified</th><th>Rejected</th><th>KPI earned</th></tr></thead>
+              <thead><tr><th>Company</th><th>Users with KPI</th><th>Verified</th><th>Rejected</th><th>KPI earned</th><th aria-label="Open" /></tr></thead>
+              <tbody>{byCompany.map((co) => (
+                <tr key={co.id} className="kpi-group-row" tabIndex={0} role="button" aria-label={`Show ${co.name}`}
+                  onClick={() => { setCompany(co.id); setAgent(''); setPage(1) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCompany(co.id); setAgent(''); setPage(1) } }}>
+                  <td><strong><Building2 size={14} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px', color: 'var(--accent)' }} />{co.name}</strong></td>
+                  <td>{co.agents.size}</td><td>{co.totals.count}</td><td>{co.rejected || <span className="subtle">0</span>}</td>
+                  <td><strong>{pkr(co.totals.amount)}</strong></td>
+                  <td style={{ textAlign: 'right' }}><ChevronRight size={16} aria-hidden="true" className="kpi-group-arrow" /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {team && !agent && byAgent.length > 0 && (!superAdmin || !!company) && (
+        <section className="card">
+          <h3 className="kpi-page-h3">{superAdmin && company ? `${companies.find((c) => c.id === company)?.name ?? 'Company'} · users with KPI · ${periodName}` : `By agent · ${periodName}`}</h3>
+          <p className="subtle" style={{ margin: '-6px 0 10px', fontSize: 12 }}>Click a user to see their KPI records.</p>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead><tr><th>Agent</th>{superAdmin && <th>Company</th>}<th>Verified</th><th>Rejected</th><th>KPI earned</th><th aria-label="Open" /></tr></thead>
               <tbody>{byAgent.map((a) => (
-                <tr key={`${a.name}|${a.company}`}>
+                <tr key={`${a.key}|${a.company}`} className="kpi-group-row" tabIndex={0} role="button" aria-label={`Show ${a.name}`}
+                  onClick={() => { setAgent(a.key); setPage(1) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAgent(a.key); setPage(1) } }}>
                   <td><strong>{a.name}</strong></td>{superAdmin && <td>{a.company ?? '—'}</td>}
                   <td>{a.totals.count}</td><td>{a.rejected || <span className="subtle">0</span>}</td><td><strong>{pkr(a.totals.amount)}</strong></td>
+                  <td style={{ textAlign: 'right' }}><ChevronRight size={16} aria-hidden="true" className="kpi-group-arrow" /></td>
                 </tr>
               ))}</tbody>
             </table>
