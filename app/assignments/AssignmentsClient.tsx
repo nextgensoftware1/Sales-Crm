@@ -1,0 +1,170 @@
+'use client'
+
+import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  getMyAssignmentSummary,
+  getAssignedLeads,
+  unassignLead,
+  getMyIncomingCodes,
+} from '../manage-assignments-actions'
+import { toLocalCalendarDate } from '../../lib/lead-filters'
+
+type Person = { id: string; full_name: string; role: string; count: number }
+type Lead = { practiceId: string; practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string; canRemove: boolean }
+
+// When the page already fetched this server-side (the normal case now),
+// initialData arrives pre-populated and the component renders immediately
+// — no loading state, no client-side fetch. Falls back to the original
+// client-side fetch (now running its two independent requests together
+// instead of one after another) if ever rendered without initialData.
+export default function AssignmentsClient({ initialData }: {
+  initialData?: { summary: { ok: boolean; message?: string; people?: Person[] }; incomingCodes: string[] }
+} = {}) {
+  const [people, setPeople] = useState<Person[]>(initialData?.summary.ok ? (initialData.summary.people ?? []) : [])
+  const [selected, setSelected] = useState<string>('')
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [loading, setLoading] = useState(!initialData)
+  const [msg, setMsg] = useState(initialData && !initialData.summary.ok ? (initialData.summary.message ?? 'Could not load assignments.') : '')
+  const [incoming, setIncoming] = useState<Set<string>>(new Set(initialData?.incomingCodes ?? []))
+  // "Assigned on" filter (calendar day in the viewer's time zone).
+  const [dateFilter, setDateFilter] = useState('')
+  const visibleLeads = useMemo(
+    () => (dateFilter ? leads.filter((l) => toLocalCalendarDate(l.assignedAt) === dateFilter) : leads),
+    [leads, dateFilter],
+  )
+
+  // load the summary of people I've assigned to + which leads came to me from above
+  useEffect(() => {
+    if (initialData) return // already have it — no client-side fetch needed
+    (async () => {
+      setLoading(true)
+      // These two are independent of each other — run them together
+      // instead of one waiting on the other.
+      const [res, codes] = await Promise.all([getMyAssignmentSummary(), getMyIncomingCodes()])
+      if (res.ok && res.people) setPeople(res.people)
+      else setMsg(res.message ?? 'Could not load assignments.')
+      setIncoming(new Set(codes))
+      setLoading(false)
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const pickPerson = async (id: string) => {
+    setSelected(id)
+    setLeads([])
+    setMsg('')
+    const res = await getAssignedLeads(id)
+    if (res.ok && res.leads) setLeads(res.leads)
+    else setMsg(res.message ?? 'Could not load leads.')
+  }
+
+  const remove = async (lead: Lead) => {
+    const res = await unassignLead(lead.practiceId, selected)
+    setMsg(res.message)
+    if (res.ok) {
+      setLeads((prev) => prev.filter((l) => l.practiceId !== lead.practiceId))
+      setPeople((prev) => prev.map((p) => p.id === selected ? { ...p, count: p.count - 1 } : p))
+    }
+  }
+
+  return (
+    <>
+      {loading ? (
+        <p className="subtle">Loading…</p>
+      ) : people.length === 0 ? (
+        <p className="subtle">You haven’t assigned any leads yet.</p>
+      ) : (
+        <div className="grid-2-sidebar-sm">
+          {/* People list */}
+          <div className="card" style={{ padding: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '4px 8px 10px' }}>My reports</div>
+            {people.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => pickPerson(p.id)}
+                style={{
+                  width: '100%', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  background: selected === p.id ? 'var(--surface-2)' : 'transparent',
+                  border: `1px solid ${selected === p.id ? 'var(--accent)' : 'transparent'}`,
+                  color: 'var(--ink)', borderRadius: 8, padding: '10px 12px', marginBottom: 4, cursor: 'pointer',
+                }}
+              >
+                <span>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{p.full_name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>{p.role}</div>
+                </span>
+                <span className="badge badge-amber">{p.count}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Leads for selected person */}
+          <div className="card">
+            {!selected ? (
+              <p className="subtle">Pick a person on the left to see the leads you assigned them.</p>
+            ) : leads.length === 0 ? (
+              <p className="subtle">No leads assigned to this person (or all removed).</p>
+            ) : (
+              <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <label className="filter-control"><span>Assigned on</span>
+                  <input type="date" className="input" aria-label="Filter by assigned date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} />
+                </label>
+                {dateFilter && <button type="button" className="btn" onClick={() => setDateFilter('')}>Clear</button>}
+                <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }}>{visibleLeads.length} of {leads.length} leads</span>
+              </div>
+              {visibleLeads.length === 0 ? (
+                <p className="subtle">No leads were assigned to this person on that date.</p>
+              ) : (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Practice</th>
+                      <th>State</th>
+                      <th>Specialty</th>
+                      <th>Assigned On</th>
+                      <th style={{ textAlign: 'right' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleLeads.map((l) => (
+                      <tr key={l.practiceId}>
+                        <td style={{ fontWeight: 600 }}>
+                          {incoming.has(l.practiceCode) && (
+                            <span title="Also assigned to you by your manager" style={{ color: 'var(--warn)', marginRight: 6 }}>★</span>
+                          )}
+                          <Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link>
+                        </td>
+                        <td>{l.state ?? '—'}</td>
+                        <td>{l.specialty ?? '—'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{l.assignedAt ? new Date(l.assignedAt).toLocaleString() : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {l.canRemove ? (
+                          <button
+                            onClick={() => remove(l)}
+                            style={{ background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}
+                          >
+                            Remove
+                          </button>
+                          ) : (
+                            <span className="subtle" style={{ fontSize: 12 }} title="Assigned by someone else">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {msg && <p className="subtle" style={{ marginTop: 16 }}>{msg}</p>}
+    </>
+  )
+}
