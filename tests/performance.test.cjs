@@ -1770,3 +1770,43 @@ test('worksheet company counts: exact, and only for Super Admin', async () => {
   ;({ res } = await reportsAs('manager', { id: 'm1', tenant_id: U1 }, tables, [U1, U2]))
   assert.deepEqual(res, {})
 })
+
+test('sign out / sign in: saved filters are cleared, preferences kept', () => {
+  const savedWindow = global.window
+  const store = new Map([['lead-management-filters-v1:u1', '{"stateFilter":"TX"}'], ['lead-management-filters-v1:u2', '{}'],
+    ['theme', 'dark'], ['hbs-sidebar-expanded', 'true'], ['hbs-workspace-panel-open', 'false']])
+  global.window = {
+    localStorage: { get length() { return store.size }, key: (i) => [...store.keys()][i] ?? null, removeItem: (k) => store.delete(k) },
+    __hbsSharedValues: { 'kpi-company': 'T2' },
+  }
+  try {
+    loadTs('lib/reset-saved-filters.ts').clearSavedFilters()
+    assert.deepEqual([...store.keys()].sort(), ['hbs-sidebar-expanded', 'hbs-workspace-panel-open', 'theme'])
+    assert.equal(window.__hbsSharedValues, undefined)
+    const fs = require('fs'), path = require('path')
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/SignOutButton.tsx'), 'utf8'), /clearSavedFilters\(\)/)
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/login/page.tsx'), 'utf8'), /clearSavedFilters\(\)\s*\n\s*window\.location\.replace/)
+  } finally {
+    if (savedWindow === undefined) delete global.window; else global.window = savedWindow
+  }
+})
+
+test('specialty filter: several at once (any match), legacy single value, cleaned input', () => {
+  const lf = loadTs('lib/lead-filters.ts')
+  const ctx = { isSuperAdmin: true, prioritySet: new Set(), newLeadSet: new Set(), workedLeadSet: new Set() }
+  const leads = [['A', 'Acupuncturist'], ['B', 'Audiologist'], ['C', 'Podiatry'], ['D', null], ['E', 'Acupuncturist']]
+    .map(([code, specialty]) => ({ practiceCode: code, name: code, specialty, state: 'TX' }))
+  const run = (specialtyFilter) => lf.filterLeads(leads, lf.sanitizeLeadFilters({ specialtyFilter }), ctx).map(p => p.practiceCode)
+  assert.deepEqual(run([]), ['A', 'B', 'C', 'D', 'E'])                          // none chosen = all
+  assert.deepEqual(run(['Acupuncturist']), ['A', 'E'])
+  assert.deepEqual(run(['Acupuncturist', 'Audiologist']), ['A', 'B', 'E'])       // keeps both choices
+  assert.deepEqual(run('Podiatry'), ['C'])                                        // older saved filter (one value)
+  assert.deepEqual(lf.sanitizeLeadFilters({ specialtyFilter: ['Podiatry', '', 7, null, 'Podiatry', 'x'.repeat(500)] }).specialtyFilter, ['Podiatry', 'x'.repeat(200)])
+  assert.deepEqual(lf.sanitizeLeadFilters({ specialtyFilter: { evil: true } }).specialtyFilter, [])
+  assert.equal(lf.sanitizeLeadFilters({ specialtyFilter: Array.from({ length: 999 }, (_, i) => 's' + i) }).specialtyFilter.length, 200)
+  // Server snapshot path gives the same result as the browser.
+  const snapshots = loadTs('lib/lead-snapshots.ts')
+  const snap = snapshots.saveLeadSnapshot('spec-user', { isSuperAdmin: true, myAssignedCodes: [], newLeadCodes: [], workedLeadCodes: [], practices: leads, completedWorksheetCount: undefined })
+  const res = snapshots.queryLeadSnapshot(snap, lf.sanitizeLeadFilters({ specialtyFilter: ['Audiologist', 'Podiatry'] }), null, 1, 20, true)
+  assert.deepEqual(res.codes, ['B', 'C'])
+})

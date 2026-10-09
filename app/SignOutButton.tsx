@@ -2,12 +2,15 @@
 
 import { useState } from 'react'
 import { createSupabaseBrowser } from '../lib/supabase-browser'
+import { clearSavedFilters } from '../lib/reset-saved-filters'
 
 export default function SignOutButton({ variant = 'sidebar' }: { variant?: 'sidebar' | 'icon' }) {
   const [busy, setBusy] = useState(false)
 
   const signOut = async () => {
     setBusy(true)
+    // Signing out resets every saved filter (the next login starts clean).
+    clearSavedFilters()
     try {
       const supabase = createSupabaseBrowser()
       await supabase.auth.signOut()

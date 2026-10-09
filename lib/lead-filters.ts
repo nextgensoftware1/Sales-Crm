@@ -122,7 +122,8 @@ export type LeadFilters = {
   search: string
   stateFilter: string
   zoneFilter: ZoneKey | ''
-  specialtyFilter: string
+  /** Chosen specialties (any of them matches); empty = all specialties. */
+  specialtyFilter: string[]
   dispositionFilter: string
   activeSignals: string[]
   catTab: string
@@ -139,10 +140,20 @@ export type LeadFilters = {
 }
 
 export const DEFAULT_LEAD_FILTERS: LeadFilters = {
-  search: '', stateFilter: '', zoneFilter: '', specialtyFilter: '', dispositionFilter: '',
+  search: '', stateFilter: '', zoneFilter: '', specialtyFilter: [], dispositionFilter: '',
   activeSignals: [], catTab: 'All Categories', sourceTab: 'All', poolTab: 'All Leads',
   assignedView: 'all', companyFilter: '', enumTypeFilter: '', lastUpdatedFrom: '',
   lastUpdatedTo: '', enumDateFrom: '', enumDateTo: '', assignedDateFilter: '',
+}
+
+/**
+ * Specialty filter as a clean list: accepts a list or (older saved filters,
+ * older clients) a single value. Max 200 specialties, 200 characters each.
+ */
+export function toSpecialtyList(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
+  const clean = items.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.slice(0, 200))
+  return Array.from(new Set(clean)).slice(0, 200)
 }
 
 /** Accept only well-formed filter values (they arrive from the browser). */
@@ -156,7 +167,7 @@ export function sanitizeLeadFilters(input: unknown): LeadFilters {
     search: str('search'),
     stateFilter: str('stateFilter'),
     zoneFilter: zone === '' || (ZONE_KEYS as readonly string[]).includes(zone) ? zone as ZoneKey | '' : '',
-    specialtyFilter: str('specialtyFilter'),
+    specialtyFilter: toSpecialtyList(raw.specialtyFilter),
     dispositionFilter: str('dispositionFilter'),
     activeSignals: Array.isArray(raw.activeSignals)
       ? (raw.activeSignals as unknown[]).filter((v): v is string => typeof v === 'string' && SIGNALS.some((s) => s.key === v))
@@ -212,6 +223,8 @@ export function filterLeads<T extends LeadRow>(
   const { search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, catTab, sourceTab, poolTab,
     assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo,
     assignedDateFilter } = f
+  // Any of the chosen specialties matches (a single legacy value works too).
+  const specialties = new Set(toSpecialtyList(specialtyFilter))
   const activeSignals = new Set(f.activeSignals)
   const hasPriority = prioritySet.size > 0
 
@@ -227,7 +240,7 @@ export function filterLeads<T extends LeadRow>(
       const practiceZone = p.state ? (ZONE_BY_STATE[p.state] ?? 'Other') : 'Other'
       if (practiceZone !== zoneFilter) return false
     }
-    if (specialtyFilter && p.specialty !== specialtyFilter) return false
+    if (specialties.size && !specialties.has(p.specialty ?? '')) return false
 
     // Category tab filter (All / MIPS / RCM / CCM / Credentialing)
     if (catTab === 'MIPS' && !hasRealMips(p)) return false

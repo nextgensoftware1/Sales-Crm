@@ -4,6 +4,7 @@ import { useState } from 'react'
 import BrandLogo from '../BrandLogo'
 import { createSupabaseBrowser } from '../../lib/supabase-browser'
 import { checkAccountStatus } from '../auth-actions'
+import { clearSavedFilters } from '../../lib/reset-saved-filters'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -51,6 +52,9 @@ export default function LoginPage() {
     // browser/router caches. push + refresh used to request the home page twice.
     // Agents start on the Leads page; everyone else on their Dashboard
     // (decided on the server from the verified role — see lib/home-path.ts).
+    // A new sign-in always starts with clean filters (also covers sessions that
+    // ended without pressing Sign Out).
+    clearSavedFilters()
     window.location.replace(status.home === '/' ? '/' : '/dashboard')
   }
 

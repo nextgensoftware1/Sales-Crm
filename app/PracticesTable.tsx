@@ -10,9 +10,10 @@ import { unpackRows, type PackedRows } from '../lib/lead-pack'
 import { queryLeadPage, refreshLeadSnapshot } from './leads-page-actions' // ← CHANGED: + refreshLeadSnapshot
 import { markLeadsChanged } from '../lib/leads-fresh' // ← ADDED
 import { formatCalendarDate } from '../lib/assigned-dates'
+import MultiSelectFilter from './MultiSelectFilter'
 import WorkspacePanelToggle, { useWorkspacePanel } from './WorkspacePanelToggle'
 import {
-  SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
+  SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, toSpecialtyList, filterLeads, leadOverview,
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
 } from '../lib/lead-filters'
 
@@ -71,7 +72,7 @@ const C = {
 type PersistedLeadFilters = {
   search: string
   stateFilter: string
-  specialtyFilter: string
+  specialtyFilter: string[] | string   // a list now; older saved filters held one value
   dispositionFilter: string
   companyFilter: string
   zoneFilter: ZoneKey | ''
@@ -139,7 +140,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
-  const [specialtyFilter, setSpecialtyFilter] = useState('')
+  const [specialtyFilter, setSpecialtyFilter] = useState<string[]>([])   // several at once
   const [dispositionFilter, setDispositionFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
   const [zoneFilter, setZoneFilter] = useState<ZoneKey | ''>('')
@@ -204,7 +205,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         const filters = JSON.parse(stored) as Partial<PersistedLeadFilters>
         if (typeof filters.search === 'string') setSearch(filters.search)
         if (typeof filters.stateFilter === 'string') setStateFilter(filters.stateFilter)
-        if (typeof filters.specialtyFilter === 'string') setSpecialtyFilter(filters.specialtyFilter)
+        if (filters.specialtyFilter !== undefined) setSpecialtyFilter(toSpecialtyList(filters.specialtyFilter))
         if (typeof filters.dispositionFilter === 'string') setDispositionFilter(filters.dispositionFilter)
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
@@ -509,11 +510,11 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter(''); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter([]); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
   }
 
   const activeFilterCount = [
-    search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, companyFilter,
+    search, stateFilter, zoneFilter, specialtyFilter.length ? 'specialty' : '', dispositionFilter, companyFilter,
     enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
     poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
@@ -694,10 +695,10 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
           </select></label>
-          <label className="filter-control"><span>Specialty</span><select value={specialtyFilter} onChange={(e) => setSpecialtyFilter(e.target.value)} style={input}>
-            <option value="">All Specialties</option>
-            {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select></label>
+          <div className="filter-control"><span>Specialty</span>
+            <MultiSelectFilter label="Specialty" allLabel="All Specialties" options={specialties} selected={specialtyFilter}
+              onChange={setSpecialtyFilter} style={input} searchPlaceholder="Search specialties…" />
+          </div>
           <label className="filter-control"><span>Disposition</span><select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
             <option value="">All Dispositions</option>
             {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -743,7 +744,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             {search && <button onClick={() => setSearch('')}>Search: {search} ×</button>}
             {zoneFilter && <button onClick={() => setZoneFilter('')}>{zoneFilter} Zone ×</button>}
             {stateFilter && <button onClick={() => setStateFilter('')}>{stateFilter} ×</button>}
-            {specialtyFilter && <button onClick={() => setSpecialtyFilter('')}>{specialtyFilter} ×</button>}
+            {specialtyFilter.map((value) => <button key={`specialty:${value}`} onClick={() => setSpecialtyFilter(specialtyFilter.filter((v) => v !== value))}>{value} ×</button>)}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
             {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {formatCalendarDate(assignedDateFilter)} ×</button>}
