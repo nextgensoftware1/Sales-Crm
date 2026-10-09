@@ -684,6 +684,9 @@ select:not(:disabled):hover {
 .filter-result-count { flex: 0 0 auto; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--ink-strong); font-size: 11px; font-weight: 750; }
 .filter-control { display: grid; min-width: 150px; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .filter-control > input, .filter-control > select { min-width: 0; text-transform: none; }
+/* Only the small heading (first <span>) is uppercase/bold; anything else in a
+   filter box — e.g. a multi-select dropdown and its options — is normal text. */
+.filter-control > :not(:first-child):not(input):not(select):not(textarea):not(button) { color: var(--ink); font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; }
 .filter-search { flex: 1 1 250px; }
 .quick-filter-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; }
 .quick-filter-row .filter-control { min-width: 0; }
@@ -1054,14 +1057,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .multi-select-check { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; border: 1.5px solid var(--border); border-radius: 4px; color: #fff; font-size: 11px; font-weight: 900; }
 .multi-select-option.is-selected .multi-select-check { border-color: var(--accent); background: var(--accent); }
 .multi-select-empty { padding: 10px 8px; color: var(--muted); font-size: 12.5px; }
-/* Text inside the dropdown is normal text, not the uppercase filter label. */
+/* Keep dropdown controls distinct from the uppercase, bold option labels. */
 .filter-control .multi-select span, .filter-control .multi-select li {
   color: inherit; font-size: inherit; font-weight: inherit; letter-spacing: normal; text-transform: none;
 }
 .filter-control .multi-select .multi-select-actions span { font-size: 11.5px; font-weight: 700; color: var(--muted); }
 .filter-control .multi-select .multi-select-count { color: #fff; font-size: 11px; font-weight: 800; }
 .filter-control .multi-select .multi-select-check { color: #fff; font-size: 11px; font-weight: 900; }
-.filter-control .multi-select .multi-select-option { color: var(--ink); font-size: 13px; font-weight: 500; }
+.filter-control .multi-select .multi-select-option { color: var(--ink); font-size: 13px; font-weight: 700; }
+.filter-control .multi-select .multi-select-option > span:last-child { text-transform: uppercase; }
 .filter-control .multi-select .multi-select-option.is-selected { color: var(--ink-strong); font-weight: 700; }
 .filter-control .multi-select .multi-select-empty { font-size: 12.5px; }
 .filter-control .multi-select .multi-select-summary { font-size: inherit; font-weight: inherit; }
