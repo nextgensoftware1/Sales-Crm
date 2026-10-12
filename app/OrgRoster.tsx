@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { getOrgRoster, type RosterMember } from './roster-actions'
 
-export default function OrgRoster({ npi }: { npi: string }) {
+export default function OrgRoster({ npi, linkQuery = '' }: { npi: string; linkQuery?: string }) {
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [members, setMembers] = useState<RosterMember[]>([])
@@ -87,7 +87,7 @@ export default function OrgRoster({ npi }: { npi: string }) {
                         {m.npi}
                       </td>
                       <td style={tdL}>
-                        <Link prefetch={false} href={`/practice/PR-${m.npi}`} className="org-roster-link">{m.name}</Link>
+                        <Link prefetch={false} href={`/practice/PR-${m.npi}${linkQuery}`} className="org-roster-link">{m.name}</Link>
                       </td>
                       <td style={tdL}>{m.org_name ?? '—'}</td>
                       <td style={tdL}>{m.specialty ?? '—'}</td>

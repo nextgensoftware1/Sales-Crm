@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { createSupabaseServer } from '../../lib/supabase-server'
+import { leadHref } from '../../lib/lead-return'
 
 type SaleRow = {
   id: string
@@ -128,7 +129,7 @@ export default async function SoldLeadsSection({ scope }: { scope: SoldScope }) 
                   <tr key={sale.id}>
                     <td>
                       {practice ? (
-                        <Link prefetch={false} href={`/practice/${practice.practice_code}`}>
+                        <Link prefetch={false} href={leadHref(practice.practice_code, 'sold-leads')}>
                           <strong>{practice.name}</strong>
                           <span className="subtle mono" style={{ display: 'block', fontSize: 10.5 }}>{practice.practice_code}</span>
                         </Link>

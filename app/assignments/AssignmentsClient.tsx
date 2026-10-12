@@ -9,6 +9,7 @@ import {
   getMyIncomingCodes,
 } from '../manage-assignments-actions'
 import { toLocalCalendarDate } from '../../lib/lead-filters'
+import { leadHref } from '../../lib/lead-return'
 
 type Person = { id: string; full_name: string; role: string; count: number }
 type Lead = { practiceId: string; practiceCode: string; name: string; state: string | null; specialty: string | null; assignedAt: string; canRemove: boolean }
@@ -135,7 +136,7 @@ export default function AssignmentsClient({ initialData }: {
                           {incoming.has(l.practiceCode) && (
                             <span title="Also assigned to you by your manager" style={{ color: 'var(--warn)', marginRight: 6 }}>★</span>
                           )}
-                          <Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link>
+                          <Link prefetch={false} href={leadHref(l.practiceCode, 'assignments')}>{l.name}</Link>
                         </td>
                         <td>{l.state ?? '—'}</td>
                         <td>{l.specialty ?? '—'}</td>

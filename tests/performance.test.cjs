@@ -879,7 +879,9 @@ test('shared lead overview matches the original summary and dropdown logic', () 
     const o = leadOverview(leads, { isSuperAdmin, newLeadSet, workedLeadSet, completedWorksheetCount })
     assert.deepEqual(o.states, Array.from(new Set(leads.map(p => p.state).filter(Boolean))).sort())
     assert.deepEqual(o.specialties, Array.from(new Set(leads.map(p => p.specialty).filter(Boolean))).sort())
-    assert.deepEqual(o.dispositions, Array.from(new Set(leads.map(p => p.status).filter(Boolean))).sort())
+    // Every standard disposition (e.g. "Send Mail") plus any other value in the data, A–Z.
+    const { DISPOSITIONS } = loadTs('lib/dispositions.ts')
+    assert.deepEqual(o.dispositions, Array.from(new Set([...DISPOSITIONS, ...leads.map(p => p.status).filter(Boolean)])).sort((a, b) => a.localeCompare(b)))
     assert.equal(o.summaryCounts.total, leads.length)
     assert.equal(o.summaryCounts.unassigned, leads.filter(p => isSuperAdmin ? (p.allocatedCompanies?.length ?? 0) === 0 : !p.assignedAwayTo).length)
     assert.equal(o.summaryCounts.worked, completedWorksheetCount ?? leads.filter(p => workedLeadSet.has(p.practiceCode)).length)
@@ -1606,4 +1608,400 @@ test('Clients page: Active clients / Sold leads tabs; Sold Leads gone from the s
   const shell = require('fs').readFileSync(require('path').join(__dirname, '..', 'app/AppShell.tsx'), 'utf8')
   assert.equal(/href: '\/sold-leads'/.test(shell), false)
   assert.match(shell, /href: '\/clients\?tab=sold', label: 'Sold leads'/)
+})
+
+// ---------------------------------------------------------------------------
+// Dashboard-wide Company / Agent filters
+// ---------------------------------------------------------------------------
+async function dashboardAs(role, me, sp) {
+  const calls = []
+  const tables = {
+    tenants: [{ id: '11111111-1111-1111-1111-111111111111', name: 'HBS', is_platform: false }, { id: '22222222-2222-2222-2222-222222222222', name: 'TEST', is_platform: false }],
+    users: [{ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', full_name: 'Aqsam', tenant_id: '11111111-1111-1111-1111-111111111111' },
+            { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', full_name: 'Test Agent', tenant_id: '22222222-2222-2222-2222-222222222222' }],
+  }
+  const db = { from(table) {
+    const rec = { table, eqs: [], select: null }; calls.push(rec)
+    const q = {
+      select(cols) { rec.select = cols; return q }, order() { return q }, gte() { return q }, lte() { return q }, range() { return q },
+      eq(k, v) { rec.eqs.push([k, v]); return q },
+      then(res, rej) {
+        const rows = (tables[table] ?? []).filter(r => rec.eqs.every(([k, v]) => !(k in r) || r[k] === v))
+        return Promise.resolve({ data: rows, count: 0, error: null }).then(res, rej)
+      },
+    }
+    return q
+  } }
+  let viewProps = null
+  const { default: Page } = loadTs('app/dashboard/page.tsx', {
+    '../../lib/supabase-server': { createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { ...me, roles: { key: role } } }) },
+    './DashboardView': function DashboardView(props) { viewProps = props; return null },
+    'next/navigation': { redirect: () => { throw Error('redirect') } },
+  })
+  const el = await Page({ searchParams: Promise.resolve(sp) })
+  viewProps = el.props
+  const eqsOf = (table) => calls.filter(c => c.table === table).flatMap(c => c.eqs)
+  return { props: viewProps, eqsOf }
+}
+const HBS = '11111111-1111-1111-1111-111111111111', TEST_CO = '22222222-2222-2222-2222-222222222222'
+const AQSAM = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', TEST_AGENT = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+
+test('dashboard filters (super admin): company + agent apply to every number', async () => {
+  const { props, eqsOf } = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(props.filters.company, TEST_CO); assert.equal(props.filters.agent, TEST_AGENT)
+  assert.deepEqual(props.filters.people.map(p => p.name), ['Test Agent'])
+  assert.match(props.scopeLabel, /TEST · Test Agent/)
+  for (const [table, agentCol, tenantCol] of [['lead_activity', 'agent_id', 'tenant_id'], ['lead_transfers', 'from_user_id', 'tenant_id'], ['sales', 'sold_by', 'tenant_id'], ['client_ownership', 'sales.sold_by', 'owner_tenant_id']]) {
+    const eqs = eqsOf(table)
+    assert.ok(eqs.some(([k, v]) => k === tenantCol && v === TEST_CO), `${table} filtered by company`)
+    assert.ok(eqs.some(([k, v]) => k === agentCol && v === TEST_AGENT), `${table} filtered by agent`)
+  }
+})
+
+test('dashboard filters: an agent from another company is ignored; managers cannot pick a company', async () => {
+  // Super admin: agent must belong to the chosen company.
+  let r = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: HBS, agent: TEST_AGENT })
+  assert.equal(r.props.filters.agent, '')
+  // Manager of HBS: company param ignored; agent from TEST ignored; own agent works.
+  r = await dashboardAs('manager', { id: 'm1', tenant_id: HBS, tenants: { name: 'HBS' } }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(r.props.filters.company, ''); assert.equal(r.props.filters.agent, '')
+  assert.deepEqual(r.props.filters.companies, [])
+  assert.ok(r.eqsOf('lead_transfers').every(([k, v]) => !(k === 'tenant_id' && v === TEST_CO)))
+  r = await dashboardAs('manager', { id: 'm1', tenant_id: HBS, tenants: { name: 'HBS' } }, { agent: AQSAM })
+  assert.equal(r.props.filters.agent, AQSAM)
+  assert.ok(r.eqsOf('lead_transfers').some(([k, v]) => k === 'from_user_id' && v === AQSAM))
+  // Agent: always just their own work, no filters offered.
+  r = await dashboardAs('agent', { id: AQSAM, tenant_id: HBS }, { company: TEST_CO, agent: TEST_AGENT })
+  assert.equal(r.props.filters.canPickAgent, false); assert.deepEqual(r.props.filters.people, [])
+  assert.ok(r.eqsOf('lead_transfers').some(([k, v]) => k === 'from_user_id' && v === AQSAM))
+  assert.ok(r.eqsOf('lead_transfers').every(([, v]) => v !== TEST_AGENT))
+  // Garbage values are ignored.
+  r = await dashboardAs('super_admin', { id: 's1', tenant_id: null }, { company: "x' or 1=1", agent: '../../etc' })
+  assert.equal(r.props.filters.company, ''); assert.equal(r.props.filters.agent, '')
+})
+
+
+// ---------------------------------------------------------------------------
+// Worksheet Reports: every worksheet is shown (no 300 cap)
+// ---------------------------------------------------------------------------
+function worksheetDb(tables, log, { nestingSupported = true } = {}) {
+  return { from(table) {
+    const rec = { table, eqs: [], ins: null, head: false, range: null, count: false, nested: false }; log.push(rec)
+    const q = {
+      select(cols, o) { rec.head = !!o?.head; rec.count = o?.count === 'exact'; rec.nested = typeof cols === 'string' && cols.includes('lead_transfers('); return q },
+      is() { return q }, order() { return q },
+      eq(k, v) { rec.eqs.push([k, v]); return q },
+      in(k, vs) { rec.ins = [k, vs]; return q },
+      range(a, b) { rec.range = [a, b]; return q },
+      then(res, rej) {
+        if (rec.nested && !nestingSupported) return Promise.resolve({ data: null, error: { code: 'PGRST200', message: 'no relationship' } }).then(res, rej)
+        let rows = (tables[table] ?? []).filter(r => rec.eqs.every(([k, v]) => r[k] === v) && (!rec.ins || rec.ins[1].includes(r[rec.ins[0]])))
+        const total = rows.length
+        if (rec.range) rows = rows.slice(rec.range[0], rec.range[1] + 1)
+        if (table === 'lead_worksheets' && !rec.nested) rows = rows.map(r => ({ ...r, master_practices: { ...r.master_practices, lead_transfers: undefined } }))
+        return Promise.resolve(rec.head ? { count: total, data: null, error: null } : { data: rows, count: rec.count ? total : null, error: null }).then(res, rej)
+      },
+    }
+    return q
+  } }
+}
+function worksheetTables(n) {
+  const worksheets = Array.from({ length: n }, (_, i) => {
+    const tenant = i % 3 === 0 ? 'T2' : 'T1'
+    const transfers = i % 10 === 0 ? [{ practice_id: 'p' + i, tenant_id: tenant, note: 'Sent', users: { full_name: 'Cal' } }] : []
+    return {
+      practice_id: 'p' + i, tenant_id: tenant, updated_by: i % 2 ? 'a1' : 'a2', disposition: 'Voicemail',
+      call_details: 'x', additional_phone: null, email: null, concerned_person: null, direct_line: null, callback_at: null, timezone: null,
+      updated_at: new Date(Date.UTC(2026, 9, 1, 0, 0, n - i)).toISOString(), import_data: null, tenants: { name: tenant === 'T2' ? 'TEST' : 'HBS' },
+      users: { full_name: 'Agent', tenants: { name: 'HBS' } },
+      master_practices: { practice_code: 'PR-' + i, name: 'Lead ' + i, state: 'TX', specialty: null, deleted_at: null, practice_providers: [], lead_transfers: transfers },
+    }
+  })
+  const transfers = worksheets.flatMap(w => w.master_practices.lead_transfers.map(t => ({ ...t, to_user_id: 'c1' })))
+  return { lead_worksheets: worksheets, lead_transfers: transfers }
+}
+async function reportsAs(role, me, tables, options, dbOptions) {
+  const log = []
+  const { getWorksheetReports, getWorksheetCompanyCounts } = loadTs('app/worksheet-reports-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => worksheetDb(tables, log, dbOptions), getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { ...me, roles: { key: role }, tenants: { name: 'HBS' } } }) } })
+  return { res: Array.isArray(options) ? await getWorksheetCompanyCounts(options) : await getWorksheetReports(options), log }
+}
+
+test('worksheet reports: all 2,350 load (no 300 cap); transfers come nested in the same request', async () => {
+  const { res, log } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(2350))
+  assert.equal(res.ok, true); assert.equal(res.rows.length, 2350); assert.equal(res.truncated, false)
+  assert.equal(new Set(res.rows.map(r => r.practiceId)).size, 2350)                  // no duplicates across pages
+  assert.equal(res.rows.filter(r => r.handoffStatus === 'Sent').length, 235)           // every transfer matched
+  assert.equal(log.filter(c => c.table === 'lead_transfers').length, 0)                // no separate transfer requests
+})
+
+test('worksheet reports: if nesting is not available, the fallback loads transfers in batches', async () => {
+  const { res, log } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(2350), {}, { nestingSupported: false })
+  assert.equal(res.ok, true); assert.equal(res.rows.length, 2350)
+  assert.equal(res.rows.filter(r => r.handoffStatus === 'Sent').length, 235)
+  const transferCalls = log.filter(c => c.table === 'lead_transfers')
+  assert.ok(transferCalls.length >= 12 && transferCalls.every(c => c.ins[1].length <= 200))   // short requests
+})
+
+test('worksheet reports: company filter in the database; managers/agents get all of their own', async () => {
+  const U2 = '22222222-2222-2222-2222-222222222222'
+  const tables = worksheetTables(600)
+  for (const w of tables.lead_worksheets) if (w.tenant_id === 'T2') { w.tenant_id = U2; for (const t of w.master_practices.lead_transfers) t.tenant_id = U2 }
+  let { res, log } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, tables, { companyId: U2 })
+  assert.ok(log.filter(c => c.table === 'lead_worksheets').every(c => c.eqs.some(([k, v]) => k === 'tenant_id' && v === U2)))
+  assert.equal(res.rows.length, 200); assert.ok(res.rows.every(r => r.tenantId === U2))
+  ;({ res } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, worksheetTables(600), { companyId: "x' or 1=1" }))
+  assert.equal(res.rows.length, 600)                                                    // garbage company id ignored
+  ;({ res } = await reportsAs('manager', { id: 'm1', tenant_id: 'T1' }, worksheetTables(600), { companyId: U2 }))
+  assert.equal(res.rows.length, 400); assert.ok(res.rows.every(r => r.tenantId === 'T1'))
+  ;({ res } = await reportsAs('agent', { id: 'a1', tenant_id: 'T1' }, worksheetTables(1200)))
+  assert.equal(res.rows.length, 600)                                                    // beyond 300: all of their own
+})
+
+test('worksheet company counts: exact, and only for Super Admin', async () => {
+  const U1 = '11111111-1111-1111-1111-111111111111', U2 = '22222222-2222-2222-2222-222222222222'
+  const tables = worksheetTables(900)
+  for (const w of tables.lead_worksheets) w.tenant_id = w.tenant_id === 'T1' ? U1 : U2
+  let { res } = await reportsAs('super_admin', { id: 's1', tenant_id: null }, tables, [U1, U2, 'not-a-company-id'])
+  assert.deepEqual(res, { [U1]: 600, [U2]: 300 })
+  ;({ res } = await reportsAs('manager', { id: 'm1', tenant_id: U1 }, tables, [U1, U2]))
+  assert.deepEqual(res, {})
+})
+
+test('sign out / sign in: saved filters are cleared, preferences kept', () => {
+  const savedWindow = global.window
+  const store = new Map([['lead-management-filters-v1:u1', '{"stateFilter":"TX"}'], ['lead-management-filters-v1:u2', '{}'],
+    ['theme', 'dark'], ['hbs-sidebar-expanded', 'true'], ['hbs-workspace-panel-open', 'false']])
+  global.window = {
+    localStorage: { get length() { return store.size }, key: (i) => [...store.keys()][i] ?? null, removeItem: (k) => store.delete(k) },
+    __hbsSharedValues: { 'kpi-company': 'T2' },
+  }
+  try {
+    loadTs('lib/reset-saved-filters.ts').clearSavedFilters()
+    assert.deepEqual([...store.keys()].sort(), ['hbs-sidebar-expanded', 'hbs-workspace-panel-open', 'theme'])
+    assert.equal(window.__hbsSharedValues, undefined)
+    const fs = require('fs'), path = require('path')
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/SignOutButton.tsx'), 'utf8'), /clearSavedFilters\(\)/)
+    assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/login/page.tsx'), 'utf8'), /clearSavedFilters\(\)\s*\n\s*window\.location\.replace/)
+  } finally {
+    if (savedWindow === undefined) delete global.window; else global.window = savedWindow
+  }
+})
+
+
+test('Advanced filters: MIPS / RCM Fit / CCM are not repeated (top categories cover them)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'app/PracticesTable.tsx'), 'utf8')
+  assert.match(src, /CATEGORY_SIGNAL_KEYS = new Set\(\['ccm', 'rcmFit', 'mips'\]\)/)
+  assert.match(src, /\{ADVANCED_SIGNALS\.map\(\(s\) =>/)
+  assert.doesNotMatch(src, /\{SIGNALS\.map\(\(s\) =>/)
+  assert.match(src, /filters\.activeSignals\.filter\(value => ADVANCED_SIGNALS\.some/)
+  const lf = loadTs('lib/lead-filters.ts')
+  const shown = lf.SIGNALS.filter(s => !['ccm', 'rcmFit', 'mips'].includes(s.key)).map(s => s.label)
+  assert.deepEqual(shown, ['PCM', 'AWV', 'TCM', 'BHI', 'RPM'])
+})
+
+test('KPI page: verified-on date + time range replaces Period; company comes from the side panel', () => {
+  const fs = require('fs'), path = require('path')
+  const client = fs.readFileSync(path.join(__dirname, '..', 'app/kpi/KpiClient.tsx'), 'utf8')
+  const page = fs.readFileSync(path.join(__dirname, '..', 'app/kpi/page.tsx'), 'utf8')
+  assert.match(client, /Verified on \(from – to\)/); assert.doesNotMatch(client, /aria-label="Period"/); assert.doesNotMatch(client, /aria-label="Company"/)
+  assert.match(client, /useKpiCompany\(\)/); assert.match(page, /<KpiCompanyNav /); assert.match(page, /contextItemsHidden=/)
+})
+
+test('dispositions: "Send Mail" is offered everywhere, even before anyone has used it', () => {
+  const { DISPOSITIONS, dispositionOptions } = loadTs('lib/dispositions.ts')
+  assert.equal(DISPOSITIONS[DISPOSITIONS.indexOf('Voicemail') + 1], 'Send Mail')
+  const opts = dispositionOptions(['Voicemail', 'Legacy Import Value', null, '', 'Send Mail'])
+  assert.ok(opts.includes('Send Mail') && opts.includes('Legacy Import Value') && !opts.includes(''))
+  assert.equal(new Set(opts).size, opts.length)
+  const lf = loadTs('lib/lead-filters.ts')
+  const o = lf.leadOverview([{ practiceCode: 'A', name: 'A', status: 'Voicemail' }], { isSuperAdmin: true, prioritySet: new Set(), newLeadSet: new Set(), workedLeadSet: new Set() })
+  assert.ok(o.dispositions.includes('Send Mail'))                     // Leads page filter
+  const fs = require('fs'), path = require('path')
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/worksheet-reports/WorksheetReportsClient.tsx'), 'utf8'), /dispositionOptions\(rows\.map/)   // Worksheet Reports filter
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'app/Worksheet.tsx'), 'utf8'), /export \{ DISPOSITIONS \}/)           // worksheet + edit popup
+})
+
+test('lead page "Back": returns to the page that opened the lead (all routes)', () => {
+  const { leadReturn, leadHref } = loadTs('lib/lead-return.ts')
+  const cases = [
+    [{}, '/', 'Back to all practices', ''],
+    [{ from: 'reminders' }, '/reminders', 'Back to My Reminders', '?from=reminders'],
+    [{ from: 'transfers' }, '/transfers', 'Back to transfers', '?from=transfers'],
+    [{ from: 'clients' }, '/clients', 'Back to Active Clients', '?from=clients'],
+    [{ from: 'sold-leads' }, '/clients?tab=sold', 'Back to Sold leads', '?from=sold-leads'],
+    [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
+    [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
+    [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
+    [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Worksheet Reports', '?from=worksheet-reports&company=T1&view=sheet'],
+    [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page
+    [{ from: '__proto__' }, '/', 'Back to all practices', ''],
+  ]
+  for (const [sp, href, label, query] of cases) assert.deepEqual(leadReturn(sp), { href, label, query }, JSON.stringify(sp))
+  // Previous / Next keep `from` — including Worksheet Reports (used to be dropped).
+  assert.equal(leadReturn({ from: 'worksheet-reports', company: 'T1' }).query.startsWith('?from=worksheet-reports'), true)
+  assert.equal(leadHref('PR-1821166877', 'reminders'), '/practice/PR-1821166877?from=reminders')
+  assert.equal(leadHref('PR-1'), '/practice/PR-1')
+  // Every page that opens a lead says where it came from.
+  const fs = require('fs'), path = require('path'), read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
+  const expected = {
+    'app/reminders/RemindersClient.tsx': "'reminders'", 'app/NotificationBell.tsx': "'reminders'", 'app/transfers/TransfersClient.tsx': "'transfers'",
+    'app/clients/page.tsx': "'clients'", 'app/clients/SoldLeadsSection.tsx': "'sold-leads'", 'app/assignments/AssignmentsClient.tsx': "'assignments'",
+    'app/assignments/CompanyAllocationsClient.tsx': "'assignments'", 'app/agent-assigned/AgentAssignedClient.tsx': "'agent-assigned'", 'app/admin/view/RoleViewClient.tsx': "'role-view'",
+  }
+  for (const [file, source] of Object.entries(expected)) assert.ok(read(file).includes(`leadHref(`) && read(file).includes(source), file)
+  const lead = read('app/practice/[code]/page.tsx')
+  assert.match(lead, /href=\{`\/practice\/\$\{prevCode\}\$\{navQuery\}`\}/); assert.match(lead, /href=\{`\/practice\/\$\{nextCode\}\$\{navQuery\}`\}/)
+  assert.match(lead, /linkQuery=\{navQuery\}/); assert.doesNotMatch(lead, /returnQuery/)
+})
+
+// ---------------------------------------------------------------------------
+// Dashboard: every number is real (sales, clients, incentives follow the range)
+// ---------------------------------------------------------------------------
+async function realDashboard({ role = 'super_admin', me = { id: 's1', tenant_id: null }, sp = {}, salesHasCreatedAt = true, kpi = 'v2' } = {}) {
+  const log = []
+  const T1 = '11111111-1111-1111-1111-111111111111'
+  const tables = {
+    tenants: [{ id: T1, name: 'HBS', is_platform: false }],
+    users: [{ id: 'a1', full_name: 'Aqsam', tenant_id: T1 }],
+    sales: [
+      { id: 's1', contract_value: 1000, mrr: 100, created_at: '2026-10-05T10:00:00Z', sale_date: '2026-10-05', tenant_id: T1, sold_by: 'a1' },
+      { id: 's2', contract_value: 500, mrr: 50, created_at: '2026-09-30T20:00:00Z', sale_date: '2026-09-30', tenant_id: T1, sold_by: 'a1' },   // = Oct 1 01:00 PKT
+      { id: 's3', contract_value: 9999, mrr: 999, created_at: '2026-08-01T10:00:00Z', sale_date: '2026-08-01', tenant_id: T1, sold_by: 'a1' }, // outside
+    ],
+    client_ownership: [{ id: 'c1', active: true, locked_at: '2026-10-05T10:00:00Z', owner_tenant_id: T1 }, { id: 'c2', active: true, locked_at: '2026-08-01T10:00:00Z', owner_tenant_id: T1 }],
+    transfer_kpi_credits: [
+      { id: 'k1', agent_id: 'a1', agent_name: 'Aqsam', amount: 500, status: 'verified', verified_at: '2026-10-05T10:00:00Z', tenant_id: T1 },
+      { id: 'k2', agent_id: 'a1', agent_name: 'Aqsam', amount: 500, status: 'verified', verified_at: '2026-10-06T10:00:00Z', tenant_id: T1 },
+      { id: 'k3', agent_id: 'a2', agent_name: 'Sam', amount: 0, status: 'rejected', verified_at: '2026-10-06T10:00:00Z', tenant_id: T1 },
+      { id: 'k4', agent_id: 'a2', agent_name: 'Sam', amount: 500, status: 'verified', verified_at: '2026-08-06T10:00:00Z', tenant_id: T1 },  // outside
+    ],
+  }
+  const db = { from(table) {
+    const rec = { table, cols: '', filters: [], range: null, head: false }; log.push(rec)
+    const q = {
+      select(cols, o) { rec.cols = cols; rec.head = !!o?.head; return q }, order() { return q },
+      eq(k, v) { rec.filters.push(r => !(k in r) || r[k] === v); return q },
+      gte(k, v) { rec.filters.push(r => r[k] >= v.slice(0, r[k]?.length === 10 ? 10 : undefined)); rec.gte = k; return q },
+      lte(k, v) { rec.filters.push(r => r[k] <= (r[k]?.length === 10 ? v.slice(0, 10) : v)); return q },
+      range(a, b) { rec.range = [a, b]; return q },
+      then(res, rej) {
+        if (table === 'sales' && rec.gte === 'created_at' && !salesHasCreatedAt) return Promise.resolve({ data: null, error: { code: '42703', message: 'column sales.created_at does not exist' } }).then(res, rej)
+        if (table === 'transfer_kpi_credits' && kpi === 'none') return Promise.resolve({ data: null, error: { code: '42P01', message: 'relation does not exist' } }).then(res, rej)
+        if (table === 'transfer_kpi_credits' && kpi === 'v1' && rec.cols.includes('status')) return Promise.resolve({ data: null, error: { code: '42703', message: 'column status does not exist' } }).then(res, rej)
+        let rows = (tables[table] ?? []).filter(r => rec.filters.every(f => f(r)))
+        const count = rows.length
+        if (rec.range) rows = rows.slice(rec.range[0], rec.range[1] + 1)
+        return Promise.resolve(rec.head ? { data: null, count, error: null } : { data: rows, count, error: null }).then(res, rej)
+      },
+    }
+    return q
+  } }
+  const { default: Page } = loadTs('app/dashboard/page.tsx', {
+    '../../lib/supabase-server': { createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }), getCurrentProfile: async () => ({ data: { ...me, roles: { key: role } } }) },
+    './DashboardView': function DashboardView() { return null },
+    'next/navigation': { redirect: () => { throw Error('redirect') } },
+  })
+  // Oct 1 00:00 – Oct 31 23:59 in Pakistan time (UTC+5).
+  const el = await Page({ searchParams: Promise.resolve({ from: '2026-09-30T19:00:00.000Z', to: '2026-10-31T18:59:00.000Z', ...sp }) })
+  return { props: el.props, log }
+}
+
+test('dashboard (real): contract value, closed sales and MRR follow the exact date range', async () => {
+  const { props } = await realDashboard()
+  assert.deepEqual([props.saleCount, props.totalValue, props.totalMrr], [2, 1500, 150])   // Aug sale excluded
+  // Without an exact sale time, falls back to the sale date.
+  const fb = await realDashboard({ salesHasCreatedAt: false })
+  assert.equal(fb.props.saleCount, 2)
+})
+
+test('dashboard (real): active clients are those won in the range', async () => {
+  const { props } = await realDashboard()
+  assert.equal(props.clientCount, 1)
+})
+
+test('dashboard (real): incentives = verified Transfer KPI in range, by agent; rejected earn nothing', async () => {
+  let { props } = await realDashboard()
+  assert.deepEqual(props.incentives, { total: 1000, count: 2, byAgent: [{ name: 'Aqsam', amount: 1000, count: 2 }] })
+  ;({ props } = await realDashboard({ kpi: 'v1' }))                 // older KPI table (no status column)
+  assert.equal(props.incentives.total, 1000)
+  ;({ props } = await realDashboard({ kpi: 'none' }))               // KPI not installed: page still works
+  assert.equal(props.incentives, null)
+  const view = require('fs').readFileSync(require('path').join(__dirname, '..', 'app/dashboard/DashboardView.tsx'), 'utf8')
+  assert.doesNotMatch(view, /not scoped to the date range yet/)
+  assert.doesNotMatch(view, / sample \/>|sample>/)
+  assert.doesNotMatch(view, /placeholder metrics/)
+})
+
+test('dashboard (real): agents see only their own clients and incentives', async () => {
+  const { log } = await realDashboard({ role: 'agent', me: { id: 'a1', tenant_id: '11111111-1111-1111-1111-111111111111' } })
+  const clientCall = log.find(c => c.table === 'client_ownership')
+  assert.match(clientCall.cols, /sales!inner\(sold_by\)/)
+})
+
+// ---------------------------------------------------------------------------
+// Reminders: notes & callback history (latest callback wins)
+// ---------------------------------------------------------------------------
+async function leadNotesAs(role, me, reminderId = '99999999-9999-9999-9999-999999999999') {
+  const T1 = '11111111-1111-1111-1111-111111111111'
+  const tables = {
+    lead_reminders: [
+      { id: '99999999-9999-9999-9999-999999999999', agent_id: 'a1', tenant_id: T1, practice_id: 'p1', master_practices: { practice_code: 'PR-1' },
+        remind_at: '2026-10-15T14:00:00Z', created_at: '2026-10-10T10:05:00Z', completed_at: null, done: false, note: 'Callback (Follow Up)', users: { full_name: 'Aqsam' } },
+      { id: 'r-old', agent_id: 'a1', tenant_id: T1, practice_id: 'p1', master_practices: { practice_code: 'PR-1' },
+        remind_at: '2026-10-10T10:00:00Z', created_at: '2026-10-05T09:00:00Z', completed_at: '2026-10-10T10:05:00Z', done: true, note: 'Callback', users: { full_name: 'Aqsam' } },
+      { id: 'r-other-co', agent_id: 'x', tenant_id: 'OTHER', practice_id: 'p1', master_practices: { practice_code: 'PR-1' },
+        remind_at: '2026-10-11T10:00:00Z', created_at: '2026-10-01T09:00:00Z', completed_at: null, done: false, note: 'other company', users: { full_name: 'X' } },
+    ],
+    master_practices: [{ id: 'p1', practice_code: 'PR-1' }, { id: 'p1-copy', practice_code: 'PR-1' }],
+    lead_activity: [
+      { practice_id: 'p1', tenant_id: T1, created_at: '2026-10-10T10:05:00Z', disposition: 'Follow Up', note: 'Asked to call back Thursday', users: { full_name: 'Aqsam' } },
+      { practice_id: 'p1-copy', tenant_id: T1, created_at: '2026-10-05T09:00:00Z', disposition: 'Voicemail', note: 'Left voicemail', users: { full_name: 'Aqsam' } },
+      { practice_id: 'p1', tenant_id: 'OTHER', created_at: '2026-10-06T09:00:00Z', disposition: 'Interested', note: 'other company note', users: { full_name: 'X' } },
+    ],
+  }
+  const db = { from(table) {
+    const filters = []; let single = false
+    const q = {
+      select() { return q }, order() { return q }, limit() { return q },
+      eq(k, v) { filters.push(r => r[k] === v); return q }, in(k, vs) { filters.push(r => vs.includes(r[k])); return q },
+      maybeSingle() { single = true; return q },
+      then(res, rej) { const rows = (tables[table] ?? []).filter(r => filters.every(f => f(r))); return Promise.resolve({ data: single ? rows[0] ?? null : rows, error: null }).then(res, rej) },
+    }
+    return q
+  } }
+  const { getLeadNotes } = loadTs('app/reminders-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => db, getCurrentUser: async () => ({ data: { user: { id: 'auth' } } }),
+    getCurrentProfile: async () => ({ data: { ...me, roles: { key: role } } }) } })
+  return getLeadNotes(reminderId)
+}
+
+test('reminders history: notes + callbacks of the lead (all copies), own company only', async () => {
+  const T1 = '11111111-1111-1111-1111-111111111111'
+  const res = await leadNotesAs('agent', { id: 'a1', tenant_id: T1 })
+  assert.equal(res.ok, true)
+  assert.deepEqual(res.notes.map(n => n.note).sort(), ['Asked to call back Thursday', 'Left voicemail'])   // both practice copies, not the other company
+  assert.equal(res.callbacks.length, 2)
+  const old = res.callbacks.find(c => c.done)
+  assert.equal(old.completedAt, '2026-10-10T10:05:00Z')                                                     // replaced callback kept as history
+})
+
+test('reminders history: who may see it', async () => {
+  const T1 = '11111111-1111-1111-1111-111111111111'
+  assert.equal((await leadNotesAs('agent', { id: 'someone-else', tenant_id: T1 })).ok, false)            // another agent's reminder
+  assert.equal((await leadNotesAs('manager', { id: 'm1', tenant_id: T1 })).ok, true)                      // manager of that company
+  assert.equal((await leadNotesAs('manager', { id: 'm2', tenant_id: 'OTHER' })).ok, false)                // manager of another company
+  assert.equal((await leadNotesAs('super_admin', { id: 's1', tenant_id: null })).ok, true)
+  assert.match((await leadNotesAs('agent', { id: 'a1', tenant_id: T1 }, "x' or 1=1")).message, /Invalid reminder/)
+})
+
+test('reminders: friend\'s history feature merged without losing the Back fix; SQL keeps one trigger', () => {
+  const fs = require('fs'), path = require('path'), read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
+  const client = read('app/reminders/RemindersClient.tsx')
+  assert.match(client, /View notes & history/); assert.match(client, /<LeadHistory reminderId=/)
+  assert.match(client, /leadHref\(r\.practiceCode, 'reminders'\)/)
+  const sql = read('database/reminders-follow-latest-callback.sql')
+  assert.match(sql, /DROP TRIGGER IF EXISTS trg_replace_active_lead_reminder ON public\.lead_reminders/)   // replaces, not adds
+  assert.match(sql, /BEGIN;[\s\S]*COMMIT;/)
 })

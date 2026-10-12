@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getActiveReminders, type Reminder } from './reminders-actions' // ← CHANGED: active-only (smaller) list
 import { classifyReminderAttention, getReminderNotificationSlot } from '../lib/reminder-utils'
+import { leadHref } from '../lib/lead-return'
 
 // Keep the bell quiet after its first successful load. A full browser reload
 // starts a fresh cache, while route changes reuse this in-memory result.
@@ -141,7 +142,7 @@ export default function NotificationBell({ initialReminders }: { initialReminder
                 return (
                   <Link prefetch={false} 
                     key={r.id}
-                    href={r.practiceDeleted ? '#' : `/practice/${r.practiceCode}`}
+                    href={r.practiceDeleted ? '#' : leadHref(r.practiceCode, 'reminders')}
                     className="topbar-bell-row"
                     onClick={(e) => { if (r.practiceDeleted) e.preventDefault(); setOpen(false) }}
                   >
@@ -170,7 +171,7 @@ export default function NotificationBell({ initialReminders }: { initialReminder
           <strong>{toast.slot === 'due-now' ? 'Reminder due now' : `Reminder due in ${toast.slot.replace('hour-', '')} hour${toast.slot === 'hour-1' ? '' : 's'}`}</strong>
           <span>{toast.reminder.practiceName}</span>
           <small>{fmtWhen(toast.reminder.remindAt)}{toast.reminder.note ? ` · ${toast.reminder.note}` : ''}</small>
-          {!toast.reminder.practiceDeleted && <Link prefetch={false} href={`/practice/${toast.reminder.practiceCode}`} onClick={() => setToast(null)}>Open lead →</Link>}
+          {!toast.reminder.practiceDeleted && <Link prefetch={false} href={leadHref(toast.reminder.practiceCode, 'reminders')} onClick={() => setToast(null)}>Open lead →</Link>}
         </div>
       )}
     </div>

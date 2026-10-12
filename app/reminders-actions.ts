@@ -146,3 +146,71 @@ export async function markReminderDone(reminderId: string): Promise<{ ok: boolea
   return { ok: true, completedAt }
 }
 
+
+// ← ADDED: everything an agent did on the lead behind a reminder — every
+// saved call note with its date, disposition and who saved it — plus the
+// lead's callback history (each callback set, and when it was completed or
+// replaced by a newer one). Same visibility as the reminder itself.
+export type LeadNote = { at: string; by: string | null; disposition: string | null; note: string | null }
+export type LeadCallback = { remindAt: string; setAt: string | null; completedAt: string | null; done: boolean; note: string | null; by: string | null }
+
+export async function getLeadNotes(reminderId: string): Promise<{
+  ok: boolean; message?: string; notes?: LeadNote[]; callbacks?: LeadCallback[]
+}> {
+  const supabase = await createSupabaseServer()
+  const me = await whoAmI()
+  if (!me) return { ok: false, message: 'Not signed in.' }
+  if (typeof reminderId !== 'string' || !/^[0-9a-f-]{36}$/i.test(reminderId)) return { ok: false, message: 'Invalid reminder.' }
+
+  const { data: reminder } = await supabase
+    .from('lead_reminders')
+    .select('id, agent_id, tenant_id, practice_id, master_practices(practice_code)')
+    .eq('id', reminderId)
+    .maybeSingle()
+  if (!reminder) return { ok: false, message: 'This reminder no longer exists.' }
+
+  const row = reminder as unknown as { agent_id: string; tenant_id: string | null; practice_id: string; master_practices: { practice_code: string | null } | null }
+  const isSuperAdmin = me.roleKey === 'super_admin'
+  const isCompanyRole = ['company_admin', 'manager', 'team_lead'].includes(me.roleKey)
+  if (!isSuperAdmin && row.agent_id !== me.id && !(isCompanyRole && row.tenant_id === me.tenantId)) {
+    return { ok: false, message: 'Not allowed.' }
+  }
+
+  // The same practice can exist as more than one row (e.g. Platform copy and
+  // company copy) — collect all rows with this practice code.
+  let practiceIds = [row.practice_id]
+  const code = row.master_practices?.practice_code
+  if (code) {
+    const { data: copies } = await supabase.from('master_practices').select('id').eq('practice_code', code)
+    practiceIds = Array.from(new Set([row.practice_id, ...((copies ?? []) as { id: string }[]).map((c) => c.id)]))
+  }
+
+  let activityQuery = supabase.from('lead_activity')
+    .select('created_at, disposition, note, users(full_name)')
+    .in('practice_id', practiceIds)
+    .order('created_at', { ascending: false })
+    .limit(100)
+  let callbackQuery = supabase.from('lead_reminders')
+    .select('remind_at, created_at, completed_at, done, note, users(full_name)')
+    .in('practice_id', practiceIds)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (row.tenant_id) {
+    activityQuery = activityQuery.eq('tenant_id', row.tenant_id)
+    callbackQuery = callbackQuery.eq('tenant_id', row.tenant_id)
+  }
+  const [activity, callbacks] = await Promise.all([activityQuery, callbackQuery])
+  if (activity.error) return { ok: false, message: activity.error.message }
+
+  type ActivityRow = { created_at: string; disposition: string | null; note: string | null; users: { full_name: string | null } | null }
+  type CallbackRow = { remind_at: string; created_at: string | null; completed_at: string | null; done: boolean | null; note: string | null; users: { full_name: string | null } | null }
+  return {
+    ok: true,
+    notes: ((activity.data ?? []) as unknown as ActivityRow[]).map((a) => ({
+      at: a.created_at, by: a.users?.full_name ?? null, disposition: a.disposition, note: a.note,
+    })),
+    callbacks: callbacks.error ? [] : ((callbacks.data ?? []) as unknown as CallbackRow[]).map((c) => ({
+      remindAt: c.remind_at, setAt: c.created_at, completedAt: c.completed_at, done: c.done === true, note: c.note, by: c.users?.full_name ?? null,
+    })),
+  }
+}

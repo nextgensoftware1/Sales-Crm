@@ -17,7 +17,7 @@ function currentMonthRange(): { from: string; to: string } {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>
+  searchParams: Promise<{ from?: string; to?: string; company?: string; agent?: string }>
 }) {
   const supabase = await createSupabaseServer()
 
@@ -42,11 +42,31 @@ export default async function DashboardPage({
   const toDate = requested ? (sp.to as string) : defaults.to
   const { fromISO, toISO } = requested ?? rangeBounds(defaults.from, defaults.to)!
 
-  // Helper: apply the right scope to a query on a table that has tenant_id + agent_id
-  const scope = (q: any, agentCol = 'agent_id') => {
-    if (isSuperAdmin) return q
+  // ---- Dashboard-wide Company / Agent filters (apply to every number) ----
+  // Company: Super Admin only. Agent: Super Admin (within the chosen company)
+  // and company admins / managers / team leads (own company only). Agents and
+  // closers always see just their own work.
+  const isUuid = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v)
+  const { data: companyRows } = isSuperAdmin
+    ? await supabase.from('tenants').select('id, name').eq('is_platform', false).order('name')
+    : { data: null }
+  const companies = ((companyRows ?? []) as { id: string; name: string }[])
+  const companyFilter = isSuperAdmin && isUuid(sp.company) && companies.some((c) => c.id === sp.company) ? sp.company : ''
+  const peopleTenant = isSuperAdmin ? companyFilter || null : isAgentOrCloser ? null : myTenantId
+  const { data: peopleRows } = peopleTenant
+    ? await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).order('full_name')
+    : { data: null }
+  const people = ((peopleRows ?? []) as { id: string; full_name: string | null }[]).map((u) => ({ id: u.id, name: u.full_name ?? 'Unknown' }))
+  const agentFilter = isUuid(sp.agent) && people.some((p) => p.id === sp.agent) ? sp.agent : ''
+
+  // Helper: apply the right scope + filters to a query on a table with a
+  // tenant column and a person column (agent_id, from_user_id, sold_by, ...).
+  const scope = (q: any, agentCol = 'agent_id', tenantCol = 'tenant_id') => {
     if (isAgentOrCloser) return q.eq(agentCol, myUserId)
-    return q.eq('tenant_id', myTenantId)
+    if (!isSuperAdmin) q = q.eq(tenantCol, myTenantId)
+    if (companyFilter) q = q.eq(tenantCol, companyFilter)
+    if (agentFilter) q = q.eq(agentCol, agentFilter)
+    return q
   }
 
   // --- Build all four queries, then run them IN PARALLEL (one latency hit) ---
@@ -65,27 +85,66 @@ export default async function DashboardPage({
     return q.order('created_at').order('practice_id').order('agent_id').range(from, to)
   }).then((data) => ({ data, count: data.length }))
 
-  let transQ = supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
-    .gte('created_at', fromISO).lte('created_at', toISO)
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) transQ = transQ.eq('from_user_id', myUserId)
-  else transQ = transQ.eq('tenant_id', myTenantId)
+  const transQ = scope(supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
+    .gte('created_at', fromISO).lte('created_at', toISO), 'from_user_id')
 
-  let salesQ = supabase.from('sales').select('contract_value, mrr')
-  if (isSuperAdmin) { /* all */ }
-  else if (isAgentOrCloser) salesQ = salesQ.eq('sold_by', myUserId)
-  else salesQ = salesQ.eq('tenant_id', myTenantId)
+  // ---- Sales in the range (every page; no 1,000-row cut-off) ----
+  // Uses each sale's exact creation time when the table has it, otherwise
+  // its sale date (a calendar date).
+  const missingColumn = (e: any) => ['42703', 'PGRST204'].includes(e?.code) || /column .* does not exist/i.test(e?.message ?? '')
+  const salesIn = (col: 'created_at' | 'sale_date') => readAllPages<{ contract_value: number | null; mrr: number | null }>((from, to, first) =>
+    scope(supabase.from('sales').select('id, contract_value, mrr', first ? { count: 'exact' } : undefined)
+      .gte(col, fromISO).lte(col, toISO), 'sold_by').order('id').range(from, to))
+  const salesQ = salesIn('created_at').catch((e) => (missingColumn(e) ? salesIn('sale_date') : Promise.reject(e)))
 
-  let clientQ = supabase.from('client_ownership').select('id', { count: 'exact', head: true }).eq('active', true)
+  // ---- Active clients won in the range (company via owner_tenant_id; agent = who sold it) ----
+  const clientByAgent = isAgentOrCloser ? myUserId : agentFilter
+  let clientQ = supabase.from('client_ownership')
+    .select(clientByAgent ? 'id, sales!inner(sold_by)' : 'id', { count: 'exact', head: true }).eq('active', true)
+    .gte('locked_at', fromISO).lte('locked_at', toISO)
   if (!isSuperAdmin) clientQ = clientQ.eq('owner_tenant_id', myTenantId)
+  if (companyFilter) clientQ = clientQ.eq('owner_tenant_id', companyFilter)
+  if (clientByAgent) clientQ = clientQ.eq('sales.sold_by', clientByAgent)
 
-  const [actRes, transRes, salesRes, clientRes] = await Promise.all([actQ, transQ, salesQ, clientQ])
+  // ---- Transfer KPI earned in the range (verified transfers; PKR) ----
+  type Credit = { agent_id: string | null; agent_name: string | null; amount: number | null; status?: string | null }
+  const creditsIn = (withStatus: boolean) => readAllPages<Credit>((from, to, first) => {
+    let q = supabase.from('transfer_kpi_credits')
+      .select(withStatus ? 'id, agent_id, agent_name, amount, status' : 'id, agent_id, agent_name, amount', first ? { count: 'exact' } : undefined)
+      .gte('verified_at', fromISO).lte('verified_at', toISO)
+    if (isAgentOrCloser) q = q.eq('agent_id', myUserId)
+    else {
+      if (!isSuperAdmin) q = q.eq('tenant_id', myTenantId)
+      if (companyFilter) q = q.eq('tenant_id', companyFilter)
+      if (agentFilter) q = q.eq('agent_id', agentFilter)
+    }
+    return q.order('id').range(from, to) as never
+  })
+  const creditsQ: Promise<Credit[] | null> = creditsIn(true)
+    .catch((e) => (missingColumn(e) ? creditsIn(false) : Promise.reject(e)))
+    .catch(() => null)   // KPI not set up yet → shown as "not set up", never breaks the page
+
+  const [actRes, transRes, sales, clientRes, credits] = await Promise.all([actQ, transQ, salesQ, clientQ, creditsQ])
 
   const activities = actRes.data
   const activityCount = actRes.count
   const transferCount = transRes.count
-  const sales = salesRes.data
   const clientCount = clientRes.count
+
+  // Incentives = verified transfer KPI in the range (rejected ones earn nothing).
+  const verifiedCredits = (credits ?? []).filter((c) => (c.status ?? 'verified') !== 'rejected')
+  const byAgentMap = new Map<string, { name: string; amount: number; count: number }>()
+  for (const c of verifiedCredits) {
+    const key = c.agent_id ?? `name:${c.agent_name ?? ''}`
+    const row = byAgentMap.get(key) ?? { name: c.agent_name ?? 'Unknown agent', amount: 0, count: 0 }
+    row.amount += Number(c.amount) || 0; row.count += 1
+    byAgentMap.set(key, row)
+  }
+  const incentives = credits === null ? null : {
+    total: verifiedCredits.reduce((sum, c) => sum + (Number(c.amount) || 0), 0),
+    count: verifiedCredits.length,
+    byAgent: Array.from(byAgentMap.values()).sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name)),
+  }
 
   // Disposition breakdown  [REAL]
   const dispoCounts: Record<string, number> = {}
@@ -103,7 +162,11 @@ export default async function DashboardPage({
   const proposalsCount = dispoCounts['Proposal'] ?? 0
   const contractsCount = dispoCounts['Contract'] ?? 0
 
-  const scopeLabel = isSuperAdmin
+  const companyLabel = companies.find((c) => c.id === companyFilter)?.name
+  const agentLabel = people.find((p) => p.id === agentFilter)?.name
+  const scopeLabel = (isSuperAdmin || agentFilter) && (companyLabel || agentLabel)
+    ? [isSuperAdmin ? 'Platform-wide' : (me as any)?.tenants?.name, companyLabel, agentLabel].filter(Boolean).join(' · ')
+    : isSuperAdmin
     ? 'Platform-wide · all companies'
     : isAgentOrCloser
     ? `${(me as any)?.full_name} · personal`
@@ -128,6 +191,7 @@ export default async function DashboardPage({
       totalValue={totalValue}
       totalMrr={totalMrr}
       clientCount={clientCount ?? 0}
+      incentives={incentives}
       proposalsCount={proposalsCount}
       contractsCount={contractsCount}
       dispoCounts={dispoCounts}
@@ -135,6 +199,7 @@ export default async function DashboardPage({
       isSuperAdmin={isSuperAdmin}
       fromDate={fromDate}
       toDate={toDate}
+      filters={{ company: companyFilter, agent: agentFilter, companies, people, canPickAgent: !isAgentOrCloser }}
     />
   )
 }

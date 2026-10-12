@@ -1,5 +1,6 @@
 import { allRows, getPracticeNavigation } from '../../../lib/practice-navigation'
 import Link from 'next/link'
+import { leadReturn } from '../../../lib/lead-return'
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../../lib/supabase-server'
@@ -51,12 +52,10 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
   const { from, company, view } = await searchParams
-  const returnPath = from === 'transfers' ? '/transfers' : from === 'worksheet-reports' ? '/worksheet-reports' : '/'
-  const returnQuery = from === 'transfers'
-    ? '?from=transfers'
-    : from === 'worksheet-reports'
-      ? `?company=${encodeURIComponent(company ?? '')}&view=${view === 'sheet' ? 'sheet' : 'reports'}`
-      : ''
+  // "Back" returns to the page that opened this lead (see lib/lead-return.ts);
+  // `navQuery` keeps that on Previous / Next and related-practice links.
+  const back = leadReturn({ from, company, view })
+  const navQuery = back.query
 
   const supabase = await createSupabaseServer()
 
@@ -229,8 +228,8 @@ export default async function PracticeDetail({
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
-          <Link prefetch={false} href={`${returnPath}${returnQuery}`}>
-            {from === 'worksheet-reports' ? '← Back to Worksheet Reports' : from === 'transfers' ? '← Back to transfers' : '← Back to all practices'}
+          <Link prefetch={false} href={back.href}>
+            ← {back.label}
           </Link>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
           <p className="subtle" style={{ marginTop: 12 }}>
@@ -330,6 +329,7 @@ export default async function PracticeDetail({
   //   only Individual          -> Individual
   //   only Group               -> Group
   //   neither                  -> Non Eligible
+    // for testing 
   let mipsIndividual = 0, mipsGroup = 0, mipsBoth = 0, mipsNonEligible = 0
   let anyCcm = false
   let rosterClinicianCount = 0
@@ -417,18 +417,18 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Worksheet Reports' : 'Back to list'}>
+              <Link prefetch={false} href={back.href} className="lead-back-btn" title={back.label}>
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </Link>
               <div className="lead-pager">
                 {prevCode ? (
-                  <Link prefetch={false} href={`/practice/${prevCode}${returnQuery}`} title="Previous Lead">
+                  <Link prefetch={false} href={`/practice/${prevCode}${navQuery}`} title="Previous Lead">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
                   </Link>
                 ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
                 <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : <>{totalCount} available leads</>}</span>
                 {nextCode ? (
-                  <Link prefetch={false} href={`/practice/${nextCode}${returnQuery}`} title="Next Lead">
+                  <Link prefetch={false} href={`/practice/${nextCode}${navQuery}`} title="Next Lead">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
                   </Link>
                 ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}
@@ -618,7 +618,7 @@ export default async function PracticeDetail({
                   </div>
                 )}
 
-                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} />}
+                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} linkQuery={navQuery} />}
               </aside>
               <div style={{ minWidth: 0 }}>
                 <Worksheet key={code} practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />

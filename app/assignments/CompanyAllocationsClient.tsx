@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react' // ← CHANGED: useRef inste
 import { Building2 } from 'lucide-react'
 import { getCompanyAllocatedLeadsPage, getCompanyAllocationSummary } from '../manage-assignments-actions' // ← CHANGED: paged version
 import WorkspacePanelToggle, { useWorkspacePanel } from '../WorkspacePanelToggle'
+import { leadHref } from '../../lib/lead-return'
 
 // ← ADDED: leads per page. The database returns one page at a time.
 const PAGE_SIZE = 50
@@ -143,7 +144,7 @@ export default function CompanyAllocationsClient({ initialData }: {
           {!loadingLeads && total === 0 ? <p className="subtle">No leads were allocated to this company on that date.</p> : (<>
           <div className="tbl-wrap" style={{ opacity: loadingLeads ? 0.6 : 1 }}><table className="tbl"><thead><tr><th>Practice</th><th>State</th><th>Specialty</th><th>Allocated</th><th>Status</th></tr></thead>
           <tbody>{leads.map((lead) => <tr key={lead.practiceCode}>
-            <td><Link prefetch={false} href={`/practice/${lead.practiceCode}`}>{lead.name}</Link><small className="assigned-lead-code">{lead.practiceCode}</small></td>
+            <td><Link prefetch={false} href={leadHref(lead.practiceCode, 'assignments')}>{lead.name}</Link><small className="assigned-lead-code">{lead.practiceCode}</small></td>
             <td>{lead.state ?? '—'}</td><td>{lead.specialty ?? '—'}</td><td>{new Date(lead.allocatedAt).toLocaleString()}</td>
             <td><span className="badge badge-green">{lead.status}</span></td>
           </tr>)}</tbody></table></div>
