@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import WorksheetReportsClient from './WorksheetReportsClient'
 import WorksheetSearchBox from './WorksheetSearchBox'
-import { getWorksheetReports } from '../worksheet-reports-actions'
+import { getWorksheetReports, getWorksheetCompanyCounts } from '../worksheet-reports-actions'
 import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
 import WorksheetCompanyFilter, { type WorksheetCompanyOption } from './WorksheetCompanyFilter'
 
@@ -43,19 +43,33 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
   // The tenants lookup only needs isSuperAdmin (already known) — it doesn't
   // actually depend on worksheetReports' result, so run them together
   // instead of tenants waiting for the whole worksheet report to finish first.
-  const [worksheetReports, tenantRowsResult] = await Promise.all([
-    getWorksheetReports(),
-    isSuperAdmin
-      ? createSupabaseServer().then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
-      : Promise.resolve({ data: null }),
-  ])
+  //
+  // Every worksheet is loaded (no 300 cap). Super Admin: picking a company
+  // loads only that company's worksheets (filtered in the database), and the
+  // company list shows exact counts counted in the database.
   const requestedCompany = (await searchParams).company ?? '__all__'
+  const requestedCompanyId = isSuperAdmin && /^[0-9a-f-]{36}$/i.test(requestedCompany) ? requestedCompany : ''
+  const [firstReports, tenantInfo] = await Promise.all([
+    getWorksheetReports({ companyId: requestedCompanyId }),
+    isSuperAdmin
+      ? createSupabaseServer()
+          .then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
+          .then(async ({ data }) => {
+            const tenants = (data ?? []) as { id: string; name: string }[]
+            return { tenants, counts: await getWorksheetCompanyCounts(tenants.map(t => t.id)) }
+          })
+      : Promise.resolve({ tenants: [] as { id: string; name: string }[], counts: {} as Record<string, number> }),
+  ])
+  // A company id that isn't an active company (old link / typed URL): show all.
+  const worksheetReports = requestedCompanyId && !tenantInfo.tenants.some(t => t.id === requestedCompanyId)
+    ? await getWorksheetReports()
+    : firstReports
   let companies: WorksheetCompanyOption[] = []
   if (worksheetReports.ok) {
     const countByTenant = new Map<string, number>()
     for (const row of worksheetReports.rows) countByTenant.set(row.tenantId, (countByTenant.get(row.tenantId) ?? 0) + 1)
     if (isSuperAdmin) {
-      companies = (tenantRowsResult.data ?? []).map(tenant => ({ id: tenant.id, name: tenant.name, count: countByTenant.get(tenant.id) ?? 0 }))
+      companies = tenantInfo.tenants.map(tenant => ({ id: tenant.id, name: tenant.name, count: tenantInfo.counts[tenant.id] ?? 0 }))
     } else if (me?.tenant_id) {
       companies = [{ id: me.tenant_id, name: me.tenants?.name ?? 'Your company', count: countByTenant.get(me.tenant_id) ?? worksheetReports.rows.length }]
     }

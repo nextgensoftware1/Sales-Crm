@@ -91,6 +91,11 @@ type PersistedLeadFilters = {
 
 const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
 
+// These signals are the same filters as the top-row categories (MIPS, RCM,
+// CCM — identical checks), so the Advanced filters row doesn't repeat them.
+const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
+const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
+
 export default function PracticesTable({ practices: practicesProp, packedPractices, serverPaging, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
   const [panelOpen, togglePanel] = useWorkspacePanel()
@@ -212,7 +217,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
+          setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -741,7 +746,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
           </div>
           <div className="signal-filter-row">
             <strong>Signals</strong>
-            {SIGNALS.map((s) => (
+            {ADVANCED_SIGNALS.map((s) => (
               <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
             ))}
             <SampleTag note="MIPS year / enrichment filters are display-only" />
