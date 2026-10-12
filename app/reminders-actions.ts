@@ -53,6 +53,21 @@ async function whoAmI() {
 export async function getReminders(): Promise<{
   ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
 }> {
+  return readReminders(false)
+}
+
+// ← ADDED: only reminders that are not done yet — all the notification bell
+// needs. The bell loads on every page, and the full list (with every
+// completed reminder ever) grows forever; this keeps that request small.
+export async function getActiveReminders(): Promise<{
+  ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
+}> {
+  return readReminders(true)
+}
+
+async function readReminders(activeOnly: boolean): Promise<{ // ← CHANGED: shared by both
+  ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
+}> {
   const supabase = await createSupabaseServer()
   const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
@@ -68,6 +83,7 @@ export async function getReminders(): Promise<{
       .order('remind_at', { ascending: true })
     if (scope === 'company') q = q.eq('tenant_id', me.tenantId)
     else if (scope === 'mine') q = q.eq('agent_id', me.id)
+    if (activeOnly) q = q.or('done.is.null,done.eq.false') // ← ADDED
     return q
   }
 

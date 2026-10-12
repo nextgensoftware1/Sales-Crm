@@ -1,82 +1,123 @@
 'use client'
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+// ← ADDED (new file) — dropdown that lets you tick several options at once,
+// with a search box for long lists (e.g. specialties). Used by the Leads
+// Engine "Specialty" filter. Empty selection = "All".
 
-/**
- * Dropdown that keeps several choices: click options to add or remove them —
- * the list stays open so you can keep picking. Includes a search box (long
- * lists such as specialties), "Select shown" and "Clear". Empty = all.
- */
-export default function MultiSelectFilter({ label, allLabel, options, selected, onChange, style, searchPlaceholder = 'Search…' }: {
-  label: string
-  allLabel: string
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+
+export default function MultiSelectFilter({
+  options, selected, onChange, allLabel, noun, style, ariaLabel,
+}: {
   options: string[]
   selected: string[]
   onChange: (next: string[]) => void
-  style?: CSSProperties
-  searchPlaceholder?: string
+  /** Button text when nothing is selected, e.g. "All Specialties". */
+  allLabel: string
+  /** Plural noun for the summary, e.g. "specialties". */
+  noun: string
+  style?: React.CSSProperties
+  ariaLabel: string
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const rootRef = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const listId = useId()
-  const chosen = useMemo(() => new Set(selected), [selected])
+  const selectedSet = useMemo(() => new Set(selected), [selected])
 
-  // Close when clicking outside or pressing Escape.
+  // Close on outside click or Escape.
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent) => { if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false) }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onDown = (event: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setOpen(false); buttonRef.current?.focus() }
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [open])
-  useEffect(() => { if (open) searchRef.current?.focus() }, [open])
 
   const shown = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return needle ? options.filter((o) => o.toLowerCase().includes(needle)) : options
+    const q = query.trim().toLowerCase()
+    return q ? options.filter((o) => o.toLowerCase().includes(q)) : options
   }, [options, query])
 
-  const toggle = (value: string) => onChange(chosen.has(value) ? selected.filter((v) => v !== value) : [...selected, value])
-  const summary = selected.length === 0 ? allLabel
-    : selected.length === 1 ? selected[0]
-    : `${selected[0]} +${selected.length - 1} more`
+  const toggle = (value: string) => {
+    onChange(selectedSet.has(value) ? selected.filter((v) => v !== value) : [...selected, value])
+  }
+  const selectShown = () => onChange(Array.from(new Set([...selected, ...shown])))
+
+  const summary = selected.length === 0
+    ? allLabel
+    : selected.length === 1 ? selected[0] : `${selected.length} ${noun} selected`
 
   return (
-    <div className="multi-select" ref={rootRef}>
-      <button type="button" className="multi-select-trigger" style={style} aria-haspopup="listbox" aria-expanded={open}
-        aria-controls={listId} aria-label={`${label}: ${selected.length ? `${selected.length} selected` : allLabel}`}
-        title={selected.length > 1 ? selected.join(', ') : undefined}
-        onClick={() => { setOpen((o) => !o); setQuery('') }}>
-        <span className="multi-select-summary">{summary}</span>
-        {selected.length > 1 && <span className="multi-select-count">{selected.length}</span>}
-        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+    <div ref={boxRef} style={{ position: 'relative', minWidth: 0 }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          ...style, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 8, cursor: 'pointer', textAlign: 'left',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={selected.join(', ') || undefined}>{summary}</span>
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', transform: open ? 'rotate(180deg)' : undefined }}><path d="m6 9 6 6 6-6" /></svg>
       </button>
+
       {open && (
-        <div className="multi-select-pop">
-          <input ref={searchRef} type="search" className="multi-select-search" placeholder={searchPlaceholder} aria-label={`Search ${label.toLowerCase()}`}
-            value={query} onChange={(e) => setQuery(e.target.value)} />
-          <div className="multi-select-actions">
-            <span>{selected.length ? `${selected.length} selected` : allLabel}</span>
-            <span>
-              {shown.length > 0 && <button type="button" onClick={() => onChange(Array.from(new Set([...selected, ...shown])))}>Select shown</button>}
-              {selected.length > 0 && <button type="button" onClick={() => onChange([])}>Clear</button>}
+        <div
+          style={{
+            position: 'absolute', zIndex: 50, top: 'calc(100% + 4px)', left: 0, right: 0, minWidth: 260,
+            background: 'var(--surface, #fff)', color: 'var(--ink, #111)', border: '1px solid var(--border, #d6dde3)',
+            borderRadius: 8, boxShadow: '0 12px 32px rgba(10, 30, 45, 0.18)', padding: 8,
+          }}
+        >
+          <input
+            autoFocus
+            type="search"
+            className="input"
+            placeholder={`Search ${noun}…`}
+            aria-label={`Search ${noun}`}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{ width: '100%', fontSize: 13, padding: '7px 10px', borderRadius: 6, marginBottom: 6, boxSizing: 'border-box' }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '2px 2px 6px', fontSize: 12 }}>
+            <span style={{ color: 'var(--muted, #667)' }}>{selected.length} selected</span>
+            <span style={{ display: 'flex', gap: 10 }}>
+              <button type="button" onClick={selectShown} disabled={shown.length === 0}
+                style={{ border: 0, background: 'none', padding: 0, color: 'var(--accent-dark, #0f766e)', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>
+                {query ? 'Select shown' : 'Select all'}
+              </button>
+              <button type="button" onClick={() => onChange([])} disabled={selected.length === 0}
+                style={{ border: 0, background: 'none', padding: 0, color: 'var(--accent-dark, #0f766e)', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>
+                Clear
+              </button>
             </span>
           </div>
-          <ul id={listId} role="listbox" aria-multiselectable="true" aria-label={label} className="multi-select-list">
-            {shown.length === 0 ? <li className="multi-select-empty">No matches</li> : shown.map((option) => (
-              <li key={option} role="option" aria-selected={chosen.has(option)} tabIndex={0}
-                className={'multi-select-option' + (chosen.has(option) ? ' is-selected' : '')}
-                onClick={() => toggle(option)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(option) } }}>
-                <span className="multi-select-check" aria-hidden="true">{chosen.has(option) ? '✓' : ''}</span>
+          <div id={listId} role="listbox" aria-multiselectable="true" aria-label={ariaLabel} style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {shown.length === 0 ? (
+              <p style={{ margin: 0, padding: '8px 4px', fontSize: 12, color: 'var(--muted, #667)' }}>No {noun} match “{query}”.</p>
+            ) : shown.map((option) => (
+              <label key={option} role="option" aria-selected={selectedSet.has(option)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px', fontSize: 13, cursor: 'pointer', borderRadius: 4 }}>
+                <input type="checkbox" checked={selectedSet.has(option)} onChange={() => toggle(option)} />
                 <span>{option}</span>
-              </li>
+              </label>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>

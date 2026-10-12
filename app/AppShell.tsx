@@ -98,7 +98,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     ],
   },
   '/kpi': {
-    kicker: 'Incentives', title: 'KPI', description: 'PKR 500 for every verified transfer.',
+    kicker: 'Incentives', title: 'KPI', description: 'Per Transfer Incentives Calculator',
     items: [
       { href: '/kpi', label: 'KPI records', description: 'Verified transfer earnings', icon: Wallet },
       { href: '/transfers', label: 'Transfers', description: 'Verify pending transfers', icon: FileCheck2 },

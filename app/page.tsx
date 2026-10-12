@@ -14,6 +14,10 @@ import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // �
 // CRM_INSTANT_LEADS=0 to always load everything first, as before.
 const REUSE_SNAPSHOT_MS = 10 * 60 * 1000
 const FRESH_COOKIE = 'crm_leads_fresh'
+const BACKGROUND_REFRESH_AFTER_MS = 2 * 60 * 1000 // ← ADDED
+function snapshotOlderThan(createdAt: number, ms: number) { // ← ADDED
+  return Date.now() - createdAt > ms
+}
 
 export default async function Home() {
   const serverPaged = process.env.CRM_SERVER_PAGED_LEADS !== '0'
@@ -82,7 +86,11 @@ export default async function Home() {
         rows: first.rows,
         codes: first.codes,
         pageSize: first.pageSize,
-        stale: Boolean(reused), // ← ADDED: the table refreshes it in the background
+        // ← CHANGED: refresh in the background only when the reused data is
+        // older than 2 minutes. Moving quickly between pages no longer
+        // re-runs the full lead load each time (which also slowed the next
+        // page you opened). Your own changes still always load fresh.
+        stale: Boolean(reused) && snapshotOlderThan(reused?.createdAt ?? 0, BACKGROUND_REFRESH_AFTER_MS),
       },
     }
   } else {

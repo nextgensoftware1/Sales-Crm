@@ -9,11 +9,11 @@ import { assignLeadsToAgent } from './assign-actions'
 import { unpackRows, type PackedRows } from '../lib/lead-pack'
 import { queryLeadPage, refreshLeadSnapshot } from './leads-page-actions' // ← CHANGED: + refreshLeadSnapshot
 import { markLeadsChanged } from '../lib/leads-fresh' // ← ADDED
+import MultiSelectFilter from './MultiSelectFilter' // ← ADDED: multi-select specialty
 import { formatCalendarDate } from '../lib/assigned-dates'
-import MultiSelectFilter from './MultiSelectFilter'
 import WorkspacePanelToggle, { useWorkspacePanel } from './WorkspacePanelToggle'
 import {
-  SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, toSpecialtyList, filterLeads, leadOverview,
+  SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
 } from '../lib/lead-filters'
 
@@ -48,8 +48,7 @@ type Props = {
   viewerRole?: string
   completedWorksheetCount?: number
 }
-const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
-const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
+
 // ---- palette (dark, matches the sample) ----
 const C = {
   bg: 'var(--bg)',
@@ -72,7 +71,8 @@ const C = {
 type PersistedLeadFilters = {
   search: string
   stateFilter: string
-  specialtyFilter: string[] | string   // a list now; older saved filters held one value
+  specialtyFilter: string // older saved filters (one specialty)
+  specialtyFilters?: string[] // ← ADDED: several specialties
   dispositionFilter: string
   companyFilter: string
   zoneFilter: ZoneKey | ''
@@ -140,7 +140,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   // ---- REAL filter state ----
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
-  const [specialtyFilter, setSpecialtyFilter] = useState<string[]>([])   // several at once
+  const [specialtyFilters, setSpecialtyFilters] = useState<string[]>([]) // ← CHANGED: several specialties
   const [dispositionFilter, setDispositionFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
   const [zoneFilter, setZoneFilter] = useState<ZoneKey | ''>('')
@@ -205,12 +205,14 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         const filters = JSON.parse(stored) as Partial<PersistedLeadFilters>
         if (typeof filters.search === 'string') setSearch(filters.search)
         if (typeof filters.stateFilter === 'string') setStateFilter(filters.stateFilter)
-        if (filters.specialtyFilter !== undefined) setSpecialtyFilter(toSpecialtyList(filters.specialtyFilter))
+        // ← CHANGED: restore the list; older saved filters had one specialty.
+        if (Array.isArray(filters.specialtyFilters)) setSpecialtyFilters(filters.specialtyFilters.filter((v): v is string => typeof v === 'string' && v.length > 0))
+        else if (typeof filters.specialtyFilter === 'string' && filters.specialtyFilter) setSpecialtyFilters([filters.specialtyFilter])
         if (typeof filters.dispositionFilter === 'string') setDispositionFilter(filters.dispositionFilter)
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-         setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
+          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -232,7 +234,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   useEffect(() => {
     if (!filtersRestored) return
     const filters: PersistedLeadFilters = {
-      search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter,
+      search, stateFilter, specialtyFilter: '', specialtyFilters, dispositionFilter, companyFilter, zoneFilter, // ← CHANGED
       activeSignals: Array.from(activeSignals), assignedView, poolTab, sourceTab, catTab,
       enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     }
@@ -241,7 +243,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     } catch {
       // Keep filtering usable when browser storage is unavailable.
     }
-  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilter, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilters, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   // Dropdown options and summary-card numbers: computed here in legacy mode,
   // computed on the server (same function) in server-paged mode.
@@ -288,10 +290,10 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   // Current filters as one object (same values the browser filtered by before).
   const filters = useMemo<LeadFilters>(() => ({
     ...DEFAULT_LEAD_FILTERS,
-    search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter,
+    search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, // ← CHANGED
     activeSignals: Array.from(activeSignals), catTab, sourceTab, poolTab, assignedView, companyFilter,
     enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
-  }), [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  }), [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters])
 
   // Legacy mode: filter the full list in the browser.
@@ -405,7 +407,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const pageRows = serverPaging ? serverView.rows : filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilter, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -510,15 +512,15 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilter([]); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilters([]); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
   }
 
   const activeFilterCount = [
-    search, stateFilter, zoneFilter, specialtyFilter.length ? 'specialty' : '', dispositionFilter, companyFilter,
+    search, stateFilter, zoneFilter, dispositionFilter, companyFilter,
     enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
     poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
-  ].filter(Boolean).length + activeSignals.size
+  ].filter(Boolean).length + activeSignals.size + specialtyFilters.length // ← CHANGED: each specialty counts
 
   return (
     <div className="leads-engine" style={{ color: C.text, fontFamily: 'var(--font-sans), ui-sans-serif, system-ui, sans-serif' }}>
@@ -695,9 +697,17 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <option value="">All States</option>
             {states.map((s) => <option key={s} value={s}>{s}</option>)}
           </select></label>
+          {/* ← CHANGED: tick several specialties (searchable list) */}
           <div className="filter-control"><span>Specialty</span>
-            <MultiSelectFilter label="Specialty" allLabel="All Specialties" options={specialties} selected={specialtyFilter}
-              onChange={setSpecialtyFilter} style={input} searchPlaceholder="Search specialties…" />
+            <MultiSelectFilter
+              ariaLabel="Filter by specialty"
+              options={specialties}
+              selected={specialtyFilters}
+              onChange={setSpecialtyFilters}
+              allLabel="All Specialties"
+              noun="specialties"
+              style={input}
+            />
           </div>
           <label className="filter-control"><span>Disposition</span><select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
             <option value="">All Dispositions</option>
@@ -730,12 +740,12 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             <label className="filter-control"><span>Enrichment</span><select disabled style={{ ...input, opacity: 0.6 }}><option>Any Enrichment</option></select></label>
           </div>
           <div className="signal-filter-row">
-  {/* <strong>Signals</strong> */}
-  {ADVANCED_SIGNALS.map((s) => (
-    <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
-  ))}
-  {/* <SampleTag note="MIPS year / enrichment filters are display-only" /> */}
-</div>
+            <strong>Signals</strong>
+            {SIGNALS.map((s) => (
+              <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+            ))}
+            <SampleTag note="MIPS year / enrichment filters are display-only" />
+          </div>
         </details>
 
         {activeFilterCount > 0 && (
@@ -744,7 +754,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             {search && <button onClick={() => setSearch('')}>Search: {search} ×</button>}
             {zoneFilter && <button onClick={() => setZoneFilter('')}>{zoneFilter} Zone ×</button>}
             {stateFilter && <button onClick={() => setStateFilter('')}>{stateFilter} ×</button>}
-            {specialtyFilter.map((value) => <button key={`specialty:${value}`} onClick={() => setSpecialtyFilter(specialtyFilter.filter((v) => v !== value))}>{value} ×</button>)}
+            {specialtyFilters.map((sp) => <button key={sp} onClick={() => setSpecialtyFilters((prev) => prev.filter((v) => v !== sp))}>{sp} ×</button>)}{/* ← CHANGED */}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
             {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {formatCalendarDate(assignedDateFilter)} ×</button>}

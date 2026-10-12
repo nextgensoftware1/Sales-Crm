@@ -59,6 +59,8 @@ export default function UploadLeadsButton() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [details, setDetails] = useState('') // ← ADDED: per-part results (hover the message)
+  // ← ADDED: also fill in leads that already exist with this file's data.
+  const [updateExisting, setUpdateExisting] = useState(false)
 
   // ← ADDED: warn before closing the tab in the middle of a multi-part upload.
   useEffect(() => {
@@ -89,7 +91,7 @@ export default function UploadLeadsButton() {
       // ← CHANGED: small files still go in ONE request, exactly as before.
       if (parts.length === 1) {
         setMsg(`Uploading ${parsed.length} rows…`)
-        const res = await uploadLeadsCsv(parts[0])
+        const res = await uploadLeadsCsv(parts[0], { updateExisting }) // ← CHANGED
         setMsg(res.message)
         if (res.ok) { markLeadsChanged(); router.refresh() } // ← CHANGED
         return
@@ -98,6 +100,7 @@ export default function UploadLeadsButton() {
       // ← ADDED: large file — upload part by part, in order.
       let inserted = 0
       let skipped = 0
+      let updated = 0 // ← ADDED
       const partMessages: string[] = []
       let done = 0
       for (let i = 0; i < parts.length; i++) {
@@ -106,7 +109,7 @@ export default function UploadLeadsButton() {
         setMsg(`Uploading part ${i + 1} of ${parts.length} (rows ${from.toLocaleString()}–${to.toLocaleString()} of ${rows.length.toLocaleString()})…`)
         let res: Awaited<ReturnType<typeof uploadLeadsCsv>>
         try {
-          res = await uploadLeadsCsv(parts[i])
+          res = await uploadLeadsCsv(parts[i], { updateExisting }) // ← CHANGED
         } catch (err: unknown) {
           res = { ok: false, message: err instanceof Error ? err.message : 'network error' }
         }
@@ -124,6 +127,7 @@ export default function UploadLeadsButton() {
         anySaved = true
         inserted += res.inserted ?? 0
         skipped += res.skipped ?? 0
+        updated += res.updated ?? 0 // ← ADDED
         done = to
       }
 
@@ -138,7 +142,8 @@ export default function UploadLeadsButton() {
         `Uploaded ${inserted.toLocaleString()} lead(s)` +
         (roster ? ` + ${roster.toLocaleString()} roster member(s)` : '') +
         (skipped ? `, ${skipped.toLocaleString()} already existed` : '') +
-        '.' + enrichedNote,
+        '.' + (updateExisting ? ` Updated ${updated.toLocaleString()} existing lead(s).` : '') + enrichedNote + // ← CHANGED
+        (partMessages.some(m => /Ignored \d+ column/.test(m)) ? ' Some columns were ignored — hover for details.' : ''),
       )
     } catch (err: unknown) {
       setMsg('Upload failed: ' + (err instanceof Error ? err.message : 'unknown error'))
@@ -152,6 +157,12 @@ export default function UploadLeadsButton() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       {msg && <span title={details || undefined} role="status" style={{ fontSize: 12, color: '#8a99a8' }}>{msg}</span>}
+      {/* ← ADDED */}
+      <label title="Also fill in leads that already exist using this file's values (never blanks existing data)"
+        style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#8a99a8', cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>
+        <input type="checkbox" checked={updateExisting} disabled={busy} onChange={(e) => setUpdateExisting(e.target.checked)} />
+        Update existing leads
+      </label>
       <button
         onClick={onPick}
         disabled={busy}

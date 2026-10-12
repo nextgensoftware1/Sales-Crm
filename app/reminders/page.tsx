@@ -49,7 +49,9 @@ export default async function RemindersPage() {
       showAdmin={isSuperAdmin}
       showTransfers
       canManageUsers={isSuperAdmin || isCompanyRole}
-      initialReminders={reminderResult.ok ? reminderResult.reminders ?? [] : undefined}
+      // ← CHANGED: the bell only needs reminders that aren't done yet, so the
+      // page no longer sends the whole history twice.
+      initialReminders={reminderResult.ok ? (reminderResult.reminders ?? []).filter((r) => !r.done) : undefined}
       contextExtra={isSuperAdmin ? <ReminderCompanyNav counts={companyReminderCounts} /> : null}
     >
       <RemindersClient initialData={reminderResult.ok ? {

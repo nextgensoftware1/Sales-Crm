@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getReminders, type Reminder } from './reminders-actions'
+import { getActiveReminders, type Reminder } from './reminders-actions' // ← CHANGED: active-only (smaller) list
 import { classifyReminderAttention, getReminderNotificationSlot } from '../lib/reminder-utils'
 
 // Keep the bell quiet after its first successful load. A full browser reload
@@ -18,7 +18,7 @@ async function getCachedReminders(force = false): Promise<Reminder[] | null> {
   if (!force && reminderCache) return reminderCache.reminders
   if (reminderRequest) return reminderRequest
 
-  reminderRequest = getReminders()
+  reminderRequest = getActiveReminders() // ← CHANGED
     .then((res) => {
       if (!res.ok) return null
       const reminders = res.reminders ?? []

@@ -879,6 +879,24 @@ type CsvRow = Record<string, string>
 
 const CHUNK = 500
 const clean = (v: string | undefined) => (v ?? '').trim()
+
+// ← ADDED: every CSV header the upload understands (case-insensitive).
+// Any other column is reported as "ignored" in the upload message, so a
+// header spelled differently from what the CRM expects is visible at once.
+const KNOWN_HEADERS = [
+  'NPI', 'Record_Source', 'Source', 'NPPES_Name', 'Name', 'NPPES_ProviderName', 'NPPES_OrganizationName',
+  'NPPES_PrimaryState', 'NPPES_State', 'State', 'NPPES_PrimaryCity', 'NPPES_City', 'City',
+  'NPPES_PrimaryPostal', 'NPPES_Postal', 'Postal', 'NPPES_PrimaryTaxonomyDesc', 'NPPES_Taxonomy_Desc', 'Specialty',
+  'NPPES_PrimaryPhone', 'NPPES_Phone', 'Phone', 'NPPES_MailingPhone', 'NPPES_ContactPhone',
+  'NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address',
+  'NPPES_Credential', 'Credential',
+  'NPPES_AuthOfficial_Name', 'NPPES_AuthOfficial_FirstName', 'NPPES_AuthOfficial_MiddleName', 'NPPES_AuthOfficial_LastName',
+  'NPPES_AuthOfficial_Title', 'NPPES_AuthOfficial_Phone', 'NPPES_AuthOfficial_Credential',
+  'NPPES_Sex', 'NPPES_LastUpdated', 'NPPES_Status', 'NPPES_PrimaryTaxonomyCode', 'NPPES_EnumerationType', 'NPPES_EnumerationDate',
+  'Payment_Adj_%', 'Payment_Adj_Pct', 'Payment Adjustment Percentage', 'At_Risk', 'Panelty', 'Penalty',
+  'Org_PAC_ID', 'Org_Name', 'Num_Org_Members', 'PECOS_ASCT_CNTL_ID', 'ENRLMT_ID',
+  'CMS_CCM', 'CMS_PCM', 'CMS_AWV', 'CMS_TCM', 'CMS_BHI', 'CMS_RPM', 'CMS_RCM', 'CMS_Category', 'MIPS_By_Year',
+].map((h) => h.toLowerCase())
 const yes = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'yes'
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -888,9 +906,13 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 export async function uploadLeadsCsv(
-  rows: CsvRow[]
-): Promise<{ ok: boolean; message: string; inserted?: number; skipped?: number }> {
+  rows: CsvRow[],
+  // ← ADDED: updateExisting = also fill in leads that already exist, using
+  // this file's non-empty values (off by default — same as before).
+  options: { updateExisting?: boolean } = {},
+): Promise<{ ok: boolean; message: string; inserted?: number; skipped?: number; updated?: number }> {
   const supabase = await createSupabaseServer()
+  const updateExisting = options?.updateExisting === true
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
@@ -939,6 +961,36 @@ export async function uploadLeadsCsv(
   const npiKey = keyMap.get('npi')
   if (!npiKey) return { ok: false, message: 'CSV has no NPI column.' }
 
+  // ← ADDED: first non-empty value among several possible header names.
+  const firstOf = (row: CsvRow, names: string[]) => {
+    for (const name of names) { const v = col(row, name); if (v) return v }
+    return ''
+  }
+  // ← ADDED: NPPES fields the upload did not read before.
+  const extraFields = (row: CsvRow) => ({
+    org_name: firstOf(row, ['NPPES_OrganizationName', 'Org_Name']),
+    credential: firstOf(row, ['NPPES_Credential', 'Credential']),
+    addr1: firstOf(row, ['NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']),
+    auth_official_name: col(row, 'NPPES_AuthOfficial_Name') ||
+      ['NPPES_AuthOfficial_FirstName', 'NPPES_AuthOfficial_MiddleName', 'NPPES_AuthOfficial_LastName'].map((h) => col(row, h)).filter(Boolean).join(' '),
+    auth_official_title: col(row, 'NPPES_AuthOfficial_Title'),
+    auth_official_phone: col(row, 'NPPES_AuthOfficial_Phone'),
+    auth_official_credential: col(row, 'NPPES_AuthOfficial_Credential'),
+  })
+  // ← ADDED: columns in this file that the CRM does not use.
+  const knownHeaders = new Set(KNOWN_HEADERS)
+  const ignoredHeaders = Object.keys(rows[0]).map((h) => h.trim()).filter((h) => h && !knownHeaders.has(h.toLowerCase()))
+  const ignoredNote = ignoredHeaders.length
+    ? ` Ignored ${ignoredHeaders.length} column(s) the CRM doesn't use: ${ignoredHeaders.slice(0, 12).join(', ')}${ignoredHeaders.length > 12 ? ', …' : ''}.`
+    : ''
+  // ← ADDED: the new columns must exist before anything is written.
+  {
+    const { error: schemaError } = await supabase.from('providers').select('auth_official_phone, auth_official_credential').limit(1)
+    if (schemaError) {
+      return { ok: false, message: 'The database is missing the new NPPES columns — run database/upload-nppes-fields.sql in Supabase, then upload again.' }
+    }
+  }
+
   const byCode = new Map<string, CsvRow>()
   for (const row of rows) {
     const npi = clean(row[npiKey])
@@ -967,7 +1019,11 @@ export async function uploadLeadsCsv(
     const npi = clean(byCode.get(code)![npiKey])
     if (npi) npiByCode.set(code, npi)
   }
-  const incomingNpis = Array.from(new Set(npiByCode.values()))
+  // ← CHANGED (bug fix): look up the current record_source for EVERY NPI in
+  // the file, not only the new ones. Before, leads that already existed were
+  // never looked up, so they always looked "not Credentialing yet" and were
+  // re-enriched on every re-upload (why re-uploads took minutes).
+  const incomingNpis = Array.from(new Set(allCodes.map((c) => clean(byCode.get(c)![npiKey])).filter(Boolean)))
   // Maps each existing NPI to its CURRENT record_source value (or '' if
   // none) — this is how "already Credentialing" is distinguished from
   // "still MIPS/general": non-empty means it's already in the
@@ -1028,7 +1084,7 @@ export async function uploadLeadsCsv(
   // before), then applied in ONE database call per 500 rows via
   // enrich_uploaded_leads (database/upload-bulk-enrich.sql). Before, every
   // row cost 2 separate requests — the main cause of 17–33 s per part.
-  const buildPatches = (code: string) => {
+  const buildPatches = (code: string, promote = true) => { // ← CHANGED: promote=false for "update existing"
     const row = byCode.get(code)!
     const npi = clean(row[npiKey])
     const enrichment: Record<string, string> = {
@@ -1049,11 +1105,14 @@ export async function uploadLeadsCsv(
       entity_type: col(row, 'NPPES_EnumerationType') || '',
       enumeration_date: col(row, 'NPPES_EnumerationDate') || '',
       record_source: col(row, 'Record_Source') || '',
+      ...extraFields(row), // ← ADDED: org name, credential, address, authorized official
     }
     // Only patch fields this row actually has a value for — a blank
     // cell in the enrichment file shouldn't blank out data the lead
     // already had.
     const providerPatch = Object.fromEntries(Object.entries(enrichment).filter(([, v]) => v !== ''))
+    // ← ADDED: a plain update never changes Credentialing status.
+    if (!promote) delete providerPatch.record_source
     // Kept in sync with master_practices too — the leads list reads
     // name/state/specialty directly from there, not from providers.
     // is_roster is unconditionally set to false: every code in
@@ -1101,7 +1160,7 @@ export async function uploadLeadsCsv(
         const { npi, providerPatch, practicePatch } = buildPatches(code)
         return { code, npi, provider: providerPatch, practice: practicePatch }
       })
-      const { data, error } = await supabase.rpc('enrich_uploaded_leads', { p_tenant_id: tenantId, p_rows: payload })
+      const { data, error } = await supabase.rpc('enrich_uploaded_leads', { p_tenant_id: tenantId, p_rows: payload, p_promote: true })
       if (error) {
         if (error.code === 'PGRST202' || error.code === '42883') {
           useFallback = true
@@ -1122,6 +1181,30 @@ export async function uploadLeadsCsv(
   // reported count wrong without any visible error. Surface it instead.
   if (enrichError) return { ok: false, message: enrichError }
 
+  // ← ADDED: "Update existing leads" — fill in leads that already exist with
+  // this file's non-empty values. Doesn't change roster or Credentialing
+  // status, and never blanks existing data. Same company only.
+  let updatedCount = 0
+  if (updateExisting) {
+    const enrichSet = new Set(codesToEnrich)
+    const codesToUpdate = allCodes.filter((c) => !toInsertSet.has(c) && !enrichSet.has(c))
+    for (const part of chunk(codesToUpdate, 500)) {
+      const payload = part.map((code) => {
+        const { npi, providerPatch, practicePatch } = buildPatches(code, false)
+        return { code, npi, provider: providerPatch, practice: practicePatch }
+      })
+      const { data, error } = await supabase.rpc('enrich_uploaded_leads', { p_tenant_id: tenantId, p_rows: payload, p_promote: false })
+      if (error) {
+        if (error.code === 'PGRST202' || error.code === '42883') {
+          return { ok: false, message: 'Updating existing leads needs the latest database function — run database/upload-nppes-fields.sql in Supabase.' }
+        }
+        return { ok: false, message: `Updating existing leads failed: ${error.message}` }
+      }
+      updatedCount += ((data ?? {}) as { enriched?: number }).enriched ?? 0
+    }
+  }
+  const updatedNote = updateExisting ? ` Updated ${updatedCount} existing lead(s) with this file's data.` : ''
+
   if (toInsert.length === 0) {
     if (enrichedCount > 0 || notMatchedCodes.length > 0) {
       const untouched = skipped - enrichedCount - notMatchedCodes.length
@@ -1134,10 +1217,10 @@ export async function uploadLeadsCsv(
           `they may be owned by a different company or the practice/provider link is out of sync`
         )
       }
-      if (untouched > 0) parts.push(`${untouched} other duplicate(s) had no new match to add`)
-      return { ok: true, message: parts.join('. ') + '.', inserted: 0, skipped }
+      if (untouched > 0 && !updateExisting) parts.push(`${untouched} other duplicate(s) had no new match to add`)
+      return { ok: true, message: parts.join('. ') + '.' + updatedNote + ignoredNote, inserted: 0, skipped, updated: updatedCount }
     }
-    return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.`, inserted: 0, skipped }
+    return { ok: true, message: `Nothing new — all ${skipped} lead(s) already exist for your company.` + updatedNote + ignoredNote, inserted: 0, skipped, updated: updatedCount }
   }
 
   // Anchor detection: in a Credentialing-type file, only a row whose own
@@ -1178,7 +1261,9 @@ export async function uploadLeadsCsv(
         if (src.startsWith('roster:')) return src.slice('roster:'.length).trim() || null
         return col(row, 'Org_PAC_ID') || null
       })(),
-      org_name: col(row, 'Org_Name') || null,
+      // ← CHANGED: org name also from NPPES_OrganizationName; + credential,
+      // address and authorized official from the NPPES columns.
+      ...Object.fromEntries(Object.entries(extraFields(row)).map(([k, v]) => [k, v || null])),
       num_org_members: numMembers ? parseInt(numMembers, 10) || null : null,
       pecos_asct_cntl_id: pecos,
       enrlmt_id: enrlmt,
@@ -1308,8 +1393,9 @@ export async function uploadLeadsCsv(
       (rosterCount ? ` + ${rosterCount} roster member(s)` : '') +
       (enrichedCount ? `, enriched ${enrichedCount} existing lead(s) with new NPPES data` : '') +
       (notMatchedCodes.length ? `, ${notMatchedCodes.length} were eligible for Credentialing promotion but had no matching record to update` : '') +
-      (plainSkipped ? `, skipped ${plainSkipped} duplicate(s)` : '') + '.',
+      (plainSkipped ? `, skipped ${plainSkipped} duplicate(s)` : '') + '.' + updatedNote + ignoredNote, // ← CHANGED
     inserted: anchorCodes.length,
     skipped,
+    updated: updatedCount,
   }
 }

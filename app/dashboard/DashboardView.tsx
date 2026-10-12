@@ -26,8 +26,6 @@ type Props = {
   isSuperAdmin?: boolean
   fromDate: string
   toDate: string
-  /** Dashboard-wide Company / Agent filters (applied to every number). */
-  filters?: import('./DateRangePicker').DashboardFilterOptions
 }
 
 const money = (n: number) => '$' + (Number(n) || 0).toLocaleString()
@@ -69,7 +67,7 @@ export default function DashboardView(p: Props) {
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         {/* ---- Date & time range: in the page (not the top bar), above the numbers ---- */}
-        <DateRangePicker from={p.fromDate} to={p.toDate} filters={p.filters} />
+        <DateRangePicker from={p.fromDate} to={p.toDate} />
 
         {/* ---- Hero stats: the headline numbers, given real visual weight
              instead of sitting equal-sized next to nine other cards ---- */}
@@ -90,10 +88,10 @@ export default function DashboardView(p: Props) {
         </div>
 
         {/* ---- Worksheets, transfers and Call Disposition breakdown (follows the date range) ---- */}
-        <WorkOverviewPanel fromDate={p.fromDate} toDate={p.toDate} companyId={p.filters?.company ?? ''} agentId={p.filters?.agent ?? ''} />
+        <WorkOverviewPanel fromDate={p.fromDate} toDate={p.toDate} />
 
         {/* ---- Transfer KPI: PKR 500 per verified transfer (this month + all-time) ---- */}
-        <TransferKpiPanel companyId={p.filters?.company ?? ''} agentId={p.filters?.agent ?? ''} />
+        <TransferKpiPanel />
 
         {/* ---- Charts row ---- */}
         <div className="grid-dash-a page-anchor" id="pipeline">

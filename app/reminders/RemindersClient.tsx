@@ -5,6 +5,11 @@ import { useEffect, useState } from 'react'
 import { getReminders, markReminderDone, type Reminder } from '../reminders-actions'
 import { useReminderCompanyFilter } from './ReminderCompanyFilter'
 
+// ← ADDED: rows drawn per section at first. Counts in the headings stay
+// exact; "Show more" draws the next rows. Drawing hundreds of completed
+// reminders at once was what made this page slow as history grew.
+const ROWS_PER_STEP = 25
+
 const SCOPE_LABEL: Record<string, string> = {
   all: 'across all companies',
   company: 'for your company',
@@ -21,6 +26,7 @@ export default function RemindersClient({ initialData, initialMessage, companies
   const [loading, setLoading] = useState(!initialData && !initialMessage)
   const [msg, setMsg] = useState(initialMessage ?? '')
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [shown, setShown] = useState<Record<string, number>>({}) // ← ADDED: rows shown per section
   const companyFilter = useReminderCompanyFilter()
   const companyId = companyFilter?.companyId ?? 'all'
   const setCompanyId = companyFilter?.setCompanyId
@@ -72,8 +78,11 @@ export default function RemindersClient({ initialData, initialMessage, companies
   const completed = visibleReminders.filter((r) => r.done && (!r.completedAt || +new Date(r.completedAt) <= +new Date(r.remindAt)))
     .sort((a, b) => +new Date(b.completedAt ?? b.remindAt) - +new Date(a.completedAt ?? a.remindAt))
 
-  const renderTable = (rows: Reminder[], emptyMsg: string, completedView = false) => (
-    rows.length === 0 ? <p className="subtle">{emptyMsg}</p> : (
+  const renderTable = (section: string, allRows: Reminder[], emptyMsg: string, completedView = false) => { // ← CHANGED: + section, row limit
+    const limit = shown[section] ?? ROWS_PER_STEP
+    const rows = allRows.slice(0, limit)
+    const hidden = allRows.length - rows.length
+    return allRows.length === 0 ? <p className="subtle">{emptyMsg}</p> : (<>
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
@@ -118,8 +127,18 @@ export default function RemindersClient({ initialData, initialMessage, companies
           </tbody>
         </table>
       </div>
-    )
-  )
+      {/* ← ADDED */}
+      {hidden > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 10 }}>
+          <span className="subtle" style={{ fontSize: 12 }}>Showing {rows.length} of {allRows.length}</span>
+          <button type="button" className="btn" onClick={() => setShown((prev) => ({ ...prev, [section]: limit + ROWS_PER_STEP }))}>
+            Show {Math.min(ROWS_PER_STEP, hidden)} more
+          </button>
+          <button type="button" className="btn" onClick={() => setShown((prev) => ({ ...prev, [section]: allRows.length }))}>Show all</button>
+        </div>
+      )}
+    </>)
+  }
 
   return (
     <div className="reminders-workspace">
@@ -140,19 +159,19 @@ export default function RemindersClient({ initialData, initialMessage, companies
       </div>
       <div className="card page-anchor" id="overdue">
         <h2 className="h-section" style={{ color: 'var(--danger)' }}>Overdue ({overdue.length})</h2>
-        {renderTable(overdue, 'Nothing overdue.')}
+        {renderTable('overdue', overdue, 'Nothing overdue.')}
       </div>
       <div className="card page-anchor" id="upcoming">
         <h2 className="h-section" style={{ color: 'var(--warn)' }}>Upcoming ({upcoming.length})</h2>
-        {renderTable(upcoming, 'No upcoming reminders.')}
+        {renderTable('upcoming', upcoming, 'No upcoming reminders.')}
       </div>
       <div className="card page-anchor" id="completed">
         <h2 className="h-section" style={{ color: 'var(--ok)' }}>Completed ({completed.length})</h2>
-        {renderTable(completed, 'No completed reminders yet.', true)}
+        {renderTable('completed', completed, 'No completed reminders yet.', true)}
       </div>
       <div className="card page-anchor" id="completed-overdue">
         <h2 className="h-section" style={{ color: 'var(--danger)' }}>Completed Overdue ({completedOverdue.length})</h2>
-        {renderTable(completedOverdue, 'No overdue reminders have been completed yet.', true)}
+        {renderTable('completed-overdue', completedOverdue, 'No overdue reminders have been completed yet.', true)}
       </div>
     </div>
   )
