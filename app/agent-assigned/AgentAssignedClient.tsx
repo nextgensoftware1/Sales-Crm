@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { getAgentAssignedLeads } from '../agent-assigned-actions'
+import { leadHref } from '../../lib/lead-return'
 
 type Lead = { practiceCode: string; name: string; state: string | null; specialty: string | null; assignedBy: string | null; assignedAt: string | null }
 type AgentGroup = { agentId: string; agentName: string; role: string; leads: Lead[] }
@@ -97,7 +98,7 @@ export default function AgentAssignedClient({ initialData }: { initialData?: { o
                     <tbody>
                       {current.leads.map((l) => (
                         <tr key={l.practiceCode}>
-                          <td><Link prefetch={false} href={`/practice/${l.practiceCode}`}>{l.name}</Link></td>
+                          <td><Link prefetch={false} href={leadHref(l.practiceCode, 'agent-assigned')}>{l.name}</Link></td>
                           <td>{l.state ?? '—'}</td>
                           <td>{l.specialty ?? '—'}</td>
                           <td>{l.assignedBy ?? '—'}</td>

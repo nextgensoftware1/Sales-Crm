@@ -88,22 +88,63 @@ export default async function DashboardPage({
   const transQ = scope(supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
     .gte('created_at', fromISO).lte('created_at', toISO), 'from_user_id')
 
-  const salesQ = scope(supabase.from('sales').select('contract_value, mrr'), 'sold_by')
+  // ---- Sales in the range (every page; no 1,000-row cut-off) ----
+  // Uses each sale's exact creation time when the table has it, otherwise
+  // its sale date (a calendar date).
+  const missingColumn = (e: any) => ['42703', 'PGRST204'].includes(e?.code) || /column .* does not exist/i.test(e?.message ?? '')
+  const salesIn = (col: 'created_at' | 'sale_date') => readAllPages<{ contract_value: number | null; mrr: number | null }>((from, to, first) =>
+    scope(supabase.from('sales').select('id, contract_value, mrr', first ? { count: 'exact' } : undefined)
+      .gte(col, fromISO).lte(col, toISO), 'sold_by').order('id').range(from, to))
+  const salesQ = salesIn('created_at').catch((e) => (missingColumn(e) ? salesIn('sale_date') : Promise.reject(e)))
 
-  // Active clients: company via owner_tenant_id; agent = who sold it.
+  // ---- Active clients won in the range (company via owner_tenant_id; agent = who sold it) ----
+  const clientByAgent = isAgentOrCloser ? myUserId : agentFilter
   let clientQ = supabase.from('client_ownership')
-    .select(agentFilter ? 'id, sales!inner(sold_by)' : 'id', { count: 'exact', head: true }).eq('active', true)
+    .select(clientByAgent ? 'id, sales!inner(sold_by)' : 'id', { count: 'exact', head: true }).eq('active', true)
+    .gte('locked_at', fromISO).lte('locked_at', toISO)
   if (!isSuperAdmin) clientQ = clientQ.eq('owner_tenant_id', myTenantId)
   if (companyFilter) clientQ = clientQ.eq('owner_tenant_id', companyFilter)
-  if (agentFilter) clientQ = clientQ.eq('sales.sold_by', agentFilter)
+  if (clientByAgent) clientQ = clientQ.eq('sales.sold_by', clientByAgent)
 
-  const [actRes, transRes, salesRes, clientRes] = await Promise.all([actQ, transQ, salesQ, clientQ])
+  // ---- Transfer KPI earned in the range (verified transfers; PKR) ----
+  type Credit = { agent_id: string | null; agent_name: string | null; amount: number | null; status?: string | null }
+  const creditsIn = (withStatus: boolean) => readAllPages<Credit>((from, to, first) => {
+    let q = supabase.from('transfer_kpi_credits')
+      .select(withStatus ? 'id, agent_id, agent_name, amount, status' : 'id, agent_id, agent_name, amount', first ? { count: 'exact' } : undefined)
+      .gte('verified_at', fromISO).lte('verified_at', toISO)
+    if (isAgentOrCloser) q = q.eq('agent_id', myUserId)
+    else {
+      if (!isSuperAdmin) q = q.eq('tenant_id', myTenantId)
+      if (companyFilter) q = q.eq('tenant_id', companyFilter)
+      if (agentFilter) q = q.eq('agent_id', agentFilter)
+    }
+    return q.order('id').range(from, to) as never
+  })
+  const creditsQ: Promise<Credit[] | null> = creditsIn(true)
+    .catch((e) => (missingColumn(e) ? creditsIn(false) : Promise.reject(e)))
+    .catch(() => null)   // KPI not set up yet → shown as "not set up", never breaks the page
+
+  const [actRes, transRes, sales, clientRes, credits] = await Promise.all([actQ, transQ, salesQ, clientQ, creditsQ])
 
   const activities = actRes.data
   const activityCount = actRes.count
   const transferCount = transRes.count
-  const sales = salesRes.data
   const clientCount = clientRes.count
+
+  // Incentives = verified transfer KPI in the range (rejected ones earn nothing).
+  const verifiedCredits = (credits ?? []).filter((c) => (c.status ?? 'verified') !== 'rejected')
+  const byAgentMap = new Map<string, { name: string; amount: number; count: number }>()
+  for (const c of verifiedCredits) {
+    const key = c.agent_id ?? `name:${c.agent_name ?? ''}`
+    const row = byAgentMap.get(key) ?? { name: c.agent_name ?? 'Unknown agent', amount: 0, count: 0 }
+    row.amount += Number(c.amount) || 0; row.count += 1
+    byAgentMap.set(key, row)
+  }
+  const incentives = credits === null ? null : {
+    total: verifiedCredits.reduce((sum, c) => sum + (Number(c.amount) || 0), 0),
+    count: verifiedCredits.length,
+    byAgent: Array.from(byAgentMap.values()).sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name)),
+  }
 
   // Disposition breakdown  [REAL]
   const dispoCounts: Record<string, number> = {}
@@ -150,6 +191,7 @@ export default async function DashboardPage({
       totalValue={totalValue}
       totalMrr={totalMrr}
       clientCount={clientCount ?? 0}
+      incentives={incentives}
       proposalsCount={proposalsCount}
       contractsCount={contractsCount}
       dispoCounts={dispoCounts}

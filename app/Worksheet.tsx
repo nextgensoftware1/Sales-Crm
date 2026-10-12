@@ -5,7 +5,9 @@ import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
 import { getClosers, transferToCloser, markAsSold } from './actions'
 
-export const DISPOSITIONS = ['New', 'No Answer', 'Call back', 'Front Desk', 'Not Interested', 'Transfer', 'Voicemail', 'Interested', 'Meeting', 'Qualified', 'Not Eligible', 'Hung up', 'DNC', 'Offc Perm Closed', 'Follow Up', 'Proposal', 'Contract', 'Sold']
+// Disposition options live in lib/dispositions.ts (shared with the filters).
+import { DISPOSITIONS } from '../lib/dispositions'
+export { DISPOSITIONS }
 export const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 

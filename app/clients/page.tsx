@@ -4,6 +4,7 @@ import { roleLabel } from '../../lib/roles'
 import { redirect } from 'next/navigation'
 import AppShell from '../AppShell'
 import SoldLeadsSection, { loadSoldLeadCount } from './SoldLeadsSection'
+import { leadHref } from '../../lib/lead-return'
 
 // Clients page with two tabs: Active clients (default) and Sold leads
 // (?tab=sold). Only the selected tab's rows are loaded.
@@ -92,7 +93,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
                   <tr key={i}>
                     <td>
                       {c.master_practices ? (
-                        <Link prefetch={false} href={`/practice/${c.master_practices.practice_code}`}>
+                        <Link prefetch={false} href={leadHref(c.master_practices.practice_code, 'clients')}>
                           {c.master_practices.name}
                         </Link>
                       ) : (

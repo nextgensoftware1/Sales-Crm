@@ -19,6 +19,8 @@ type Props = {
   totalValue: number
   totalMrr: number
   clientCount: number
+  /** Verified Transfer KPI (PKR) in the range; null when the KPI isn't set up. */
+  incentives?: { total: number; count: number; byAgent: { name: string; amount: number; count: number }[] } | null
   proposalsCount: number
   contractsCount: number
   dispoCounts: Record<string, number>
@@ -74,17 +76,17 @@ export default function DashboardView(p: Props) {
         {/* ---- Hero stats: the headline numbers, given real visual weight
              instead of sitting equal-sized next to nine other cards ---- */}
         <div className="hero-stats-row page-anchor" id="overview">
-          <HeroStat label="Total Contract Value" value={money(p.totalValue)} sub="All-time · not scoped to the date range yet" accent="var(--accent)" />
+          <HeroStat label="Total Contract Value" value={money(p.totalValue)} sub="Sales closed, in range" accent="var(--accent)" />
           <div className="hero-stats-divider" />
           <HeroStat label="Activities Logged" value={p.activityCount} sub="Outbound dialing activity, in range" accent="var(--c-calls)" />
           <div className="hero-stats-divider" />
-          <HeroStat label="Closed Sales" value={p.saleCount} sub="All-time · not scoped to the date range yet" accent="var(--c-sales)" />
+          <HeroStat label="Closed Sales" value={p.saleCount} sub="Sales closed, in range" accent="var(--c-sales)" />
         </div>
 
         {/* ---- Secondary KPI cards — everything else, at a smaller, supporting weight ---- */}
         <div className="kpi-cards-grid kpi-cards-grid-secondary">
           <Kpi label="Transfers" value={p.transferCount} sub="Qualified lead handovers, in range" color="transfers" icon={<IconTransfer />} />
-          <Kpi label="Active Clients" value={p.clientCount} sub="All-time · not scoped to the date range yet" color="collected" icon={<IconUsers />} />
+          <Kpi label="Active Clients" value={p.clientCount} sub="Won in range and still active" color="collected" icon={<IconUsers />} />
           <Kpi label="Proposals Shared" value={p.proposalsCount} sub="Standard pitches delivered, in range" color="proposals" icon={<IconFileText />} />
           <Kpi label="Contracts Signed" value={p.contractsCount} sub="Pending closes signed, in range" color="contracts" icon={<IconFileCheck />} />
         </div>
@@ -108,8 +110,10 @@ export default function DashboardView(p: Props) {
         </div>
 
         <div className="kpi-cards-grid kpi-cards-grid-secondary dashboard-secondary page-anchor" id="revenue">
-          <Kpi label="Total MRR" value={money(p.totalMrr)} sub="All-time · not scoped to the date range yet" color="calls" icon={<IconTrendingUp />} />
-          <Kpi label="Total Incentives Paid" value={money(0)} sub="Agent commissions calculated" color="incentives" icon={<IconWallet />} sample />
+          <Kpi label="Total MRR" value={money(p.totalMrr)} sub="Monthly revenue of sales closed in range" color="calls" icon={<IconTrendingUp />} />
+          <Kpi label="Total Incentives Earned" value={p.incentives ? pkr(p.incentives.total) : '—'}
+            sub={p.incentives ? `Transfer KPI · ${p.incentives.count} verified transfer${p.incentives.count === 1 ? '' : 's'} in range` : 'Transfer KPI is not set up yet'}
+            color="incentives" icon={<IconWallet />} />
         </div>
 
         {/* ---- Ratios + incentive splits ---- */}
@@ -133,29 +137,30 @@ export default function DashboardView(p: Props) {
             ))}
           </Panel>
 
-          {/* Incentive splits donut (SAMPLE) */}
-          <Panel title="Incentive splits" subtitle="Payout by category" sample>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 8 }}>
-              <Donut />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                {[
-                  ['Transfer', 'var(--accent)'], ['Contract', 'var(--ok)'],
-                  ['Shared sale', 'var(--purple)'], ['Self sale', '#22d3ee'], ['Manual', 'var(--warn)'],
-                ].map(([l, c]) => (
-                  <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 8 }} className="subtle">
-                    <span style={{ width: 10, height: 10, borderRadius: 2, background: c as string, display: 'inline-block' }} />
-                    {l}: {money(0)}
-                  </div>
-                ))}
+          {/* Incentives by agent (REAL: verified Transfer KPI in the range) */}
+          <Panel title="Incentives by agent" subtitle="Transfer KPI earned in range (PKR)">
+            {!p.incentives ? (
+              <p className="subtle" style={{ marginTop: 10, fontSize: 12 }}>Transfer KPI is not set up yet.</p>
+            ) : p.incentives.byAgent.length === 0 ? (
+              <p className="subtle" style={{ marginTop: 10, fontSize: 12 }}>No verified transfers in this range.</p>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
+                <Donut parts={splitParts(p.incentives.byAgent)} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, minWidth: 0, flex: 1 }}>
+                  {splitParts(p.incentives.byAgent).map((part) => (
+                    <div key={part.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }} className="subtle">
+                      <span style={{ width: 10, height: 10, borderRadius: 2, background: part.color, display: 'inline-block', flex: 'none' }} />
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{part.label}</span>
+                      <strong style={{ color: 'var(--ink-strong)' }}>{pkr(part.value)}</strong>
+                      <span>· {part.count}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </Panel>
         </div>
 
-        <p className="subtle" style={{ fontSize: 11 }}>
-          Cards marked “sample” are placeholder metrics — no data source is wired for them yet
-          (agent commissions/incentives, collected/outstanding totals).
-        </p>
       </div>
     </AppShell>
   )
@@ -236,13 +241,35 @@ function Panel({ title, subtitle, sample, children }: { title: string; subtitle?
   )
 }
 
-function Donut() {
-  // static placeholder ring
+const pkr = (n: number) => `PKR ${Math.round(n).toLocaleString()}`
+const SPLIT_COLORS = ['var(--accent)', 'var(--purple)', '#22d3ee', 'var(--warn)', 'var(--ok)', '#f472b6']
+
+/** Top 5 agents by PKR, the rest grouped as "Others". */
+function splitParts(byAgent: { name: string; amount: number; count: number }[]) {
+  const top = byAgent.slice(0, 5)
+  const rest = byAgent.slice(5)
+  const parts = top.map((a, i) => ({ label: a.name, value: a.amount, count: a.count, color: SPLIT_COLORS[i] }))
+  if (rest.length) parts.push({ label: `Others (${rest.length})`, value: rest.reduce((s, a) => s + a.amount, 0), count: rest.reduce((s, a) => s + a.count, 0), color: SPLIT_COLORS[5] })
+  return parts
+}
+
+/** Real donut: one segment per part, sized by its share of the total. */
+function Donut({ parts }: { parts: { label: string; value: number; color: string }[] }) {
+  const total = parts.reduce((s, p) => s + p.value, 0)
+  const circumference = 2 * Math.PI * 44
+  let offset = 0
   return (
     <svg aria-hidden="true" focusable="false" width="120" height="120" viewBox="0 0 120 120">
       <circle cx="60" cy="60" r="44" fill="none" stroke="var(--surface-2)" strokeWidth="16" />
-      <circle cx="60" cy="60" r="44" fill="none" stroke="var(--accent)" strokeWidth="16"
-        strokeDasharray="276" strokeDashoffset="90" transform="rotate(-90 60 60)" strokeLinecap="round" />
+      {total > 0 && parts.map((part) => {
+        const length = (part.value / total) * circumference
+        const el = (
+          <circle key={part.label} cx="60" cy="60" r="44" fill="none" stroke={part.color} strokeWidth="16"
+            strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-offset} transform="rotate(-90 60 60)" />
+        )
+        offset += length
+        return el
+      })}
     </svg>
   )
 }

@@ -1,3 +1,5 @@
+import { dispositionOptions } from './dispositions'
+
 // Lead Pool filtering, sorting and summary counts.
 //
 // Moved verbatim from app/PracticesTable.tsx so the same rules can run in the
@@ -326,7 +328,8 @@ export function leadOverview(
   return {
     states: Array.from(new Set(practices.map((p) => p.state).filter(Boolean))).sort() as string[],
     specialties: Array.from(new Set(practices.map((p) => p.specialty).filter(Boolean))).sort() as string[],
-    dispositions: Array.from(new Set(practices.map((p) => p.status).filter(Boolean))).sort() as string[],
+    // Every standard disposition (e.g. "Send Mail" before anyone has used it) plus any other value in the data.
+    dispositions: dispositionOptions(practices.map((p) => p.status)),
     zoneCounts,
     summaryCounts: {
       total: practices.length,
