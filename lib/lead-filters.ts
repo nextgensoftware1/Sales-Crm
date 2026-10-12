@@ -20,6 +20,7 @@ export type LeadRow = {
   rpm: boolean
   rcmFit: boolean
   npiFound?: boolean
+  isEmailLead?: boolean // ← ADDED: Lead_Category = Email
   entityType?: string | null
   enumerationDate?: string | null
   lastUpdated?: string | null
@@ -249,6 +250,7 @@ export function filterLeads<T extends LeadRow>(
     if (catTab === 'RCM' && !p.rcmFit) return false
     if (catTab === 'CCM' && !p.ccm) return false
     if (catTab === 'Credentialing' && !p.npiFound) return false
+    if (catTab === 'Email' && !p.isEmailLead) return false // ← ADDED
     // Credentialing sub-filters — only applied once Credentialing itself
     // is selected, since these fields only mean anything for NPPES data.
     if (catTab === 'Credentialing') {

@@ -152,9 +152,22 @@ export async function loadLeadsData() {
         .eq('tenant_id', myTenantId).order('practice_id').order('id')).then(data => ({ data }))
     : Promise.resolve(empty)
 
-  const [assignmentsResult, transfersResult, allocationsResult, claimsResult, worksheetsResult] = await Promise.all([
-    assignmentsRead, transfersRead, readAllocations(), claimsRead, worksheetsRead,
+  // ← ADDED: which leads are Email leads (Lead_Category = Email), and — for
+  // an Agent/Closer — which Email leads they already saved an email worksheet
+  // for (those leave their queue, like a saved call worksheet). Missing
+  // tables/columns (SQL not run yet) simply mean "none".
+  const emailLeadsRead = allRows<{ id: string }>(() => supabase.from('master_practices').select('id')
+    .eq('lead_category', 'Email').order('id')).catch(() => [] as { id: string }[])
+  const myEmailWorksheetsRead = (roleKey === 'agent' || roleKey === 'closer') && myTenantId && myUserId
+    ? allRows<{ practice_id: string }>(() => supabase.from('lead_email_worksheets').select('practice_id')
+        .eq('tenant_id', myTenantId).eq('updated_by', myUserId).order('practice_id')).catch(() => [] as { practice_id: string }[])
+    : Promise.resolve([] as { practice_id: string }[])
+
+  const [assignmentsResult, transfersResult, allocationsResult, claimsResult, worksheetsResult, emailLeadRows, myEmailWorksheetRows] = await Promise.all([
+    assignmentsRead, transfersRead, readAllocations(), claimsRead, worksheetsRead, emailLeadsRead, myEmailWorksheetsRead, // ← CHANGED
   ])
+  const emailLeadIds = new Set(emailLeadRows.map((row) => row.id)) // ← ADDED
+  const myEmailSavedIds = new Set(myEmailWorksheetRows.map((row) => row.practice_id)) // ← ADDED
   const currentUser = me ? {
     full_name: me.full_name,
     role: roleLabel(me.roles?.key),
@@ -247,14 +260,14 @@ export async function loadLeadsData() {
   // Count completed worksheets before removing them from the personal active
   // queue. Otherwise the Worked card always drops back to zero after save.
   const completedWorksheetCount = isAgentOrCloser
-    ? new Set(data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by === myUserId).map(p => p.practice_code)).size
+    ? new Set(data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by === myUserId || myEmailSavedIds.has(p.id)).map(p => p.practice_code)).size // ← CHANGED: + email worksheets
     : undefined
   // Saving a worksheet completes the lead for that Agent/Closer. Keep it in
   // management views and Worksheet Reports, but remove it from the saver’s
   // active queue. A later assignee can still work the lead because the saved
   // user id is compared with the current viewer rather than treated globally.
   if (isAgentOrCloser) {
-    data = data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by !== myUserId)
+    data = data.filter(p => myWorksheetByPractice.get(p.id)?.updated_by !== myUserId && !myEmailSavedIds.has(p.id)) // ← CHANGED: saved email worksheet also completes it
   }
   const seen = new Set<string>()
   data = data.filter((p: any) => {
@@ -349,6 +362,7 @@ export async function loadLeadsData() {
       orgName: provider?.org_name ?? null,
       risk: provider?.at_risk ?? null,
       npiFound,
+      isEmailLead: emailLeadIds.has(p.id), // ← ADDED
       entityType: provider?.entity_type ?? null,
       enumerationDate: provider?.enumeration_date ?? null,
       lastUpdated: provider?.nppes_last_updated ?? null,

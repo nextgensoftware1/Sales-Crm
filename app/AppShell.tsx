@@ -13,6 +13,7 @@ import {
   Activity, AlertTriangle, BadgeDollarSign, BarChart3, Building2, CalendarClock,
   ChartNoAxesCombined, CircleCheckBig, FileCheck2, FileText, Gauge, History,
   ListChecks, RotateCcw, ShieldCheck, Trophy, UserRoundCheck, UsersRound, Wallet,
+  Mail, // ← ADDED: Email Sheet Report
 } from 'lucide-react'
 
 // Hand-authored, stroke-based icons (matches the style already used
@@ -47,6 +48,7 @@ const NAV: NavItem[] = [
   // reference image's sidebar grouping.
   { href: '/admin',         label: 'Admin',          icon: <IconSettings />, admin: true },
   { href: '/worksheet-reports', label: 'Worksheet Reports', icon: <IconReport />, admin: true },
+  { href: '/email-reports', label: 'Email Sheet Report', icon: <Mail aria-hidden="true" />, admin: true }, // ← ADDED
   { href: '/worksheet-updates', label: 'Worksheet Updates', icon: <History aria-hidden="true" />, admin: true },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: <IconTrash />, admin: true },
 ]
@@ -97,8 +99,17 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
       { href: '/reminders', label: 'Reminders', description: 'Follow-up schedule', icon: CalendarClock },
     ],
   },
+  // ← ADDED
+  '/email-reports': {
+    kicker: 'Reporting', title: 'Email sheets', description: 'Email leads worked and saved.',
+    items: [
+      { href: '/email-reports', label: 'Email sheet report', description: 'Latest per lead', icon: Mail },
+      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved call worksheets', icon: FileText },
+      { href: '/', label: 'Leads Engine', description: 'Return to lead work', icon: ListChecks },
+    ],
+  },
   '/kpi': {
-    kicker: 'Incentives', title: 'KPI', description: 'Per Transfer Incentives Calculator',
+    kicker: 'Incentives', title: 'KPI', description: 'PKR 500 for every verified transfer.',
     items: [
       { href: '/kpi', label: 'KPI records', description: 'Verified transfer earnings', icon: Wallet },
       { href: '/transfers', label: 'Transfers', description: 'Verify pending transfers', icon: FileCheck2 },
@@ -167,7 +178,7 @@ export default function AppShell({
     if (n.href === '/admin') return showAdmin || canManageUsers
     // Every authenticated role can open reports; the server action scopes
     // managers to their company and agents/closers to their own saved work.
-    if (n.href === '/worksheet-reports') return true
+    if (n.href === '/worksheet-reports' || n.href === '/email-reports') return true // ← CHANGED: + email report
     if (n.href === '/worksheet-updates') return showAdmin || canManageUsers
     if (n.href === '/transfers') return showTransfers
     return true
@@ -175,8 +186,10 @@ export default function AppShell({
   const hasManagementAccess = showAdmin || canManageUsers
   // Worksheet Reports is a personal workspace item for Agent and Closer.
   // Management roles keep it with the other administration tools.
-  const mainItems = items.filter((n) => !n.admin || (n.href === '/worksheet-reports' && !hasManagementAccess))
-  const adminItems = items.filter((n) => n.admin && (n.href !== '/worksheet-reports' || hasManagementAccess))
+  // ← CHANGED: the Email Sheet Report follows the same rule.
+  const isReport = (href: string) => href === '/worksheet-reports' || href === '/email-reports'
+  const mainItems = items.filter((n) => !n.admin || (isReport(n.href) && !hasManagementAccess))
+  const adminItems = items.filter((n) => n.admin && (!isReport(n.href) || hasManagementAccess))
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const [panelOpen, togglePanel] = useWorkspacePanel()

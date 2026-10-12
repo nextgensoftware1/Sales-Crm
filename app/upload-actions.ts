@@ -896,6 +896,7 @@ const KNOWN_HEADERS = [
   'Payment_Adj_%', 'Payment_Adj_Pct', 'Payment Adjustment Percentage', 'At_Risk', 'Panelty', 'Penalty',
   'Org_PAC_ID', 'Org_Name', 'Num_Org_Members', 'PECOS_ASCT_CNTL_ID', 'ENRLMT_ID',
   'CMS_CCM', 'CMS_PCM', 'CMS_AWV', 'CMS_TCM', 'CMS_BHI', 'CMS_RPM', 'CMS_RCM', 'CMS_Category', 'MIPS_By_Year',
+  'Lead_Category', // ← ADDED: "Email" marks an email-marketing lead
 ].map((h) => h.toLowerCase())
 const yes = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'yes'
 
@@ -968,7 +969,7 @@ export async function uploadLeadsCsv(
   }
   // ← ADDED: NPPES fields the upload did not read before.
   const extraFields = (row: CsvRow) => ({
-    org_name: firstOf(row, ['NPPES_OrganizationName', 'Org_Name']),
+    org_name: firstOf(row, ['Org_Name', 'NPPES_OrganizationName']),
     credential: firstOf(row, ['NPPES_Credential', 'Credential']),
     addr1: firstOf(row, ['NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']),
     auth_official_name: col(row, 'NPPES_AuthOfficial_Name') ||
@@ -983,6 +984,15 @@ export async function uploadLeadsCsv(
   const ignoredNote = ignoredHeaders.length
     ? ` Ignored ${ignoredHeaders.length} column(s) the CRM doesn't use: ${ignoredHeaders.slice(0, 12).join(', ')}${ignoredHeaders.length > 12 ? ', …' : ''}.`
     : ''
+  // ← ADDED: Email leads (Lead_Category = Email). Only NEW leads get the
+  // category; leads already in the CRM are not changed.
+  const isEmailRow = (row: CsvRow) => col(row, 'Lead_Category').toLowerCase() === 'email'
+  if (rows.some(isEmailRow)) {
+    const { error: emailSchemaError } = await supabase.from('master_practices').select('lead_category').limit(1)
+    if (emailSchemaError) {
+      return { ok: false, message: 'Email leads need the new database column — run database/email-leads.sql in Supabase, then upload again.' }
+    }
+  }
   // ← ADDED: the new columns must exist before anything is written.
   {
     const { error: schemaError } = await supabase.from('providers').select('auth_official_phone, auth_official_credential').limit(1)
@@ -1230,6 +1240,7 @@ export async function uploadLeadsCsv(
   // roster membership included.
   const isAnchorRow = (code: string) => {
     const row = byCode.get(code)!
+    if (isEmailRow(row)) return true // ← ADDED: email leads always show in the Lead Pool
     if (hasRecordSourceColumn && isNppesFound(row)) return true
     const source = col(row, 'Source').toLowerCase()
     if (source === 'uploaded') return true
@@ -1318,6 +1329,7 @@ export async function uploadLeadsCsv(
       phone: col(row, 'NPPES_PrimaryPhone') || col(row, 'NPPES_Phone') || col(row, 'Phone') || null,
       is_roster: !isAnchorRow(code),
       owner_tenant_id: tenantId,
+      ...(isEmailRow(row) ? { lead_category: 'Email' } : {}), // ← ADDED
     }
   })
 

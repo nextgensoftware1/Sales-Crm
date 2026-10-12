@@ -7,6 +7,7 @@ import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../.
 import { roleLabel } from '../../../lib/roles'
 import AppShell from '../../AppShell'
 import SectionTabs from '../../SectionTabs'
+import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -261,6 +262,37 @@ export default async function PracticeDetail({
     .eq('practice_id', practice.id)
   if (!isSuperAdmin && myTenantId) transferQuery = transferQuery.eq('tenant_id', myTenantId)
 
+  // ← ADDED: Email lead? (Lead_Category = Email) + its email worksheet and
+  // history for the viewer's company (Super Admin: latest from any company).
+  // Each read fails soft, so the page still works before email-leads.sql runs.
+  const emailInfoRead = (async () => {
+    const { data: cat, error: catError } = await supabase.from('master_practices').select('lead_category').eq('id', practice.id).maybeSingle()
+    if (catError || (cat?.lead_category ?? '').toString().toLowerCase() !== 'email') return null
+    let sheetQuery = supabase.from('lead_email_worksheets')
+      .select('email, response, note, updated_at, users(full_name)')
+      .eq('practice_id', practice.id).order('updated_at', { ascending: false }).limit(1)
+    let historyQuery = supabase.from('lead_email_activity')
+      .select('email, response, note, created_at, users(full_name)')
+      .eq('practice_id', practice.id).order('created_at', { ascending: false }).limit(50)
+    if (!isSuperAdmin && myTenantId) {
+      sheetQuery = sheetQuery.eq('tenant_id', myTenantId)
+      historyQuery = historyQuery.eq('tenant_id', myTenantId)
+    }
+    const [{ data: sheet }, { data: hist }] = await Promise.all([sheetQuery.maybeSingle(), historyQuery])
+    type SheetRow = { email: string | null; response: string | null; note: string | null; updated_at: string | null; users: { full_name: string | null } | null }
+    type HistoryRow = { email: string | null; response: string; note: string | null; created_at: string; users: { full_name: string | null } | null }
+    const sheetRow = sheet as unknown as SheetRow | null
+    return {
+      initial: sheetRow ? {
+        email: sheetRow.email ?? null, response: sheetRow.response ?? null, note: sheetRow.note ?? null,
+        updatedAt: sheetRow.updated_at ?? null, updatedBy: sheetRow.users?.full_name ?? null,
+      } as EmailWorksheetInitial : null,
+      history: ((hist ?? []) as unknown as HistoryRow[]).map((h) => ({
+        at: h.created_at, by: h.users?.full_name ?? null, email: h.email ?? null, response: h.response, note: h.note ?? null,
+      })) as EmailHistoryItem[],
+    }
+  })().catch(() => null)
+
   const orgPac = primaryProvider?.org_pac_id
   const [navigationCodes, { data: activity }, { count: rosterCount }, { data: transferRow }, { data: worksheetRow }, { data: orgProvs }] = await Promise.all([
     getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
@@ -283,6 +315,7 @@ export default async function PracticeDetail({
           .eq('org_pac_id', orgPac)
       : Promise.resolve({ data: null as any[] | null }),
   ])
+  const emailInfo = await emailInfoRead // ← ADDED (ran in parallel with the reads above)
   const codesList = navigationCodes ?? []
   const currentIndex = codesList.indexOf(code)
   const totalCount = codesList.length
@@ -521,6 +554,18 @@ export default async function PracticeDetail({
         </div>
 
         <SectionTabs label="Lead details" sections={[
+          // ← ADDED: Email leads open on the Email Worksheet (visible to every
+          // role; saving is checked by the database like the call worksheet).
+          ...(emailInfo ? [{ label: 'Email Worksheet', content: (
+            <EmailWorksheet
+              key={`${code}-email`}
+              practiceId={practice.id}
+              initial={emailInfo.initial}
+              history={emailInfo.history}
+              canSave={!worksheetLocked}
+              lockedMessage={worksheetLocked ? 'This lead was transferred — only the receiving closer or a manager can save.' : null}
+            />
+          ) }] : []),
           { label: 'Call Notes & Worksheet', content: (
             <div className="lead-2col">
               <aside style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>

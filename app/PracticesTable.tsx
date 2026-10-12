@@ -656,7 +656,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {['All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing'].map((t) => (
+          {['All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing', 'Email'].map((t) => ( // ← CHANGED: + Email
             <button type="button" aria-pressed={catTab === t} key={t} onClick={() => setCatTab(t)} style={{ ...pill(catTab === t), cursor: 'pointer' }}>{t}</button>
           ))}
         </div>
@@ -894,7 +894,10 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
                   <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
-                  <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>{p.practiceCode}</div>
+                  <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
+                    {p.practiceCode}
+                    {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}
+                  </div>
                   {p.assignedAwayTo && (
                     <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
                       → {p.assignedAwayTo.name} <span style={{ color: C.dim, fontWeight: 500 }}>({p.assignedAwayTo.role})</span>
