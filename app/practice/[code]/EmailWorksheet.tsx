@@ -54,7 +54,9 @@ export default function EmailWorksheet({ practiceId, initial, history, canSave, 
   const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—')
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, alignItems: 'start' }}>
+    // ← CHANGED: stacked (form, then history) — it now sits in the right
+    // column next to the practice profile.
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 20, alignItems: 'start' }}>
       <div className="lead-card">
         <h4>Email Worksheet</h4>
         <div style={{ display: 'grid', gap: 14 }}>

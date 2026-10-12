@@ -1,6 +1,5 @@
 import { allRows, getPracticeNavigation } from '../../../lib/practice-navigation'
 import Link from 'next/link'
-import { leadReturn } from '../../../lib/lead-return'
 import OrgRoster from '../../OrgRoster'
 import Worksheet from '../../Worksheet'
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../../../lib/supabase-server'
@@ -53,10 +52,12 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
   const { from, company, view } = await searchParams
-  // "Back" returns to the page that opened this lead (see lib/lead-return.ts);
-  // `navQuery` keeps that on Previous / Next and related-practice links.
-  const back = leadReturn({ from, company, view })
-  const navQuery = back.query
+  const returnPath = from === 'transfers' ? '/transfers' : from === 'worksheet-reports' ? '/worksheet-reports' : '/'
+  const returnQuery = from === 'transfers'
+    ? '?from=transfers'
+    : from === 'worksheet-reports'
+      ? `?company=${encodeURIComponent(company ?? '')}&view=${view === 'sheet' ? 'sheet' : 'reports'}`
+      : ''
 
   const supabase = await createSupabaseServer()
 
@@ -229,8 +230,8 @@ export default async function PracticeDetail({
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
-          <Link prefetch={false} href={back.href}>
-            ← {back.label}
+          <Link prefetch={false} href={`${returnPath}${returnQuery}`}>
+            {from === 'worksheet-reports' ? '← Back to Worksheet Reports' : from === 'transfers' ? '← Back to transfers' : '← Back to all practices'}
           </Link>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
           <p className="subtle" style={{ marginTop: 12 }}>
@@ -362,7 +363,6 @@ export default async function PracticeDetail({
   //   only Individual          -> Individual
   //   only Group               -> Group
   //   neither                  -> Non Eligible
-    // for testing 
   let mipsIndividual = 0, mipsGroup = 0, mipsBoth = 0, mipsNonEligible = 0
   let anyCcm = false
   let rosterClinicianCount = 0
@@ -436,138 +436,10 @@ export default async function PracticeDetail({
     updatedAt: companyWorksheet?.updated_at ?? null,
   }
 
-  return (
-    <AppShell
-      title="Practice Detail"
-      subtitle={displayTitle}
-      currentUser={currentUser}
-      active="/"
-      showAdmin={isSuperAdmin}
-      showTransfers={showTransfers}
-      canManageUsers={canManageUsers}
-    >
-      <div className="lead-page">
-        <div className="lead-card">
-          <div className="lead-header-row">
-            <div className="lead-header-left">
-              <Link prefetch={false} href={back.href} className="lead-back-btn" title={back.label}>
-                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-              </Link>
-              <div className="lead-pager">
-                {prevCode ? (
-                  <Link prefetch={false} href={`/practice/${prevCode}${navQuery}`} title="Previous Lead">
-                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-                  </Link>
-                ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
-                <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : <>{totalCount} available leads</>}</span>
-                {nextCode ? (
-                  <Link prefetch={false} href={`/practice/${nextCode}${navQuery}`} title="Next Lead">
-                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
-                  </Link>
-                ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}
-              </div>
-              <div>
-                <div className="lead-title-row">
-                  <h2 className="lead-title">{displayTitle}</h2>
-                  <span className="lead-code">{practice.practice_code}</span>
-                  <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
-                  {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
-                  {zone && <span className="lead-badge">{zone}</span>}
-                  {/* <span className="lead-badge">{providersList.length} Providers</span> */}
-                </div>
-                <div className="lead-meta">
-                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
-                  <span>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || practice.city || '—'}</span>
-                  {practice.phone && (
-                    <>
-                      <span className="lead-meta-sep">|</span>
-                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" /></svg>
-                      <span>{practice.phone}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="lead-fields-panel" style={{ marginTop: 16 }}>
-            <div className="lead-fields-grid">
-              {/* <div>
-                <span className="lead-field-label">Additional Phone</span>
-                <div className="lead-field-value">{primaryProvider?.phone || '—'}</div>
-              </div> */}
-              <div>
-                <span className="lead-field-label">NPPES_Status</span>
-                <div className="lead-field-value">{primaryProvider?.status || '—'}</div>
-              </div>
-              <div>
-                <span className="lead-field-label">NPPES_PrimaryTaxonomyCode</span>
-                <div className="lead-field-value">{primaryProvider?.taxonomy_code || '—'}</div>
-              </div>
-              <div>
-                <span className="lead-field-label">Contact Phone</span>
-                <div className="lead-field-value">{primaryProvider?.mailing_phone || '—'}</div>
-              </div>
-              <div>
-                <span className="lead-field-label">NPPES_LastUpdated</span>
-                <div className="lead-field-value">{primaryProvider?.nppes_last_updated || '—'}</div>
-              </div>
-              <div>
-                <span className="lead-field-label">NPPES_EnumerationDate</span>
-                <div className="lead-field-value">{primaryProvider?.enumeration_date || '—'}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="lead-stats-grid">
-          <div className="lead-stat" title={mips2026Value}>
-            <span
-              className="lead-stat-value"
-              style={{
-                fontSize: mips2026Value.length > 12 ? 11 : undefined,
-                lineHeight: 1.3,
-                whiteSpace: 'normal',
-                overflow: 'visible',
-                textOverflow: 'clip',
-                display: 'block',
-                textAlign: 'center',
-                fontWeight: 700,
-              }}
-            >
-              {mips2026Value}
-            </span>
-            <span className="lead-stat-label">MIPS 2026</span>
-          </div>
-          <div className="lead-stat">
-            <span className="lead-stat-value">{penaltyValue}</span>
-            <span className="lead-stat-label">Penalty</span>
-          </div>
-          <div className="lead-stat">
-            <span className="lead-stat-value">{totalProviders}</span>
-            <span className="lead-stat-label">Providers</span>
-          </div>
-          <div className="lead-stat">
-            <span className={`lead-stat-value${anyCcm ? ' good' : ''}`}>{anyCcm ? 'Yes' : 'No'}</span>
-            <span className="lead-stat-label">CCM</span>
-          </div>
-        </div>
-
-        <SectionTabs label="Lead details" sections={[
-          // ← ADDED: Email leads open on the Email Worksheet (visible to every
-          // role; saving is checked by the database like the call worksheet).
-          ...(emailInfo ? [{ label: 'Email Worksheet', content: (
-            <EmailWorksheet
-              key={`${code}-email`}
-              practiceId={practice.id}
-              initial={emailInfo.initial}
-              history={emailInfo.history}
-              canSave={!worksheetLocked}
-              lockedMessage={worksheetLocked ? 'This lead was transferred — only the receiving closer or a manager can save.' : null}
-            />
-          ) }] : []),
-          { label: 'Call Notes & Worksheet', content: (
-            <div className="lead-2col">
+  // ← ADDED: the practice profile column (profile, authorized official, CCM,
+  // locations, MIPS, providers, roster) — shown on the Call Notes tab and, for
+  // Email leads, on the Email Worksheet tab as well.
+  const profileAside = (
               <aside style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
                 <div className="lead-card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
@@ -663,8 +535,152 @@ export default async function PracticeDetail({
                   </div>
                 )}
 
-                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} linkQuery={navQuery} />}
+                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} />}
               </aside>
+  )
+
+  return (
+    <AppShell
+      title="Practice Detail"
+      subtitle={displayTitle}
+      currentUser={currentUser}
+      active="/"
+      showAdmin={isSuperAdmin}
+      showTransfers={showTransfers}
+      canManageUsers={canManageUsers}
+    >
+      <div className="lead-page">
+        <div className="lead-card">
+          <div className="lead-header-row">
+            <div className="lead-header-left">
+              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Worksheet Reports' : 'Back to list'}>
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+              </Link>
+              <div className="lead-pager">
+                {prevCode ? (
+                  <Link prefetch={false} href={`/practice/${prevCode}${returnQuery}`} title="Previous Lead">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+                  </Link>
+                ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
+                <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : <>{totalCount} available leads</>}</span>
+                {nextCode ? (
+                  <Link prefetch={false} href={`/practice/${nextCode}${returnQuery}`} title="Next Lead">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
+                  </Link>
+                ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}
+              </div>
+              <div>
+                <div className="lead-title-row">
+                  <h2 className="lead-title">{displayTitle}</h2>
+                  <span className="lead-code">{practice.practice_code}</span>
+                  <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
+                  {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
+                  {zone && <span className="lead-badge">{zone}</span>}
+                  {/* <span className="lead-badge">{providersList.length} Providers</span> */}
+                </div>
+                <div className="lead-meta">
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+                  <span>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || practice.city || '—'}</span>
+                  {practice.phone && (
+                    <>
+                      <span className="lead-meta-sep">|</span>
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" /></svg>
+                      <span>{practice.phone}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="lead-fields-panel" style={{ marginTop: 16 }}>
+            <div className="lead-fields-grid">
+              {/* <div>
+                <span className="lead-field-label">Additional Phone</span>
+                <div className="lead-field-value">{primaryProvider?.phone || '—'}</div>
+              </div> */}
+              <div>
+                <span className="lead-field-label">NPPES_Status</span>
+                <div className="lead-field-value">{primaryProvider?.status || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_PrimaryTaxonomyCode</span>
+                <div className="lead-field-value">{primaryProvider?.taxonomy_code || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">Contact Phone</span>
+                <div className="lead-field-value">{primaryProvider?.mailing_phone || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_LastUpdated</span>
+                <div className="lead-field-value">{primaryProvider?.nppes_last_updated || '—'}</div>
+              </div>
+              <div>
+                <span className="lead-field-label">NPPES_EnumerationDate</span>
+                <div className="lead-field-value">{primaryProvider?.enumeration_date || '—'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="lead-stats-grid">
+          <div className="lead-stat" title={mips2026Value}>
+            <span
+              className="lead-stat-value"
+              style={{
+                fontSize: mips2026Value.length > 12 ? 11 : undefined,
+                lineHeight: 1.3,
+                whiteSpace: 'normal',
+                overflow: 'visible',
+                textOverflow: 'clip',
+                display: 'block',
+                textAlign: 'center',
+                fontWeight: 700,
+              }}
+            >
+              {mips2026Value}
+            </span>
+            <span className="lead-stat-label">MIPS 2026</span>
+          </div>
+          <div className="lead-stat">
+            <span className="lead-stat-value">{penaltyValue}</span>
+            <span className="lead-stat-label">Penalty</span>
+          </div>
+          <div className="lead-stat">
+            <span className="lead-stat-value">{totalProviders}</span>
+            <span className="lead-stat-label">Providers</span>
+          </div>
+          <div className="lead-stat">
+            <span className={`lead-stat-value${anyCcm ? ' good' : ''}`}>{anyCcm ? 'Yes' : 'No'}</span>
+            <span className="lead-stat-label">CCM</span>
+          </div>
+        </div>
+
+        <SectionTabs label="Lead details" sections={[
+          // ← ADDED: Email leads open on the Email Worksheet (visible to every
+          // role; saving is checked by the database like the call worksheet).
+          ...(emailInfo ? [{ label: 'Email Worksheet', content: (
+            // ← CHANGED: same lead details as the call tab on the left, email
+            // worksheet + history on the right.
+            <div className="lead-2col">
+              {profileAside}
+              <div style={{ minWidth: 0 }}>
+                <EmailWorksheet
+                  key={`${code}-email`}
+                  practiceId={practice.id}
+                  initial={emailInfo.initial}
+                  history={emailInfo.history}
+                  canSave={!worksheetLocked}
+                  lockedMessage={worksheetLocked ? 'This lead was transferred — only the receiving closer or a manager can save.' : null}
+                />
+              </div>
+            </div>
+          ) }] : []),
+          // ← CHANGED: for Email leads the call tab loads only when opened, so
+          // the shared profile column (and its roster) isn't loaded twice.
+          { label: 'Call Notes & Worksheet', lazy: Boolean(emailInfo), content: (
+            <div className="lead-2col">
+              {profileAside}{/* ← CHANGED: shared with the Email Worksheet tab */}
               <div style={{ minWidth: 0 }}>
                 <Worksheet key={code} practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
               </div>
