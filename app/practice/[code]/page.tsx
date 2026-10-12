@@ -329,6 +329,7 @@ export default async function PracticeDetail({
   //   only Individual          -> Individual
   //   only Group               -> Group
   //   neither                  -> Non Eligible
+    // for testing 
   let mipsIndividual = 0, mipsGroup = 0, mipsBoth = 0, mipsNonEligible = 0
   let anyCcm = false
   let rosterClinicianCount = 0
