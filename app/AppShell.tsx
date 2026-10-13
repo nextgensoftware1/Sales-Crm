@@ -47,8 +47,8 @@ const NAV: NavItem[] = [
   // visibility rules as before, just visually separated to match the
   // reference image's sidebar grouping.
   { href: '/admin',         label: 'Admin',          icon: <IconSettings />, admin: true },
-  { href: '/worksheet-reports', label: 'Worksheet Reports', icon: <IconReport />, admin: true },
-  { href: '/email-reports', label: 'Email Sheet Report', icon: <Mail aria-hidden="true" />, admin: true }, // ← ADDED
+  { href: '/worksheet-reports', label: 'Active Call', icon: <IconReport />, admin: true }, // ← CHANGED: renamed
+  { href: '/email-reports', label: 'Active Email', icon: <Mail aria-hidden="true" />, admin: true }, // ← ADDED
   { href: '/worksheet-updates', label: 'Worksheet Updates', icon: <History aria-hidden="true" />, admin: true },
   { href: '/deleted-leads', label: 'Deleted Leads',  icon: <IconTrash />, admin: true },
 ]
@@ -86,12 +86,12 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     kicker: 'Handoffs', title: 'Transfers', description: 'Track qualified leads across the closing workflow.',
     items: [
       { href: '/transfers', label: 'Transfer queue', description: 'Current handoffs', icon: FileCheck2 },
-      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved call context', icon: FileText },
+      { href: '/worksheet-reports', label: 'Active call', description: 'Saved call context', icon: FileText },
       { href: '/clients', label: 'Active clients', description: 'Converted accounts', icon: UserRoundCheck },
     ],
   },
   '/worksheet-reports': {
-    kicker: 'Reporting', title: 'Worksheets', description: 'Review the latest saved call details.',
+    kicker: 'Reporting', title: 'Active Call', description: 'Review the latest saved call details.', // ← CHANGED
     items: [
       { href: '/worksheet-reports', label: 'Saved worksheets', description: 'Latest per lead', icon: FileText },
       { href: '/worksheet-updates', label: 'Worksheet updates', description: 'Saved edit history', icon: History },
@@ -101,10 +101,10 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
   },
   // ← ADDED
   '/email-reports': {
-    kicker: 'Reporting', title: 'Email sheets', description: 'Email leads worked and saved.',
+    kicker: 'Reporting', title: 'Active Email', description: 'Email leads worked and saved.',
     items: [
-      { href: '/email-reports', label: 'Email sheet report', description: 'Latest per lead', icon: Mail },
-      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved call worksheets', icon: FileText },
+      { href: '/email-reports', label: 'Active Email', description: 'Latest per lead', icon: Mail },
+      { href: '/worksheet-reports', label: 'Active call', description: 'Saved call worksheets', icon: FileText },
       { href: '/', label: 'Leads Engine', description: 'Return to lead work', icon: ListChecks },
     ],
   },
@@ -120,7 +120,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     kicker: 'Audit', title: 'Worksheet updates', description: 'Review who changed uploaded worksheet data.',
     items: [
       { href: '/worksheet-updates', label: 'Update history', description: 'Before and after values', icon: History },
-      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Open saved worksheets', icon: FileText },
+      { href: '/worksheet-reports', label: 'Active call', description: 'Open saved worksheets', icon: FileText },
       { href: '/admin', label: 'Companies & users', description: 'Accounts and roles', icon: Building2 },
     ],
   },
@@ -128,7 +128,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     kicker: 'Management', title: 'Administration', description: 'Manage access, teams, and platform records.',
     items: [
       { href: '/admin', label: 'Companies & users', description: 'Accounts and roles', icon: Building2 },
-      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Team activity', icon: FileText },
+      { href: '/worksheet-reports', label: 'Active call', description: 'Team activity', icon: FileText },
       { href: '/worksheet-updates', label: 'Worksheet updates', description: 'Edit audit history', icon: History },
       { href: '/deleted-leads', label: 'Deleted leads', description: 'Recovery and cleanup', icon: RotateCcw },
     ],
@@ -138,7 +138,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
     items: [
       { href: '/deleted-leads', label: 'Recovery queue', description: 'Soft-deleted leads', icon: RotateCcw },
       { href: '/', label: 'Leads Engine', description: 'Active lead pool', icon: ListChecks },
-      { href: '/worksheet-reports', label: 'Worksheet reports', description: 'Saved activity', icon: ShieldCheck },
+      { href: '/worksheet-reports', label: 'Active call', description: 'Saved activity', icon: ShieldCheck },
     ],
   },
 }

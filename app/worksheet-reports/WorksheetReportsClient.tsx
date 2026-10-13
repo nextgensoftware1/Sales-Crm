@@ -1,18 +1,57 @@
 'use client'
 
 import Link from 'next/link'
-import { createContext, Fragment, useContext, useMemo, useState } from 'react'
+import { createContext, Fragment, useCallback, useContext, useMemo, useState, useSyncExternalStore } from 'react' // ← CHANGED: + useCallback, useSyncExternalStore
 import { Eye } from 'lucide-react'
 import { useWorksheetSearch } from '../../lib/worksheet-search-store'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import WorksheetDetailModal from './WorksheetDetailModal'
-import { dispositionOptions } from '../../lib/dispositions'
+import { toCsv, toXlsx, downloadFile, type ExportTable } from '../../lib/export-file' // ← ADDED: download selected leads
 
 // Opens the worksheet details popup; provided by WorksheetReportsClient so
 // every table (including each company group) can use it.
 const ViewWorksheetContext = createContext<((row: WorksheetReportRow) => void) | null>(null)
 
 const PAGE_SIZES = [8, 15, 20, 100] as const
+
+// ← ADDED: row selection for downloads. Shared through context so every
+// table (including each company group) uses the same selection.
+const rowKey = (r: WorksheetReportRow) => `${r.tenantId}:${r.practiceId}`
+type Selection = { selected: Set<string>; toggle: (key: string) => void; setMany: (keys: string[], on: boolean) => void }
+const SelectionContext = createContext<Selection | null>(null)
+
+// ← ADDED: the NPI is the practice code without its "PR-" prefix.
+const npiOf = (r: WorksheetReportRow) => r.practiceCode.replace(/^PR-/, '')
+
+// ← ADDED: every phone number known for the lead, without repeats
+// (practice phone, then the worksheet's direct line and additional phone).
+function phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {
+  const seen = new Set<string>()
+  const out: { label: string; value: string }[] = []
+  for (const [label, value] of [['Practice', r.practicePhone], ['Direct', r.directLine], ['Additional', r.additionalPhone]] as const) {
+    const v = (value ?? '').trim()
+    const digits = v.replace(/\D/g, '')
+    if (!v || seen.has(digits || v)) continue
+    seen.add(digits || v)
+    out.push({ label, value: v })
+  }
+  return out
+}
+
+// ← ADDED: the downloaded file's columns.
+function exportTable(rows: WorksheetReportRow[]): ExportTable {
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')
+  return {
+    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Direct Line',
+      'Additional Phone', 'Email', 'Concerned Person', 'Filled By', 'Closer', 'Disposition', 'Callback', 'Callback Timezone',
+      'Call Details', 'Handoff Status', 'Last Updated', 'Last Updated By'],
+    rows: rows.map((r) => [
+      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.directLine,
+      r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, r.disposition, when(r.callbackAt), r.timezone,
+      r.callDetails, r.handoffStatus, when(r.lastUpdatedAt), r.lastUpdatedBy,
+    ]),
+  }
+}
 
 // "Last Updated" range filter: From (date + time) → To (date + time).
 // The pickers give local date-times ("2026-10-05T20:00"), which the browser
@@ -116,8 +155,8 @@ function WorksheetSheet({ rows }: { rows: WorksheetReportRow[] }) {
           <td>{cell(row, row.state ?? '—')}</td>
           <td>{cell(row, row.specialty ?? '—')}</td>
           <td>{cell(row, row.disposition ?? '—')}</td>
-          <td>{cell(row, row.callbackAt ? `${fmtDate(row.callbackAt)}${row.timezone ? ` ${row.timezone}` : ''}` : '—')}</td>
-          <td>{cell(row, fmtDate(row.lastUpdatedAt))}</td>
+          <td>{cell(row, row.callbackAt ? <><ClientDate iso={row.callbackAt} />{row.timezone ? ` ${row.timezone}` : ''}</> : '—')}</td>{/* ← CHANGED */}
+          <td>{cell(row, <ClientDate iso={row.lastUpdatedAt} />)}</td>{/* ← CHANGED */}
           {columns.map(column => {
             const value = row.importData?.[column]
             return <td key={column}>{cell(row, value || '—')}</td>
@@ -130,6 +169,17 @@ function WorksheetSheet({ rows }: { rows: WorksheetReportRow[] }) {
       <div><button type="button" className="btn" disabled={safePage <= 1} onClick={() => setPage(current => Math.max(1, current - 1))}>Previous</button><span>Page {safePage} of {totalPages}</span><button type="button" className="btn" disabled={safePage >= totalPages} onClick={() => setPage(current => Math.min(totalPages, current + 1))}>Next</button></div>
     </div>
   </div>
+}
+
+// ← ADDED: dates are written in the viewer's own format and time zone, which
+// the server can't know — so they are filled in by the browser only. This
+// stops the "Hydration failed … text didn't match" warning
+// (server "Oct 13, 2026, 11:10 AM" vs browser "13 Oct 2026, 11:10").
+const noopSubscribe = () => () => {}
+function ClientDate({ iso }: { iso: string | null }) {
+  const isClient = useSyncExternalStore(noopSubscribe, () => true, () => false)
+  if (!iso) return <>—</>
+  return <>{isClient ? fmtDate(iso) : ''}</>
 }
 
 function fmtDate(iso: string | null): string {
@@ -156,8 +206,11 @@ function ReportTable({
   const safePage = Math.min(page, totalPages)
   const pageStart = (safePage - 1) * pageSize
   const pageRows = rows.slice(pageStart, pageStart + pageSize)
-  const colSpan = showCompanyColumn ? 8 : 7
+  const colSpan = showCompanyColumn ? 9 : 8 // ← CHANGED: + Phone column
   const viewWorksheet = useContext(ViewWorksheetContext)
+  const selection = useContext(SelectionContext) // ← ADDED
+  const pageKeys = pageRows.map(rowKey)
+  const pageAllSelected = !!selection && pageKeys.length > 0 && pageKeys.every((k) => selection.selected.has(k))
 
   return (
     <>
@@ -168,11 +221,17 @@ function ReportTable({
         <table className="tbl">
           <thead>
             <tr>
+              {/* ← ADDED: select every lead on this page */}
+              <th style={{ width: 28 }}>
+                {selection && <input type="checkbox" aria-label="Select all leads on this page" checked={pageAllSelected}
+                  onChange={(e) => selection.setMany(pageKeys, e.target.checked)} />}
+              </th>
               <th></th>
               <th>Practice</th>
               {showCompanyColumn && <th>Company</th>}
               <th>State</th>
               <th>Specialty</th>
+              <th>Phone</th>{/* ← ADDED */}
               <th>Filled By</th>
               <th>Closer</th>
               <th>Disposition</th>
@@ -186,6 +245,11 @@ function ReportTable({
               return (
                 <Fragment key={r.practiceId}>
                   <tr>
+                    {/* ← ADDED */}
+                    <td style={{ width: 28 }}>
+                      {selection && <input type="checkbox" aria-label={`Select ${r.providerName ?? r.practiceName}`}
+                        checked={selection.selected.has(rowKey(r))} onChange={() => selection.toggle(rowKey(r))} />}
+                    </td>
                     <td style={{ width: 20, whiteSpace: 'nowrap' }}>
                       <button type="button" className="report-row-toggle" aria-expanded={isOpen} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${r.practiceName}`} onClick={() => onToggleRow(r.practiceId)}>
                         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
@@ -203,23 +267,29 @@ function ReportTable({
                       <strong>{r.importData
                         ? <Link prefetch={false} className="report-practice-link" href={`/worksheet-reports/${r.tenantId}/${r.practiceId}`}>{r.providerName ?? r.practiceName}</Link>
                         : r.practiceName}</strong>
-                      <div className="subtle mono" style={{ fontSize: 10.5 }}>{r.importData ? `NPI ${r.practiceCode.replace(/^PR-/, '')}` : r.practiceCode}</div>
+                      <div className="subtle mono" style={{ fontSize: 10.5 }}>NPI {npiOf(r)}</div>{/* ← CHANGED: NPI for every role */}
                     </td>
                     {showCompanyColumn && <td>{r.companyName ?? '—'}</td>}
                     <td>{r.state ?? '—'}</td>
                     <td>{r.specialty ?? '—'}</td>
+                    {/* ← ADDED: all phone numbers for the lead */}
+                    <td className="mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                      {phonesOf(r).length === 0 ? '—' : phonesOf(r).map((ph) => (
+                        <div key={ph.label} title={`${ph.label} phone`}>{ph.value}</div>
+                      ))}
+                    </td>
                     <td>{r.filledBy ?? '—'}</td>
                     <td>{r.assignedCloser ?? '—'}</td>
                     <td>{r.disposition ? <span className="badge badge-blue">{r.disposition}</span> : '—'}</td>
-                    <td>{fmtDate(r.callbackAt)}{r.timezone ? ` ${r.timezone}` : ''}</td>
+                    <td><ClientDate iso={r.callbackAt} />{r.timezone ? ` ${r.timezone}` : ''}</td>{/* ← CHANGED */}
                     <td>
-                      {fmtDate(r.lastUpdatedAt)}
+                      <ClientDate iso={r.lastUpdatedAt} />{/* ← CHANGED */}
                       {r.lastUpdatedBy && <div className="subtle" style={{ fontSize: 10.5 }}>by {r.lastUpdatedBy}</div>}
                     </td>
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td></td>
+                      <td colSpan={2}></td>{/* ← CHANGED: + checkbox column */}
                       <td colSpan={colSpan} style={{ background: 'var(--surface-2)' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, padding: '10px 4px' }}>
                           <div>
@@ -325,6 +395,28 @@ export default function WorksheetReportsClient({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'reports' | 'sheet'>('reports')
 
+  // ← ADDED: selected leads (kept across pages and filters) + download.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const toggleSelect = useCallback((key: string) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
+  }), [])
+  const setManySelected = useCallback((keys: string[], on: boolean) => setSelected((prev) => {
+    const next = new Set(prev)
+    for (const k of keys) { if (on) next.add(k); else next.delete(k) }
+    return next
+  }), [])
+  const selection = useMemo<Selection>(() => ({ selected, toggle: toggleSelect, setMany: setManySelected }), [selected, toggleSelect, setManySelected])
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(rowKey(r))), [rows, selected])
+  const download = (format: 'csv' | 'xlsx') => {
+    if (!selectedRows.length) return
+    const table = exportTable(selectedRows)
+    const stamp = new Date().toISOString().slice(0, 10)
+    if (format === 'csv') downloadFile(`active-call-${stamp}.csv`, toCsv(table), 'text/csv;charset=utf-8')
+    else downloadFile(`active-call-${stamp}.xlsx`, toXlsx(table, 'Active Call'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  }
+
   // Filled By only makes sense where a report can show more than one
   // person's work (company/platform scope) — for an agent's own personal
   // view every row is already theirs, so the filter is hidden there
@@ -338,8 +430,7 @@ export default function WorksheetReportsClient({
   const [updatedTo, setUpdatedTo] = useState('')     // YYYY-MM-DDTHH:MM (local)
   const rangeReversed = !!updatedFrom && !!updatedTo && updatedFrom > updatedTo
 
-  // Every standard disposition plus any other value in the data.
-  const dispositions = useMemo(() => dispositionOptions(rows.map((r) => r.disposition)), [rows])
+  const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
   const filteredRows = useMemo(() => rows.filter((r) => {
@@ -379,9 +470,10 @@ export default function WorksheetReportsClient({
 
   return (
     <ViewWorksheetContext.Provider value={setViewing}>
+    <SelectionContext.Provider value={selection}>{/* ← ADDED */}
     <div>
       <div className="report-commandbar">
-        <div><h2 className="h-section" style={{ margin: 0 }}>Worksheet Reports</h2><span>{rows.length}{truncated ? '+' : ''} saved worksheets</span></div>
+        <div><h2 className="h-section" style={{ margin: 0 }}>Active Call</h2><span>{rows.length}{truncated ? '+' : ''} saved worksheets</span></div>{/* ← CHANGED: renamed */}
         <div className="view-switch" role="group" aria-label="Worksheet report view">
           <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Report view</button>
           <button className={view === 'sheet' ? 'active' : ''} onClick={() => setView('sheet')}>Spreadsheet view</button>
@@ -430,6 +522,22 @@ export default function WorksheetReportsClient({
         </div>
       )}
 
+      {/* ← ADDED: download bar (Report view) */}
+      {view === 'reports' && filteredRows.length > 0 && (
+        <div role="region" aria-label="Download selected leads"
+          style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', background: selected.size ? 'var(--surface-2)' : undefined }}>
+          <strong style={{ fontSize: 13 }}>{selected.size} selected</strong>
+          {selected.size < filteredRows.length && (
+            <button type="button" className="btn" onClick={() => setManySelected(filteredRows.map(rowKey), true)}>Select all {filteredRows.length} matching</button>
+          )}
+          {selected.size > 0 && <button type="button" className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>}
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button type="button" className="btn" disabled={!selected.size} onClick={() => download('csv')}>Download CSV</button>
+            <button type="button" className="btn btn-primary" disabled={!selected.size} onClick={() => download('xlsx')}>Download Excel</button>
+          </span>
+        </div>
+      )}
+
       {view === 'sheet' ? <WorksheetSheet key={`${searchText}|${dispositionFilter}|${filledByFilter}|${updatedFrom}|${updatedTo}`} rows={filteredRows} /> : rows.length === 0 ? (
         <p className="subtle">No worksheet reports yet — leads will show up here once a call worksheet has been saved.</p>
       ) : filteredRows.length === 0 ? (
@@ -449,6 +557,7 @@ export default function WorksheetReportsClient({
         <ReportTable rows={filteredRows} showCompanyColumn={false} expanded={expanded} onToggleRow={toggleRow} />
       )}
     </div>
+    </SelectionContext.Provider>
       {viewing && (
         <WorksheetDetailModal
           key={viewing.practiceId + viewing.tenantId}
