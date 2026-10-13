@@ -4,8 +4,8 @@
 // (search, response, agent, date) and paging.
 
 import Link from 'next/link'
-import { useMemo, useState } from 'react'
-import type { EmailReportRow } from '../email-worksheet-actions'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react' // ← CHANGED
+import { getEmailLeadHistory, type EmailReportRow, type EmailHistoryEntry } from '../email-worksheet-actions' // ← CHANGED
 import { EMAIL_RESPONSES, emailResponseBadge } from '../../lib/email-leads'
 
 const PAGE_SIZE = 25
@@ -14,6 +14,87 @@ function localDay(iso: string): string {
   const d = new Date(iso)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+// ← ADDED: read-only popup — everything saved on this email lead.
+function EmailLeadPopup({ row, onClose }: { row: EmailReportRow; onClose: () => void }) {
+  const [entries, setEntries] = useState<EmailHistoryEntry[] | null>(null)
+  const [error, setError] = useState('')
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getEmailLeadHistory(row.practiceId, row.tenantId).then((res) => {
+      if (cancelled) return
+      if (res.ok) setEntries(res.entries)
+      else setError(res.message)
+    }).catch(() => { if (!cancelled) setError('Could not load the history.') })
+    return () => { cancelled = true }
+  }, [row.practiceId, row.tenantId])
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    dialogRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; previous?.focus?.() }
+  }, [onClose])
+
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—')
+  const kv = (label: string, value: React.ReactNode) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '130px minmax(0, 1fr)', gap: 10, padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>{label}</span>
+      <span style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{value}</span>
+    </div>
+  )
+
+  return (
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15, 23, 32, 0.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="email-popup-title" tabIndex={-1}
+        style={{ width: 'min(760px, 100%)', background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: '0 24px 60px rgba(10, 30, 45, 0.28)', outline: 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <h2 id="email-popup-title" style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>{row.practiceName}</h2>
+            <div className="subtle" style={{ fontSize: 12, marginTop: 2 }}>{row.practiceCode}{row.companyName ? ` · ${row.companyName}` : ''}</div>
+          </div>
+          <button type="button" className="btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        <div style={{ padding: '14px 20px' }}>
+          {kv('Email address', row.email || '—')}
+          {kv('Response', <span className={emailResponseBadge(row.response)}>{row.response}</span>)}
+          {kv('Note', row.note ? <span style={{ whiteSpace: 'pre-wrap' }}>{row.note}</span> : '—')}
+          {kv('Saved by', row.agentName || '—')}
+          {kv('Last updated', fmt(row.updatedAt))}
+          {kv('State / Specialty', [row.state, row.specialty].filter(Boolean).join(' · ') || '—')}
+
+          <h3 style={{ fontSize: 14, fontWeight: 800, margin: '18px 0 8px' }}>History{entries ? ` (${entries.length})` : ''}</h3>
+          {error ? <p className="subtle" style={{ fontSize: 12 }}>{error}</p>
+            : entries === null ? <p className="subtle" role="status" style={{ fontSize: 12 }}>Loading history…</p>
+            : entries.length === 0 ? <p className="subtle" style={{ fontSize: 12 }}>No saves recorded.</p>
+            : (
+              <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 10 }}>
+                {entries.map((h, i) => (
+                  <li key={i} style={{ borderLeft: '3px solid var(--border)', paddingLeft: 10, fontSize: 13 }}>
+                    <div><strong>{fmt(h.at)}</strong>{h.by ? ` · ${h.by}` : ''} · <span className={emailResponseBadge(h.response)}>{h.response}</span></div>
+                    <div className="subtle" style={{ fontSize: 12, marginTop: 2 }}>{h.email || 'No email address'}</div>
+                    {h.note && <div style={{ whiteSpace: 'pre-wrap', marginTop: 2 }}>{h.note}</div>}
+                  </li>
+                ))}
+              </ol>
+            )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+          <Link prefetch={false} href={`/practice/${row.practiceCode}?from=email-reports`} style={{ fontWeight: 700, fontSize: 13, alignSelf: 'center' }}>Open lead →</Link>
+          <button type="button" className="btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function EmailReportsClient({ rows, truncated, showCompany }: {
@@ -26,6 +107,9 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
   const [agent, setAgent] = useState('')
   const [day, setDay] = useState('')
   const [page, setPage] = useState(1)
+  const [viewKey, setViewKey] = useState<string | null>(null) // ← ADDED: row shown in the popup
+  const viewRow = viewKey ? rows.find((r) => `${r.tenantId}:${r.practiceId}` === viewKey) ?? null : null
+  const closeView = useCallback(() => setViewKey(null), [])
 
   const agents = useMemo(() => Array.from(new Set(rows.map((r) => r.agentName).filter((v): v is string => !!v))).sort(), [rows])
   const counts = useMemo(() => {
@@ -95,7 +179,14 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
               {shown.map((r) => (
                 <tr key={`${r.tenantId}:${r.practiceId}`}>
                   <td>
-                    <Link prefetch={false} href={`/practice/${r.practiceCode}`} style={{ fontWeight: 700 }}>{r.practiceName}</Link>
+                    {/* ← CHANGED: eye button opens the popup */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button type="button" onClick={() => setViewKey(`${r.tenantId}:${r.practiceId}`)} aria-label={`View email work for ${r.practiceName}`} title="View email work"
+                        style={{ flex: 'none', width: 28, height: 28, display: 'inline-grid', placeItems: 'center', border: '1px solid var(--border)', borderRadius: 7, background: 'var(--surface)', color: 'var(--accent-dark, #0f766e)', cursor: 'pointer' }}>
+                        <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                      </button>
+                      <Link prefetch={false} href={`/practice/${r.practiceCode}?from=email-reports`} style={{ fontWeight: 700 }}>{r.practiceName}</Link>
+                    </div>
                     <div className="subtle" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>{r.practiceCode}</div>
                     {r.note && <div className="subtle" style={{ fontSize: 11, marginTop: 2, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.note}>{r.note}</div>}
                   </td>
@@ -120,6 +211,9 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
           </div>
         )}
       </div>
+
+      {/* ← ADDED */}
+      {viewRow && <EmailLeadPopup key={viewKey!} row={viewRow} onClose={closeView} />}
     </div>
   )
 }
