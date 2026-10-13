@@ -6,6 +6,8 @@ export type WorksheetReportRow = {
   practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null
   state: string | null; specialty: string | null; companyName: string | null
   practicePhone: string | null // ← ADDED: the practice's own phone number (from the lead)
+  contactPhone: string | null // ← ADDED: NPPES contact / mailing phone
+  officialPhone: string | null // ← ADDED: authorized official's phone
   filledBy: string | null; assignedCloser: string | null; callDetails: string | null
   additionalPhone: string | null; email: string | null; concernedPerson: string | null
   directLine: string | null; callbackAt: string | null; timezone: string | null
@@ -99,6 +101,7 @@ type RawWorksheet = {
     lead_transfers?: RawTransfer[] // ← ADDED: nested transfers (when available)
     practice_providers: Array<{ providers: {
       name: string | null; org_name: string | null
+      phone?: string | null; mailing_phone?: string | null; auth_official_phone?: string | null // ← ADDED
       record_source: string | null; entity_type: string | null; enumeration_date: string | null; nppes_last_updated: string | null
       provider_signals: { ccm: boolean | null; pcm: boolean | null; awv: boolean | null; tcm: boolean | null; bhi: boolean | null; rpm: boolean | null; rcm_fit: boolean | null } | null
       provider_mips: Array<{ performance_year: number | null; status: string | null; reporting_option: string | null }> | null
@@ -144,7 +147,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       practice_code, name, state, specialty, phone, deleted_at,${withTransfers ? `
       lead_transfers(practice_id, tenant_id, note, users!lead_transfers_to_user_id_fkey(full_name)),` : ''}
       practice_providers(providers(
-        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,
+        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated, phone, mailing_phone, auth_official_phone,
         provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),
         provider_mips(performance_year, status, reporting_option)
       ))
@@ -213,7 +216,9 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       tenantId: worksheet.tenant_id,
       practiceCode: practice.practice_code,
       practiceName: practice.name,
-      practicePhone: practice.phone ?? null, // ← ADDED
+      practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
+      contactPhone: provider?.mailing_phone ?? null, // ← ADDED
+      officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
       providerName: getImportedProviderName(worksheet.import_data) ?? worksheet.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
       orgName: provider?.org_name ?? null,
       state: practice.state,
@@ -271,7 +276,7 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     master_practices!inner(
       practice_code, name, state, specialty, phone, deleted_at,
       practice_providers(providers(
-        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,
+        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated, phone, mailing_phone, auth_official_phone,
         provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),
         provider_mips(performance_year, status, reporting_option)
       ))
@@ -294,7 +299,9 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     tenantId: item.tenant_id,
     practiceCode: practice.practice_code,
     practiceName: practice.name,
-    practicePhone: practice.phone ?? null, // ← ADDED
+    practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
+    contactPhone: provider?.mailing_phone ?? null, // ← ADDED
+    officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
     providerName: getImportedProviderName(item.import_data) ?? item.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
     orgName: provider?.org_name ?? null,
     state: practice.state,

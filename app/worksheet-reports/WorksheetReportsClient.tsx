@@ -28,7 +28,7 @@ const npiOf = (r: WorksheetReportRow) => r.practiceCode.replace(/^PR-/, '')
 function phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {
   const seen = new Set<string>()
   const out: { label: string; value: string }[] = []
-  for (const [label, value] of [['Practice', r.practicePhone], ['Direct', r.directLine], ['Additional', r.additionalPhone]] as const) {
+  for (const [label, value] of [['Practice', r.practicePhone], ['Contact', r.contactPhone], ['Official', r.officialPhone], ['Direct', r.directLine], ['Additional', r.additionalPhone]] as const) { // ← CHANGED: + contact / official phones
     const v = (value ?? '').trim()
     const digits = v.replace(/\D/g, '')
     if (!v || seen.has(digits || v)) continue
@@ -42,11 +42,11 @@ function phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {
 function exportTable(rows: WorksheetReportRow[]): ExportTable {
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')
   return {
-    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Direct Line',
+    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Contact Phone', 'Official Phone', 'Direct Line',
       'Additional Phone', 'Email', 'Concerned Person', 'Filled By', 'Closer', 'Disposition', 'Callback', 'Callback Timezone',
       'Call Details', 'Handoff Status', 'Last Updated', 'Last Updated By'],
     rows: rows.map((r) => [
-      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.directLine,
+      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.contactPhone, r.officialPhone, r.directLine,
       r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, r.disposition, when(r.callbackAt), r.timezone,
       r.callDetails, r.handoffStatus, when(r.lastUpdatedAt), r.lastUpdatedBy,
     ]),
@@ -86,12 +86,15 @@ function worksheetMatchesSearch(r: WorksheetReportRow, search: string): boolean 
   const fields = [
     r.providerName, r.practiceName, r.practiceCode, r.state, r.specialty, r.companyName, r.filledBy,
     r.assignedCloser, r.disposition, r.timezone, r.email, r.concernedPerson, r.callDetails,
-    r.additionalPhone, r.directLine, r.lastUpdatedBy, ...Object.values(r.importData ?? {}),
+    r.additionalPhone, r.directLine, r.practicePhone, r.contactPhone, r.officialPhone, r.lastUpdatedBy, ...Object.values(r.importData ?? {}), // ← CHANGED: + practice phone
   ]
   if (fields.some((value) => value != null && String(value).toLowerCase().includes(needle))) return true
   // Phone numbers: compare digits only, so "(555) 123-4567", "555.123.4567"
   // and "5551234567" all match each other.
-  const digits = needle.replace(/\D/g, '')
+  // ← CHANGED: a leading US country code ("+1 915…" / "1915…") is ignored, so
+  // it matches numbers saved with or without it.
+  let digits = needle.replace(/\D/g, '')
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1)
   if (digits.length >= 4 && !/[a-z@]/.test(needle)) {
     return fields.some((value) => value != null && String(value).replace(/\D/g, '').includes(digits))
   }
