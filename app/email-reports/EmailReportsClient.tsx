@@ -4,11 +4,21 @@
 // (search, response, agent, date) and paging.
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react' // ← CHANGED
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react' // ← CHANGED: + useSyncExternalStore
 import { getEmailLeadHistory, type EmailReportRow, type EmailHistoryEntry } from '../email-worksheet-actions' // ← CHANGED
 import { EMAIL_RESPONSES, emailResponseBadge } from '../../lib/email-leads'
 
 const PAGE_SIZE = 25
+
+// ← ADDED: dates are shown in the viewer's own format and time zone, which
+// the server can't know. Rendering them only in the browser avoids the
+// "Hydration failed … text didn't match" warning (server 10/13/2026 vs
+// browser 13/10/2026).
+const noopSubscribe = () => () => {}
+function LocalDateTime({ iso }: { iso: string }) {
+  const isClient = useSyncExternalStore(noopSubscribe, () => true, () => false)
+  return <>{isClient ? new Date(iso).toLocaleString() : ''}</>
+}
 
 function localDay(iso: string): string {
   const d = new Date(iso)
@@ -196,7 +206,7 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
                   <td><span className={emailResponseBadge(r.response)}>{r.response}</span></td>
                   <td>{r.agentName ?? '—'}</td>
                   {showCompany && <td>{r.companyName ?? '—'}</td>}
-                  <td style={{ fontSize: 12 }}>{new Date(r.updatedAt).toLocaleString()}</td>
+                  <td style={{ fontSize: 12 }}><LocalDateTime iso={r.updatedAt} /></td>{/* ← CHANGED */}
                 </tr>
               ))}
             </tbody>
