@@ -1,11 +1,12 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { chunks, mapConcurrent, readAllPages } from '../lib/query-utils'
 
 export type WorksheetReportRow = {
   practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null
   state: string | null; specialty: string | null; companyName: string | null
-  practicePhone: string | null // ← ADDED: the practice's own phone number (from the lead)
+  practicePhone: string | null // ← ADDED: the practice's own phone (falls back to the provider's)
   contactPhone: string | null // ← ADDED: NPPES contact / mailing phone
   officialPhone: string | null // ← ADDED: authorized official's phone
   filledBy: string | null; assignedCloser: string | null; callDetails: string | null
@@ -71,11 +72,11 @@ function deriveSignals(provider: {
   }
 }
 
-// ← CHANGED: was 300. Every saved worksheet is shown now; rows are read in
-// pages of 1,000 (the most the database returns per request). The cap is
-// only a safety net against an unexpectedly huge result.
-const REPORT_LIMIT = 50000
-const REPORT_PAGE = 1000
+// Every worksheet in scope is loaded (no cap). Rows are read in pages of
+// 1,000 — Supabase returns at most 1,000 per request — and, when transfers
+// can't be nested, they are looked up in batches so no request gets too long.
+const PAGE_SIZE = 1000
+const TRANSFER_BATCH = 200
 
 type RawWorksheet = {
   practice_id: string
@@ -116,7 +117,11 @@ type RawTransfer = {
   users: { full_name: string | null } | null
 }
 
-export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+/**
+ * All worksheets the signed-in user may see. Super Admin can pass a company
+ * to load only that company's worksheets (filtered in the database).
+ */
+export async function getWorksheetReports(options: { companyId?: string } = {}): Promise<WorksheetReportsResult> {
   const supabase = await createSupabaseServer()
   const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false, message: 'Not signed in.' }
@@ -136,7 +141,8 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
   // request that had to wait for the first. If the database can't nest them
   // (no direct link between the tables), it falls back to the old two-step
   // way automatically.
-  const buildQuery = (withTransfers: boolean) => {
+  const companyId = isSuperAdmin && typeof options.companyId === 'string' && /^[0-9a-f-]{36}$/i.test(options.companyId) ? options.companyId : ''
+  const buildQuery = (withTransfers: boolean, withCount: boolean) => {
     let query = supabase.from('lead_worksheets').select(`
     practice_id, tenant_id, call_details, additional_phone, email,
     concerned_person, direct_line, callback_at, timezone, disposition,
@@ -152,36 +158,35 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
         provider_mips(performance_year, status, reporting_option)
       ))
     )
-  `).is('master_practices.deleted_at', null)
-      // practice_id breaks ties so paging never skips or repeats a row.
-      .order('updated_at', { ascending: false }).order('practice_id', { ascending: true })
+  `, withCount ? { count: 'exact' } : undefined).is('master_practices.deleted_at', null)
     if (isPersonal) query = query.eq('updated_by', me.id)
     else if (!isSuperAdmin) query = query.eq('tenant_id', me.tenant_id!)
-    return query
+    if (companyId) query = query.eq('tenant_id', companyId)
+    // Newest first; practice + company make the order unique so pages never
+    // overlap or skip a worksheet.
+    return query.order('updated_at', { ascending: false }).order('practice_id').order('tenant_id')
   }
-
-  // ← CHANGED: read every page instead of a single capped request.
-  const readAll = async (withTransfers: boolean) => {
-    const rows: unknown[] = []
-    for (let from = 0; from <= REPORT_LIMIT; from += REPORT_PAGE) {
-      const { data: part, error: partError } = await buildQuery(withTransfers).range(from, from + REPORT_PAGE - 1)
-      if (partError) return { data: null, error: partError }
-      rows.push(...(part ?? []))
-      if (!part || part.length < REPORT_PAGE) break
-    }
-    return { data: rows, error: null }
-  }
+  // Every page, until all worksheets are loaded.
+  const readAll = (withTransfers: boolean) => readAllPages<RawWorksheet>(
+    (from, to, isFirst) => buildQuery(withTransfers, isFirst).range(from, to) as never,
+    { pageSize: PAGE_SIZE, concurrency: 4 },
+  )
 
   let nestedTransfers = true
-  let { data, error } = await readAll(true)
-  if (error && (error.code === 'PGRST200' || error.code === 'PGRST201')) {
-    nestedTransfers = false
-    ;({ data, error } = await readAll(false))
+  let page: RawWorksheet[]
+  try {
+    try {
+      page = await readAll(true)
+    } catch (error) {
+      const code = (error as { code?: string })?.code
+      if (code !== 'PGRST200' && code !== 'PGRST201') throw error
+      nestedTransfers = false
+      page = await readAll(false)
+    }
+  } catch (error) {
+    return { ok: false, message: (error as { message?: string })?.message ?? 'Could not load worksheets.' }
   }
-  if (error) return { ok: false, message: error.message }
-  const all = (data ?? []) as unknown as RawWorksheet[]
-  const truncated = all.length > REPORT_LIMIT
-  const page = truncated ? all.slice(0, REPORT_LIMIT) : all
+  const truncated = false
 
   let transfers: RawTransfer[] = []
   if (nestedTransfers) {
@@ -189,17 +194,22 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
     // limited to the viewer's company unless Super Admin.
     for (const row of page) {
       for (const transfer of row.master_practices.lead_transfers ?? []) {
-        if (isSuperAdmin || transfer.tenant_id === me.tenant_id) transfers.push(transfer)
+        if (isSuperAdmin ? !companyId || transfer.tenant_id === companyId : transfer.tenant_id === me.tenant_id) transfers.push(transfer)
       }
     }
   } else {
+    // Looked up in batches of 200 leads so the request never gets too long.
     const practiceIds = [...new Set(page.map(row => row.practice_id))]
-    let transferQuery = supabase.from('lead_transfers')
-      .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
-    if (practiceIds.length) transferQuery = transferQuery.in('practice_id', practiceIds)
-    if (!isSuperAdmin) transferQuery = transferQuery.eq('tenant_id', me.tenant_id!)
-    const { data: transferRows } = practiceIds.length ? await transferQuery : { data: [] }
-    transfers = (transferRows ?? []) as unknown as RawTransfer[]
+    const batches = await mapConcurrent(chunks(practiceIds, TRANSFER_BATCH), 4, async (ids) => {
+      let transferQuery = supabase.from('lead_transfers')
+        .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
+        .in('practice_id', ids)
+      if (!isSuperAdmin) transferQuery = transferQuery.eq('tenant_id', me.tenant_id!)
+      else if (companyId) transferQuery = transferQuery.eq('tenant_id', companyId)
+      const { data: transferRows } = await transferQuery
+      return (transferRows ?? []) as unknown as RawTransfer[]
+    })
+    transfers = batches.flat()
   }
   const transferByKey = new Map<string, RawTransfer>()
   for (const transfer of transfers) {
@@ -216,7 +226,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
       tenantId: worksheet.tenant_id,
       practiceCode: practice.practice_code,
       practiceName: practice.name,
-      practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
+      practicePhone: practice.phone ?? provider?.phone ?? null, // ← ADDED
       contactPhone: provider?.mailing_phone ?? null, // ← ADDED
       officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
       providerName: getImportedProviderName(worksheet.import_data) ?? worksheet.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
@@ -299,9 +309,9 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     tenantId: item.tenant_id,
     practiceCode: practice.practice_code,
     practiceName: practice.name,
-    practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
-    contactPhone: provider?.mailing_phone ?? null, // ← ADDED
-    officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
+      practicePhone: practice.phone ?? provider?.phone ?? null, // ← ADDED
+      contactPhone: provider?.mailing_phone ?? null, // ← ADDED
+      officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
     providerName: getImportedProviderName(item.import_data) ?? item.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
     orgName: provider?.org_name ?? null,
     state: practice.state,
@@ -323,4 +333,26 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
     importData: Object.fromEntries(Object.entries(item.import_data).map(([key, value]) => [key, String(value ?? '')])),
     ...deriveSignals(provider),
   } }
+}
+
+/**
+ * Super Admin: exact number of worksheets per company (counted in the
+ * database, deleted leads excluded) for the company list on the page.
+ */
+export async function getWorksheetCompanyCounts(companyIds: string[]): Promise<Record<string, number>> {
+  // Callable from the browser like every action here, so check the caller.
+  const { data: { user } } = await getCurrentUser()
+  if (!user) return {}
+  const { data: me } = await getCurrentProfile(user.id)
+  if (me?.roles?.key !== 'super_admin' || !Array.isArray(companyIds)) return {}
+  const ids = companyIds.filter((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)).slice(0, 500)
+  const supabase = await createSupabaseServer()
+  const counts: Record<string, number> = {}
+  await mapConcurrent(ids, 6, async (id) => {
+    const { count } = await supabase.from('lead_worksheets')
+      .select('practice_id, master_practices!inner(deleted_at)', { count: 'exact', head: true })
+      .eq('tenant_id', id).is('master_practices.deleted_at', null)
+    counts[id] = count ?? 0
+  })
+  return counts
 }

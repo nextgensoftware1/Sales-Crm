@@ -1,0 +1,694 @@
+diff --git a/app/AppShell.tsx b/app/AppShell.tsx
+index 58e888f..ab19dc8 100644
+--- a/app/AppShell.tsx
++++ b/app/AppShell.tsx
+@@ -109,7 +109,7 @@ const CONTEXT_NAV: Record<string, ContextNav> = {
+     ],
+   },
+   '/kpi': {
+-    kicker: 'Incentives', title: 'KPI', description: 'PKR 500 for every verified transfer.',
++    kicker: 'Incentives', title: 'KPI', description: 'Per Transfer Incentives Calculator',
+     items: [
+       { href: '/kpi', label: 'KPI records', description: 'Verified transfer earnings', icon: Wallet },
+       { href: '/transfers', label: 'Transfers', description: 'Verify pending transfers', icon: FileCheck2 },
+diff --git a/app/PracticesTable.tsx b/app/PracticesTable.tsx
+index 90bfbc8..cdae778 100644
+--- a/app/PracticesTable.tsx
++++ b/app/PracticesTable.tsx
+@@ -92,6 +92,11 @@ type PersistedLeadFilters = {
+ 
+ const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
+ 
++// These signals are the same filters as the top-row categories (MIPS, RCM,
++// CCM — identical checks), so the Advanced filters row doesn't repeat them.
++const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
++const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
++
+ export default function PracticesTable({ practices: practicesProp, packedPractices, serverPaging, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
+   const router = useRouter()
+   const [panelOpen, togglePanel] = useWorkspacePanel()
+@@ -213,7 +218,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
+         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
+         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
+         if (Array.isArray(filters.activeSignals)) {
+-          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
++          setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
+         }
+         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
+         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
+@@ -742,7 +747,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
+           </div>
+           <div className="signal-filter-row">
+             <strong>Signals</strong>
+-            {SIGNALS.map((s) => (
++            {ADVANCED_SIGNALS.map((s) => (
+               <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
+             ))}
+             <SampleTag note="MIPS year / enrichment filters are display-only" />
+diff --git a/app/clients/SoldLeadsSection.tsx b/app/clients/SoldLeadsSection.tsx
+index 036adc2..4e54cdb 100644
+--- a/app/clients/SoldLeadsSection.tsx
++++ b/app/clients/SoldLeadsSection.tsx
+@@ -1,5 +1,6 @@
+ import Link from 'next/link'
+ import { createSupabaseServer } from '../../lib/supabase-server'
++import { leadHref } from '../../lib/lead-return'
+ import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+ 
+ type SaleRow = {
+@@ -129,7 +130,7 @@ export default async function SoldLeadsSection({ scope }: { scope: SoldScope })
+                   <tr key={sale.id}>
+                     <td>
+                       {practice ? (
+-                        <Link prefetch={false} href={`/practice/${practice.practice_code}`}>
++                        <Link prefetch={false} href={leadHref(practice.practice_code, 'sold-leads')}>
+                           <strong>{practice.name}</strong>
+                           <span className="subtle mono" style={{ display: 'block', fontSize: 10.5 }}>{npiLabel(practice.practice_code)}</span>
+                         </Link>
+diff --git a/app/kpi/KpiClient.tsx b/app/kpi/KpiClient.tsx
+index 08596df..9fc96a0 100644
+--- a/app/kpi/KpiClient.tsx
++++ b/app/kpi/KpiClient.tsx
+@@ -2,8 +2,9 @@
+ 
+ import { useEffect, useMemo, useState } from 'react'
+ import Link from 'next/link'
+-import { BadgeCheck, CalendarDays, Download, Filter, Search, Wallet, XCircle } from 'lucide-react'
++import { BadgeCheck, Building2, CalendarDays, ChevronRight, Download, Filter, Search, Wallet, XCircle } from 'lucide-react'
+ import type { KpiCredit } from '../kpi-actions'
++import { useKpiCompany } from '../../lib/kpi-company-store'
+ import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+ 
+ type Initial = { ok: boolean; message?: string; available: boolean; scope: 'own' | 'team'; credits: KpiCredit[]; isSuperAdmin: boolean }
+@@ -22,7 +23,7 @@ const sum = (rows: KpiCredit[]): Totals => {
+   return { count: verified.length, amount: verified.reduce((t, r) => t + r.amount, 0) }
+ }
+ 
+-export default function KpiClient({ initial }: { initial: Initial }) {
++export default function KpiClient({ initial, allCompanies = [] }: { initial: Initial; allCompanies?: { id: string; name: string }[] }) {
+   const team = initial.scope === 'team'
+   const superAdmin = initial.isSuperAdmin
+   // "This month" and month labels depend on the viewer's time zone, so they
+@@ -33,23 +34,38 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+     return () => window.clearTimeout(id)
+   }, [])
+ 
+-  const [period, setPeriod] = useState('all')
+-  const [company, setCompany] = useState('')
+-  const [agent, setAgent] = useState('')
++  // Verified-on range: From / To date + time in the viewer's local time
++  // (same as Worksheet Reports). Empty = open-ended; "To" includes its minute.
++  const [rangeFrom, setRangeFrom] = useState('')
++  const [rangeTo, setRangeTo] = useState('')
++  const fromMs = rangeFrom ? new Date(rangeFrom).getTime() : null
++  const toMs = rangeTo ? new Date(rangeTo).getTime() + 59_999 : null
++  const rangeReversed = fromMs !== null && toMs !== null && fromMs > toMs
++  // Shared with the company list in the left KPI panel (KpiCompanyNav).
++  const [company, setCompany] = useKpiCompany()
++  // A user pick belongs to the company it was made under, so switching
++  // company (here or in the left panel) clears it for good.
++  const [agentPick, setAgentPick] = useState<{ id: string; company: string }>({ id: '', company: '' })
++  const setAgent = (id: string) => setAgentPick({ id, company })
+   const [search, setSearch] = useState('')
+   const [status, setStatus] = useState<'' | 'verified' | 'rejected'>('')
+   const [pageSize, setPageSize] = useState(20)
+   const [page, setPage] = useState(1)
+ 
+   const credits = initial.credits
+-  const companies = useMemo(() => Array.from(new Map(credits.filter((c) => c.tenantId).map((c) => [c.tenantId as string, c.companyName ?? 'Unknown company'])))
+-    .map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits])
++  // Every company (also those with no KPI yet), so the dropdown always matches the left panel.
++  const companies = useMemo(() => Array.from(new Map([
++    ...allCompanies.map((c) => [c.id, c.name] as [string, string]),
++    ...credits.filter((c) => c.tenantId).map((c) => [c.tenantId as string, c.companyName ?? 'Unknown company'] as [string, string]),
++  ])).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits, allCompanies])
+   const agentKey = (c: KpiCredit) => c.agentId ?? `name:${c.agentName ?? ''}`
+   const agents = useMemo(() => Array.from(new Map(credits.filter((c) => !company || c.tenantId === company).map((c) => [agentKey(c), c.agentName ?? 'Unknown agent'])))
+     .map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)), [credits, company])
+-  const months = useMemo(() => thisMonth ? Array.from(new Set([thisMonth, ...credits.map((c) => monthKey(c.verifiedAt))])).sort().reverse() : [], [credits, thisMonth])
++  // A chosen user only applies while they belong to the selected company
++  // (e.g. after picking a different company in the left panel).
++  const agent = agentPick.company === company && agents.some((a) => a.id === agentPick.id) ? agentPick.id : ''
+ 
+-  // Company / agent / search narrow everything; the period only narrows the record list.
++  // Company / agent / search narrow everything; the date range only narrows the record list.
+   const scoped = useMemo(() => {
+     const needle = search.trim().toLowerCase()
+     return credits.filter((c) => {
+@@ -61,16 +77,32 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+       return true
+     })
+   }, [credits, company, agent, search, status])
+-  const filtered = useMemo(() => (period === 'all' ? scoped : scoped.filter((c) => monthKey(c.verifiedAt) === period)), [scoped, period])
++  const filtered = useMemo(() => (fromMs === null && toMs === null ? scoped : scoped.filter((c) => {
++    const at = new Date(c.verifiedAt).getTime()
++    return (fromMs === null || at >= fromMs) && (toMs === null || at <= toMs)
++  })), [scoped, fromMs, toMs])
+ 
+   const monthTotals = useMemo(() => sum(thisMonth ? scoped.filter((c) => monthKey(c.verifiedAt) === thisMonth) : []), [scoped, thisMonth])
+   const allTotals = useMemo(() => sum(scoped), [scoped])
+   const shownTotals = useMemo(() => sum(filtered), [filtered])
++  // Super Admin drill-down: companies → users → records (click a row).
++  const byCompany = useMemo(() => {
++    const map = new Map<string, { id: string; name: string; totals: Totals; rejected: number; agents: Set<string> }>()
++    for (const c of filtered) {
++      const id = c.tenantId ?? ''
++      const row = map.get(id) ?? { id, name: c.companyName ?? 'Unknown company', totals: { count: 0, amount: 0 }, rejected: 0, agents: new Set<string>() }
++      if (c.status === 'rejected') row.rejected += 1
++      else row.totals = { count: row.totals.count + 1, amount: row.totals.amount + c.amount }
++      row.agents.add(agentKey(c))
++      map.set(id, row)
++    }
++    return Array.from(map.values()).sort((a, b) => b.totals.amount - a.totals.amount || a.name.localeCompare(b.name))
++  }, [filtered])
+   const byAgent = useMemo(() => {
+-    const map = new Map<string, { name: string; company: string | null; totals: Totals; rejected: number }>()
++    const map = new Map<string, { key: string; name: string; company: string | null; totals: Totals; rejected: number }>()
+     for (const c of filtered) {
+       const key = agentKey(c)
+-      const row = map.get(key) ?? { name: c.agentName ?? 'Unknown agent', company: c.companyName, totals: { count: 0, amount: 0 }, rejected: 0 }
++      const row = map.get(key) ?? { key, name: c.agentName ?? 'Unknown agent', company: c.companyName, totals: { count: 0, amount: 0 }, rejected: 0 }
+       if (c.status === 'rejected') row.rejected += 1
+       else row.totals = { count: row.totals.count + 1, amount: row.totals.amount + c.amount }
+       map.set(key, row)
+@@ -82,10 +114,12 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+   const safePage = Math.min(page, totalPages)
+   const start = (safePage - 1) * pageSize
+   const pageRows = filtered.slice(start, start + pageSize)
+-  const activeFilters = [period !== 'all', !!company, !!agent, !!status, !!search.trim()].filter(Boolean).length
+-  const reset = () => { setPeriod('all'); setCompany(''); setAgent(''); setStatus(''); setSearch(''); setPage(1) }
++  const activeFilters = [!!(rangeFrom || rangeTo), !!company, !!agent, !!status, !!search.trim()].filter(Boolean).length
++  const reset = () => { setRangeFrom(''); setRangeTo(''); setCompany(''); setAgent(''); setStatus(''); setSearch(''); setPage(1) }
+   const rejectedShown = filtered.filter((c) => c.status === 'rejected').length
+-  const periodName = period === 'all' ? 'All time' : monthLabel(period)
++  const fmtPick = (v: string) => new Date(v).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
++  const periodName = rangeFrom && rangeTo ? `${fmtPick(rangeFrom)} – ${fmtPick(rangeTo)}`
++    : rangeFrom ? `From ${fmtPick(rangeFrom)}` : rangeTo ? `Until ${fmtPick(rangeTo)}` : 'All time'
+ 
+   const downloadCsv = () => {
+     const header = ['Reviewed on', 'Status', 'Agent', 'Lead', 'Lead code', ...(superAdmin ? ['Company'] : []), 'Reviewed by', 'Note', 'Amount', 'Currency']
+@@ -95,7 +129,7 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+     const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }))
+     const a = document.createElement('a')
+     a.href = url
+-    a.download = `kpi-records-${period === 'all' ? 'all-time' : period}.csv`
++    a.download = `kpi-records-${rangeFrom || rangeTo ? `${rangeFrom.slice(0, 10) || 'start'}_to_${rangeTo.slice(0, 10) || 'now'}` : 'all-time'}.csv`
+     document.body.appendChild(a); a.click(); a.remove()
+     URL.revokeObjectURL(url)
+   }
+@@ -128,12 +162,16 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+               value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} />
+           </div>
+         </label>
+-        <label className="filter-control"><span>Period</span>
+-          <select className="input" aria-label="Period" value={period} onChange={(e) => { setPeriod(e.target.value); setPage(1) }}>
+-            <option value="all">All time</option>
+-            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}{m === thisMonth ? ' (this month)' : ''}</option>)}
+-          </select>
+-        </label>
++        <div className="filter-control kpi-range"><span>Verified on (from – to)</span>
++          <div className="kpi-range-inputs">
++            <input type="datetime-local" className="input" aria-label="Verified from date and time" value={rangeFrom} max={rangeTo || undefined}
++              onChange={(e) => { setRangeFrom(e.target.value); setPage(1) }} />
++            <span className="subtle">to</span>
++            <input type="datetime-local" className="input" aria-label="Verified to date and time" value={rangeTo} min={rangeFrom || undefined}
++              onChange={(e) => { setRangeTo(e.target.value); setPage(1) }} />
++          </div>
++          {rangeReversed && <small role="alert" style={{ color: 'var(--danger)', fontSize: 11, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>“From” is after “To” — no records can match.</small>}
++        </div>
+         <label className="filter-control"><span>Status</span>
+           <select className="input" aria-label="Status" value={status} onChange={(e) => { setStatus(e.target.value as '' | 'verified' | 'rejected'); setPage(1) }}>
+             <option value="">Verified &amp; rejected</option>
+@@ -141,14 +179,6 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+             <option value="rejected">Rejected only</option>
+           </select>
+         </label>
+-        {superAdmin && (
+-          <label className="filter-control"><span>Company</span>
+-            <select className="input" aria-label="Company" value={company} onChange={(e) => { setCompany(e.target.value); setAgent(''); setPage(1) }}>
+-              <option value="">All companies</option>
+-              {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+-            </select>
+-          </label>
+-        )}
+         {team && (
+           <label className="filter-control"><span>Agent</span>
+             <select className="input" aria-label="Agent" value={agent} onChange={(e) => { setAgent(e.target.value); setPage(1) }}>
+@@ -163,16 +193,42 @@ export default function KpiClient({ initial }: { initial: Initial }) {
+         </div>
+       </div>
+ 
+-      {team && byAgent.length > 0 && (
++      {superAdmin && !company && !agent && byCompany.length > 0 && (
++        <section className="card">
++          <h3 className="kpi-page-h3">By company · {periodName}</h3>
++          <p className="subtle" style={{ margin: '-6px 0 10px', fontSize: 12 }}>Click a company to see its users with KPI.</p>
++          <div className="tbl-wrap">
++            <table className="tbl">
++              <thead><tr><th>Company</th><th>Users with KPI</th><th>Verified</th><th>Rejected</th><th>KPI earned</th><th aria-label="Open" /></tr></thead>
++              <tbody>{byCompany.map((co) => (
++                <tr key={co.id} className="kpi-group-row" tabIndex={0} role="button" aria-label={`Show ${co.name}`}
++                  onClick={() => { setCompany(co.id); setAgent(''); setPage(1) }}
++                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCompany(co.id); setAgent(''); setPage(1) } }}>
++                  <td><strong><Building2 size={14} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px', color: 'var(--accent)' }} />{co.name}</strong></td>
++                  <td>{co.agents.size}</td><td>{co.totals.count}</td><td>{co.rejected || <span className="subtle">0</span>}</td>
++                  <td><strong>{pkr(co.totals.amount)}</strong></td>
++                  <td style={{ textAlign: 'right' }}><ChevronRight size={16} aria-hidden="true" className="kpi-group-arrow" /></td>
++                </tr>
++              ))}</tbody>
++            </table>
++          </div>
++        </section>
++      )}
++
++      {team && !agent && byAgent.length > 0 && (!superAdmin || !!company) && (
+         <section className="card">
+-          <h3 className="kpi-page-h3">By agent · {periodName}</h3>
++          <h3 className="kpi-page-h3">{superAdmin && company ? `${companies.find((c) => c.id === company)?.name ?? 'Company'} · users with KPI · ${periodName}` : `By agent · ${periodName}`}</h3>
++          <p className="subtle" style={{ margin: '-6px 0 10px', fontSize: 12 }}>Click a user to see their KPI records.</p>
+           <div className="tbl-wrap">
+             <table className="tbl">
+-              <thead><tr><th>Agent</th>{superAdmin && <th>Company</th>}<th>Verified</th><th>Rejected</th><th>KPI earned</th></tr></thead>
++              <thead><tr><th>Agent</th>{superAdmin && <th>Company</th>}<th>Verified</th><th>Rejected</th><th>KPI earned</th><th aria-label="Open" /></tr></thead>
+               <tbody>{byAgent.map((a) => (
+-                <tr key={`${a.name}|${a.company}`}>
++                <tr key={`${a.key}|${a.company}`} className="kpi-group-row" tabIndex={0} role="button" aria-label={`Show ${a.name}`}
++                  onClick={() => { setAgent(a.key); setPage(1) }}
++                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAgent(a.key); setPage(1) } }}>
+                   <td><strong>{a.name}</strong></td>{superAdmin && <td>{a.company ?? '—'}</td>}
+                   <td>{a.totals.count}</td><td>{a.rejected || <span className="subtle">0</span>}</td><td><strong>{pkr(a.totals.amount)}</strong></td>
++                  <td style={{ textAlign: 'right' }}><ChevronRight size={16} aria-hidden="true" className="kpi-group-arrow" /></td>
+                 </tr>
+               ))}</tbody>
+             </table>
+diff --git a/app/practice/[code]/page.tsx b/app/practice/[code]/page.tsx
+index 37bfff0..eb8925b 100644
+--- a/app/practice/[code]/page.tsx
++++ b/app/practice/[code]/page.tsx
+@@ -8,6 +8,7 @@ import AppShell from '../../AppShell'
+ import SectionTabs from '../../SectionTabs'
+ import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
+ import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
++import { leadReturn } from '../../../lib/lead-return'
+ import { npiLabel } from '../../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+ 
+ const ZONE_BY_STATE: Record<string, string> = {
+@@ -54,17 +55,12 @@ export default async function PracticeDetail({
+ }) {
+   const { code } = await params
+   const { from, company, view } = await searchParams
+-  // ← CHANGED: opened from the Email Sheet Report → back goes there, and
+-  // Previous / Next move through the report's leads only.
++  // Where "Back" goes and the query kept on Previous / Next and related
++  // links — one shared rule for every page that opens a lead (lib/lead-return).
++  const back = leadReturn({ from, company, view })
++  const navQuery = back.query
++  // Opened from Active Email → Previous / Next move through its leads only.
+   const fromEmailReport = from === 'email-reports'
+-  const returnPath = from === 'transfers' ? '/transfers' : from === 'worksheet-reports' ? '/worksheet-reports' : fromEmailReport ? '/email-reports' : '/'
+-  const returnQuery = from === 'transfers'
+-    ? '?from=transfers'
+-    : from === 'worksheet-reports'
+-      ? `?company=${encodeURIComponent(company ?? '')}&view=${view === 'sheet' ? 'sheet' : 'reports'}`
+-      : ''
+-  // Query kept on Previous / Next links (and the back link uses returnQuery).
+-  const navQuery = fromEmailReport ? '?from=email-reports' : returnQuery
+ 
+   const supabase = await createSupabaseServer()
+ 
+@@ -237,9 +233,7 @@ export default async function PracticeDetail({
+     return (
+       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
+         <div className="card" style={{ maxWidth: 600 }}>
+-          <Link prefetch={false} href={`${returnPath}${returnQuery}`}>
+-            {from === 'worksheet-reports' ? '← Back to Active Call' : from === 'transfers' ? '← Back to transfers' : '← Back to all practices'}
+-          </Link>
++          <Link prefetch={false} href={back.href}>← {back.label}</Link>
+           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
+           <p className="subtle" style={{ marginTop: 12 }}>
+             {error
+@@ -546,7 +540,7 @@ export default async function PracticeDetail({
+                   </div>
+                 )}
+ 
+-                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} />}
++                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} linkQuery={navQuery} />}
+               </aside>
+   )
+ 
+@@ -564,7 +558,7 @@ export default async function PracticeDetail({
+         <div className="lead-card">
+           <div className="lead-header-row">
+             <div className="lead-header-left">
+-              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Active Call' : fromEmailReport ? 'Back to Email Sheet Report' : 'Back to list'}>
++              <Link prefetch={false} href={back.href} className="lead-back-btn" title={back.label}>
+                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+               </Link>
+               <div className="lead-pager">
+diff --git a/app/transfers/TransfersClient.tsx b/app/transfers/TransfersClient.tsx
+index 821450f..8a4a978 100644
+--- a/app/transfers/TransfersClient.tsx
++++ b/app/transfers/TransfersClient.tsx
+@@ -7,6 +7,7 @@ import { getTransfers, type Transfer } from '../transfers-actions'
+ import { verifyTransfer } from '../kpi-actions'
+ import { BadgeCheck, Eye, X, XCircle } from 'lucide-react'
+ import { lockPageScroll, unlockPageScroll } from '../../lib/scroll-lock'
++import { leadHref } from '../../lib/lead-return'
+ import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+ 
+ const fmt = (iso: string | null) => {
+@@ -317,7 +318,7 @@ function TransfersTable({ rows, expanded, setExpanded, onVerified }: {
+                       <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
+                     ) : (
+                       <>
+-                        <Link prefetch={false} href={`/practice/${t.practiceCode}?from=transfers`} onClick={(e) => e.stopPropagation()}>{leadTitle(t)}</Link>
++                        <Link prefetch={false} href={leadHref(t.practiceCode, 'transfers')} onClick={(e) => e.stopPropagation()}>{leadTitle(t)}</Link>
+                         {t.providerName && t.npi && <div className="subtle mono" style={{ fontSize: 10.5 }}>NPI {t.npi}</div>}
+                       </>
+                     )}
+diff --git a/app/upload-actions.ts b/app/upload-actions.ts
+index ad91d27..6a26832 100644
+--- a/app/upload-actions.ts
++++ b/app/upload-actions.ts
+@@ -969,7 +969,7 @@ export async function uploadLeadsCsv(
+   }
+   // ← ADDED: NPPES fields the upload did not read before.
+   const extraFields = (row: CsvRow) => ({
+-    org_name: firstOf(row, ['Org_Name', 'NPPES_OrganizationName']),
++    org_name: firstOf(row, ['NPPES_OrganizationName', 'Org_Name']), // ← CHANGED: NPPES organization name first
+     credential: firstOf(row, ['NPPES_Credential', 'Credential']),
+     addr1: firstOf(row, ['NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']),
+     auth_official_name: col(row, 'NPPES_AuthOfficial_Name') ||
+diff --git a/app/worksheet-reports-actions.ts b/app/worksheet-reports-actions.ts
+index b82fb25..28a78de 100644
+--- a/app/worksheet-reports-actions.ts
++++ b/app/worksheet-reports-actions.ts
+@@ -1,11 +1,12 @@
+ 'use server'
+ 
+ import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
++import { chunks, mapConcurrent, readAllPages } from '../lib/query-utils'
+ 
+ export type WorksheetReportRow = {
+   practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null
+   state: string | null; specialty: string | null; companyName: string | null
+-  practicePhone: string | null // ← ADDED: the practice's own phone number (from the lead)
++  practicePhone: string | null // ← ADDED: the practice's own phone (falls back to the provider's)
+   contactPhone: string | null // ← ADDED: NPPES contact / mailing phone
+   officialPhone: string | null // ← ADDED: authorized official's phone
+   filledBy: string | null; assignedCloser: string | null; callDetails: string | null
+@@ -71,11 +72,11 @@ function deriveSignals(provider: {
+   }
+ }
+ 
+-// ← CHANGED: was 300. Every saved worksheet is shown now; rows are read in
+-// pages of 1,000 (the most the database returns per request). The cap is
+-// only a safety net against an unexpectedly huge result.
+-const REPORT_LIMIT = 50000
+-const REPORT_PAGE = 1000
++// Every worksheet in scope is loaded (no cap). Rows are read in pages of
++// 1,000 — Supabase returns at most 1,000 per request — and, when transfers
++// can't be nested, they are looked up in batches so no request gets too long.
++const PAGE_SIZE = 1000
++const TRANSFER_BATCH = 200
+ 
+ type RawWorksheet = {
+   practice_id: string
+@@ -116,7 +117,11 @@ type RawTransfer = {
+   users: { full_name: string | null } | null
+ }
+ 
+-export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
++/**
++ * All worksheets the signed-in user may see. Super Admin can pass a company
++ * to load only that company's worksheets (filtered in the database).
++ */
++export async function getWorksheetReports(options: { companyId?: string } = {}): Promise<WorksheetReportsResult> {
+   const supabase = await createSupabaseServer()
+   const { data: { user } } = await getCurrentUser()
+   if (!user) return { ok: false, message: 'Not signed in.' }
+@@ -136,7 +141,8 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+   // request that had to wait for the first. If the database can't nest them
+   // (no direct link between the tables), it falls back to the old two-step
+   // way automatically.
+-  const buildQuery = (withTransfers: boolean) => {
++  const companyId = isSuperAdmin && typeof options.companyId === 'string' && /^[0-9a-f-]{36}$/i.test(options.companyId) ? options.companyId : ''
++  const buildQuery = (withTransfers: boolean, withCount: boolean) => {
+     let query = supabase.from('lead_worksheets').select(`
+     practice_id, tenant_id, call_details, additional_phone, email,
+     concerned_person, direct_line, callback_at, timezone, disposition,
+@@ -152,36 +158,35 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+         provider_mips(performance_year, status, reporting_option)
+       ))
+     )
+-  `).is('master_practices.deleted_at', null)
+-      // practice_id breaks ties so paging never skips or repeats a row.
+-      .order('updated_at', { ascending: false }).order('practice_id', { ascending: true })
++  `, withCount ? { count: 'exact' } : undefined).is('master_practices.deleted_at', null)
+     if (isPersonal) query = query.eq('updated_by', me.id)
+     else if (!isSuperAdmin) query = query.eq('tenant_id', me.tenant_id!)
+-    return query
++    if (companyId) query = query.eq('tenant_id', companyId)
++    // Newest first; practice + company make the order unique so pages never
++    // overlap or skip a worksheet.
++    return query.order('updated_at', { ascending: false }).order('practice_id').order('tenant_id')
+   }
++  // Every page, until all worksheets are loaded.
++  const readAll = (withTransfers: boolean) => readAllPages<RawWorksheet>(
++    (from, to, isFirst) => buildQuery(withTransfers, isFirst).range(from, to) as never,
++    { pageSize: PAGE_SIZE, concurrency: 4 },
++  )
+ 
+-  // ← CHANGED: read every page instead of a single capped request.
+-  const readAll = async (withTransfers: boolean) => {
+-    const rows: unknown[] = []
+-    for (let from = 0; from <= REPORT_LIMIT; from += REPORT_PAGE) {
+-      const { data: part, error: partError } = await buildQuery(withTransfers).range(from, from + REPORT_PAGE - 1)
+-      if (partError) return { data: null, error: partError }
+-      rows.push(...(part ?? []))
+-      if (!part || part.length < REPORT_PAGE) break
++  let nestedTransfers = true
++  let page: RawWorksheet[]
++  try {
++    try {
++      page = await readAll(true)
++    } catch (error) {
++      const code = (error as { code?: string })?.code
++      if (code !== 'PGRST200' && code !== 'PGRST201') throw error
++      nestedTransfers = false
++      page = await readAll(false)
+     }
+-    return { data: rows, error: null }
++  } catch (error) {
++    return { ok: false, message: (error as { message?: string })?.message ?? 'Could not load worksheets.' }
+   }
+-
+-  let nestedTransfers = true
+-  let { data, error } = await readAll(true)
+-  if (error && (error.code === 'PGRST200' || error.code === 'PGRST201')) {
+-    nestedTransfers = false
+-    ;({ data, error } = await readAll(false))
+-  }
+-  if (error) return { ok: false, message: error.message }
+-  const all = (data ?? []) as unknown as RawWorksheet[]
+-  const truncated = all.length > REPORT_LIMIT
+-  const page = truncated ? all.slice(0, REPORT_LIMIT) : all
++  const truncated = false
+ 
+   let transfers: RawTransfer[] = []
+   if (nestedTransfers) {
+@@ -189,17 +194,22 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+     // limited to the viewer's company unless Super Admin.
+     for (const row of page) {
+       for (const transfer of row.master_practices.lead_transfers ?? []) {
+-        if (isSuperAdmin || transfer.tenant_id === me.tenant_id) transfers.push(transfer)
++        if (isSuperAdmin ? !companyId || transfer.tenant_id === companyId : transfer.tenant_id === me.tenant_id) transfers.push(transfer)
+       }
+     }
+   } else {
++    // Looked up in batches of 200 leads so the request never gets too long.
+     const practiceIds = [...new Set(page.map(row => row.practice_id))]
+-    let transferQuery = supabase.from('lead_transfers')
+-      .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
+-    if (practiceIds.length) transferQuery = transferQuery.in('practice_id', practiceIds)
+-    if (!isSuperAdmin) transferQuery = transferQuery.eq('tenant_id', me.tenant_id!)
+-    const { data: transferRows } = practiceIds.length ? await transferQuery : { data: [] }
+-    transfers = (transferRows ?? []) as unknown as RawTransfer[]
++    const batches = await mapConcurrent(chunks(practiceIds, TRANSFER_BATCH), 4, async (ids) => {
++      let transferQuery = supabase.from('lead_transfers')
++        .select('practice_id, tenant_id, to_user_id, note, users!lead_transfers_to_user_id_fkey(full_name)')
++        .in('practice_id', ids)
++      if (!isSuperAdmin) transferQuery = transferQuery.eq('tenant_id', me.tenant_id!)
++      else if (companyId) transferQuery = transferQuery.eq('tenant_id', companyId)
++      const { data: transferRows } = await transferQuery
++      return (transferRows ?? []) as unknown as RawTransfer[]
++    })
++    transfers = batches.flat()
+   }
+   const transferByKey = new Map<string, RawTransfer>()
+   for (const transfer of transfers) {
+@@ -216,7 +226,7 @@ export async function getWorksheetReports(): Promise<WorksheetReportsResult> {
+       tenantId: worksheet.tenant_id,
+       practiceCode: practice.practice_code,
+       practiceName: practice.name,
+-      practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
++      practicePhone: practice.phone ?? provider?.phone ?? null, // ← ADDED
+       contactPhone: provider?.mailing_phone ?? null, // ← ADDED
+       officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
+       providerName: getImportedProviderName(worksheet.import_data) ?? worksheet.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
+@@ -299,9 +309,9 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
+     tenantId: item.tenant_id,
+     practiceCode: practice.practice_code,
+     practiceName: practice.name,
+-    practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone
+-    contactPhone: provider?.mailing_phone ?? null, // ← ADDED
+-    officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
++      practicePhone: practice.phone ?? provider?.phone ?? null, // ← ADDED
++      contactPhone: provider?.mailing_phone ?? null, // ← ADDED
++      officialPhone: provider?.auth_official_phone ?? null, // ← ADDED
+     providerName: getImportedProviderName(item.import_data) ?? item.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,
+     orgName: provider?.org_name ?? null,
+     state: practice.state,
+@@ -324,3 +334,25 @@ export async function getWorksheetReportDetail(tenantId: string, practiceId: str
+     ...deriveSignals(provider),
+   } }
+ }
++
++/**
++ * Super Admin: exact number of worksheets per company (counted in the
++ * database, deleted leads excluded) for the company list on the page.
++ */
++export async function getWorksheetCompanyCounts(companyIds: string[]): Promise<Record<string, number>> {
++  // Callable from the browser like every action here, so check the caller.
++  const { data: { user } } = await getCurrentUser()
++  if (!user) return {}
++  const { data: me } = await getCurrentProfile(user.id)
++  if (me?.roles?.key !== 'super_admin' || !Array.isArray(companyIds)) return {}
++  const ids = companyIds.filter((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)).slice(0, 500)
++  const supabase = await createSupabaseServer()
++  const counts: Record<string, number> = {}
++  await mapConcurrent(ids, 6, async (id) => {
++    const { count } = await supabase.from('lead_worksheets')
++      .select('practice_id, master_practices!inner(deleted_at)', { count: 'exact', head: true })
++      .eq('tenant_id', id).is('master_practices.deleted_at', null)
++    counts[id] = count ?? 0
++  })
++  return counts
++}
+diff --git a/app/worksheet-reports/WorksheetReportsClient.tsx b/app/worksheet-reports/WorksheetReportsClient.tsx
+index d588a9b..724f353 100644
+--- a/app/worksheet-reports/WorksheetReportsClient.tsx
++++ b/app/worksheet-reports/WorksheetReportsClient.tsx
+@@ -6,6 +6,7 @@ import { Eye } from 'lucide-react'
+ import { useWorksheetSearch } from '../../lib/worksheet-search-store'
+ import type { WorksheetReportRow } from '../worksheet-reports-actions'
+ import WorksheetDetailModal from './WorksheetDetailModal'
++import { dispositionOptions } from '../../lib/dispositions'
+ import { toCsv, toXlsx, downloadFile, type ExportTable } from '../../lib/export-file' // ← ADDED: download selected leads
+ 
+ // Opens the worksheet details popup; provided by WorksheetReportsClient so
+@@ -433,7 +434,8 @@ export default function WorksheetReportsClient({
+   const [updatedTo, setUpdatedTo] = useState('')     // YYYY-MM-DDTHH:MM (local)
+   const rangeReversed = !!updatedFrom && !!updatedTo && updatedFrom > updatedTo
+ 
+-  const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
++  // Every standard disposition (incl. "Send Mail") plus any other saved value.
++  const dispositions = useMemo(() => dispositionOptions(rows.map((r) => r.disposition)), [rows])
+   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
+ 
+   const filteredRows = useMemo(() => rows.filter((r) => {
+diff --git a/app/worksheet-reports/page.tsx b/app/worksheet-reports/page.tsx
+index 1d7589f..f24a052 100644
+--- a/app/worksheet-reports/page.tsx
++++ b/app/worksheet-reports/page.tsx
+@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
+ import AppShell from '../AppShell'
+ import WorksheetReportsClient from './WorksheetReportsClient'
+ import WorksheetSearchBox from './WorksheetSearchBox'
+-import { getWorksheetReports } from '../worksheet-reports-actions'
++import { getWorksheetReports, getWorksheetCompanyCounts } from '../worksheet-reports-actions'
+ import UploadWorksheetCsvButton from './UploadWorksheetCsvButton'
+ import WorksheetCompanyFilter, { type WorksheetCompanyOption } from './WorksheetCompanyFilter'
+ 
+@@ -43,19 +43,33 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
+   // The tenants lookup only needs isSuperAdmin (already known) — it doesn't
+   // actually depend on worksheetReports' result, so run them together
+   // instead of tenants waiting for the whole worksheet report to finish first.
+-  const [worksheetReports, tenantRowsResult] = await Promise.all([
+-    getWorksheetReports(),
++  //
++  // Every worksheet is loaded (no 300 cap). Super Admin: picking a company
++  // loads only that company's worksheets (filtered in the database), and the
++  // company list shows exact counts counted in the database.
++  const requestedCompany = (await searchParams).company ?? '__all__'
++  const requestedCompanyId = isSuperAdmin && /^[0-9a-f-]{36}$/i.test(requestedCompany) ? requestedCompany : ''
++  const [firstReports, tenantInfo] = await Promise.all([
++    getWorksheetReports({ companyId: requestedCompanyId }),
+     isSuperAdmin
+-      ? createSupabaseServer().then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
+-      : Promise.resolve({ data: null }),
++      ? createSupabaseServer()
++          .then(supabase => supabase.from('tenants').select('id, name').eq('status', 'active').order('name'))
++          .then(async ({ data }) => {
++            const tenants = (data ?? []) as { id: string; name: string }[]
++            return { tenants, counts: await getWorksheetCompanyCounts(tenants.map(t => t.id)) }
++          })
++      : Promise.resolve({ tenants: [] as { id: string; name: string }[], counts: {} as Record<string, number> }),
+   ])
+-  const requestedCompany = (await searchParams).company ?? '__all__'
++  // A company id that isn't an active company (old link / typed URL): show all.
++  const worksheetReports = requestedCompanyId && !tenantInfo.tenants.some(t => t.id === requestedCompanyId)
++    ? await getWorksheetReports()
++    : firstReports
+   let companies: WorksheetCompanyOption[] = []
+   if (worksheetReports.ok) {
+     const countByTenant = new Map<string, number>()
+     for (const row of worksheetReports.rows) countByTenant.set(row.tenantId, (countByTenant.get(row.tenantId) ?? 0) + 1)
+     if (isSuperAdmin) {
+-      companies = (tenantRowsResult.data ?? []).map(tenant => ({ id: tenant.id, name: tenant.name, count: countByTenant.get(tenant.id) ?? 0 }))
++      companies = tenantInfo.tenants.map(tenant => ({ id: tenant.id, name: tenant.name, count: tenantInfo.counts[tenant.id] ?? 0 }))
+     } else if (me?.tenant_id) {
+       companies = [{ id: me.tenant_id, name: me.tenants?.name ?? 'Your company', count: countByTenant.get(me.tenant_id) ?? worksheetReports.rows.length }]
+     }
+@@ -68,7 +82,7 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
+ 
+   return (
+     <AppShell
+-      title="Active Call"
++      title="Active Call" // ← CHANGED: renamed
+       subtitle={isSuperAdmin
+         ? selectedCompanyName ? `Company — ${selectedCompanyName}` : 'Platform-wide — every company'
+         : personalScope
+diff --git a/lib/lead-return.ts b/lib/lead-return.ts
+index dd7035c..854e079 100644
+--- a/lib/lead-return.ts
++++ b/lib/lead-return.ts
+@@ -5,12 +5,13 @@
+ 
+ export type LeadSource =
+   | 'reminders' | 'transfers' | 'worksheet-reports' | 'clients' | 'sold-leads'
+-  | 'assignments' | 'agent-assigned' | 'role-view'
++  | 'assignments' | 'agent-assigned' | 'role-view' | 'email-reports'
+ 
+ const SOURCES: Record<LeadSource, { path: string; label: string }> = {
+   'reminders':         { path: '/reminders',         label: 'Back to My Reminders' },
+   'transfers':         { path: '/transfers',         label: 'Back to transfers' },
+-  'worksheet-reports': { path: '/worksheet-reports', label: 'Back to Worksheet Reports' },
++  'worksheet-reports': { path: '/worksheet-reports', label: 'Back to Active Call' }, // renamed page
++  'email-reports':     { path: '/email-reports',     label: 'Back to Active Email' },
+   'clients':           { path: '/clients',           label: 'Back to Active Clients' },
+   'sold-leads':        { path: '/clients?tab=sold',  label: 'Back to Sold leads' },
+   'assignments':       { path: '/assignments',       label: 'Back to Assigned Leads' },
+diff --git a/tests/performance.test.cjs b/tests/performance.test.cjs
+index 302e15d..c5da422 100644
+--- a/tests/performance.test.cjs
++++ b/tests/performance.test.cjs
+@@ -1834,7 +1834,7 @@ test('lead page "Back": returns to the page that opened the lead (all routes)',
+     [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
+     [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
+     [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
+-    [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Worksheet Reports', '?from=worksheet-reports&company=T1&view=sheet'],
++    [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Active Call', '?from=worksheet-reports&company=T1&view=sheet'],
+     [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page
+     [{ from: '__proto__' }, '/', 'Back to all practices', ''],
+   ]

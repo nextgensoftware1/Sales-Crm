@@ -7,6 +7,7 @@ import { getTransfers, type Transfer } from '../transfers-actions'
 import { verifyTransfer } from '../kpi-actions'
 import { BadgeCheck, Eye, X, XCircle } from 'lucide-react'
 import { lockPageScroll, unlockPageScroll } from '../../lib/scroll-lock'
+import { leadHref } from '../../lib/lead-return'
 import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 const fmt = (iso: string | null) => {
@@ -317,7 +318,7 @@ function TransfersTable({ rows, expanded, setExpanded, onVerified }: {
                       <span className="subtle" title="This lead was permanently deleted">{t.practiceName}</span>
                     ) : (
                       <>
-                        <Link prefetch={false} href={`/practice/${t.practiceCode}?from=transfers`} onClick={(e) => e.stopPropagation()}>{leadTitle(t)}</Link>
+                        <Link prefetch={false} href={leadHref(t.practiceCode, 'transfers')} onClick={(e) => e.stopPropagation()}>{leadTitle(t)}</Link>
                         {t.providerName && t.npi && <div className="subtle mono" style={{ fontSize: 10.5 }}>NPI {t.npi}</div>}
                       </>
                     )}

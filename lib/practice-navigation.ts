@@ -16,6 +16,17 @@ export async function getPracticeNavigation(db: SupabaseClient, scope: Scope): P
     allRows<Lead>(() => db.from('master_practices').select(projection).in('id', part)
       .eq('is_roster', false).order('name').order('id')))).flat()
   let leads: Lead[] = []
+  // ← ADDED: every other role gets its list from ONE database call
+  // (crm_scope_practice_index — same rules as the code below, which stays as
+  // the fallback if the function isn't installed). Was ~160 requests / ~20 s
+  // for a Company Admin.
+  if (scope.role !== 'super_admin' && scope.tenantId) {
+    const fromDb = await rowsViaRpc<Lead>(db, 'crm_scope_practice_index', {}, async () => [] as Lead[])
+    if (fromDb.length) {
+      fromDb.sort((a, b) => a.name.localeCompare(b.name) || a.practice_code.localeCompare(b.practice_code))
+      return [...new Set(fromDb.map(row => row.practice_code).filter(Boolean))]
+    }
+  }
   if (scope.role === 'super_admin') {
     leads = await rowsViaRpc<Lead>(db, 'crm_practice_index', { p_owner: null }, () =>
       allRows<Lead>(() => db.from('master_practices').select(projection)

@@ -8,6 +8,7 @@ import AppShell from '../../AppShell'
 import SectionTabs from '../../SectionTabs'
 import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
 import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
+import { leadReturn } from '../../../lib/lead-return'
 import { npiLabel } from '../../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 const ZONE_BY_STATE: Record<string, string> = {
@@ -54,17 +55,12 @@ export default async function PracticeDetail({
 }) {
   const { code } = await params
   const { from, company, view } = await searchParams
-  // ← CHANGED: opened from the Email Sheet Report → back goes there, and
-  // Previous / Next move through the report's leads only.
+  // Where "Back" goes and the query kept on Previous / Next and related
+  // links — one shared rule for every page that opens a lead (lib/lead-return).
+  const back = leadReturn({ from, company, view })
+  const navQuery = back.query
+  // Opened from Active Email → Previous / Next move through its leads only.
   const fromEmailReport = from === 'email-reports'
-  const returnPath = from === 'transfers' ? '/transfers' : from === 'worksheet-reports' ? '/worksheet-reports' : fromEmailReport ? '/email-reports' : '/'
-  const returnQuery = from === 'transfers'
-    ? '?from=transfers'
-    : from === 'worksheet-reports'
-      ? `?company=${encodeURIComponent(company ?? '')}&view=${view === 'sheet' ? 'sheet' : 'reports'}`
-      : ''
-  // Query kept on Previous / Next links (and the back link uses returnQuery).
-  const navQuery = fromEmailReport ? '?from=email-reports' : returnQuery
 
   const supabase = await createSupabaseServer()
 
@@ -237,9 +233,7 @@ export default async function PracticeDetail({
     return (
       <AppShell title="Practice not found" currentUser={currentUser} active="/" showAdmin={isSuperAdmin} showTransfers={showTransfers} canManageUsers={canManageUsers}>
         <div className="card" style={{ maxWidth: 600 }}>
-          <Link prefetch={false} href={`${returnPath}${returnQuery}`}>
-            {from === 'worksheet-reports' ? '← Back to Active Call' : from === 'transfers' ? '← Back to transfers' : '← Back to all practices'}
-          </Link>
+          <Link prefetch={false} href={back.href}>← {back.label}</Link>
           <h1 style={{ color: 'var(--danger)', marginTop: 20, fontSize: 20 }}>Practice not found</h1>
           <p className="subtle" style={{ marginTop: 12 }}>
             {error
@@ -546,7 +540,7 @@ export default async function PracticeDetail({
                   </div>
                 )}
 
-                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} />}
+                {primaryProvider?.npi && <OrgRoster key={primaryProvider.npi} npi={primaryProvider.npi} linkQuery={navQuery} />}
               </aside>
   )
 
@@ -564,7 +558,7 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Active Call' : fromEmailReport ? 'Back to Email Sheet Report' : 'Back to list'}>
+              <Link prefetch={false} href={back.href} className="lead-back-btn" title={back.label}>
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </Link>
               <div className="lead-pager">

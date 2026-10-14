@@ -1834,7 +1834,7 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
     [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
     [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
     [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
-    [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Worksheet Reports', '?from=worksheet-reports&company=T1&view=sheet'],
+    [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Active Call', '?from=worksheet-reports&company=T1&view=sheet'],
     [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page
     [{ from: '__proto__' }, '/', 'Back to all practices', ''],
   ]

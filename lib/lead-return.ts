@@ -5,12 +5,13 @@
 
 export type LeadSource =
   | 'reminders' | 'transfers' | 'worksheet-reports' | 'clients' | 'sold-leads'
-  | 'assignments' | 'agent-assigned' | 'role-view'
+  | 'assignments' | 'agent-assigned' | 'role-view' | 'email-reports'
 
 const SOURCES: Record<LeadSource, { path: string; label: string }> = {
   'reminders':         { path: '/reminders',         label: 'Back to My Reminders' },
   'transfers':         { path: '/transfers',         label: 'Back to transfers' },
-  'worksheet-reports': { path: '/worksheet-reports', label: 'Back to Worksheet Reports' },
+  'worksheet-reports': { path: '/worksheet-reports', label: 'Back to Active Call' }, // renamed page
+  'email-reports':     { path: '/email-reports',     label: 'Back to Active Email' },
   'clients':           { path: '/clients',           label: 'Back to Active Clients' },
   'sold-leads':        { path: '/clients?tab=sold',  label: 'Back to Sold leads' },
   'assignments':       { path: '/assignments',       label: 'Back to Assigned Leads' },

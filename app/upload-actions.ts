@@ -969,7 +969,7 @@ export async function uploadLeadsCsv(
   }
   // ← ADDED: NPPES fields the upload did not read before.
   const extraFields = (row: CsvRow) => ({
-    org_name: firstOf(row, ['Org_Name', 'NPPES_OrganizationName']),
+    org_name: firstOf(row, ['NPPES_OrganizationName', 'Org_Name']), // ← CHANGED: NPPES organization name first
     credential: firstOf(row, ['NPPES_Credential', 'Credential']),
     addr1: firstOf(row, ['NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']),
     auth_official_name: col(row, 'NPPES_AuthOfficial_Name') ||
