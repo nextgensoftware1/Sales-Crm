@@ -3,7 +3,7 @@
 /** Responses an agent can record on an Email lead, in display order. */
 export const EMAIL_RESPONSES = [
   'Not Found', 'Undeliverable', 'Unsubscribed', 'Email Sent', 'Got Reply',
-  'Not Considerable', 'Not Interested', 'Invalid',
+  'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive', // ← CHANGED: + Repetitive
 ] as const
 
 /** Responses that need the email address that was used. */
@@ -15,6 +15,6 @@ export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 export function emailResponseBadge(response: string): string {
   if (response === 'Got Reply' || response === 'Email Sent') return 'badge badge-green'
   if (response === 'Not Interested' || response === 'Unsubscribed' || response === 'Undeliverable' || response === 'Invalid') return 'badge badge-red'
-  if (response === 'Not Considerable') return 'badge badge-amber'
+  if (response === 'Not Considerable' || response === 'Repetitive') return 'badge badge-amber' // ← CHANGED: + Repetitive
   return 'badge badge-grey'
 }

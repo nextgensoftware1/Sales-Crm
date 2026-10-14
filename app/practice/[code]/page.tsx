@@ -8,6 +8,7 @@ import AppShell from '../../AppShell'
 import SectionTabs from '../../SectionTabs'
 import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
 import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
+import { npiLabel } from '../../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -563,7 +564,7 @@ export default async function PracticeDetail({
         <div className="lead-card">
           <div className="lead-header-row">
             <div className="lead-header-left">
-              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Active Call' : fromEmailReport ? 'Back to Active Email' : 'Back to list'}>
+              <Link prefetch={false} href={`${returnPath}${returnQuery}`} className="lead-back-btn" title={from === 'transfers' ? 'Back to transfers' : from === 'worksheet-reports' ? 'Back to Active Call' : fromEmailReport ? 'Back to Email Sheet Report' : 'Back to list'}>
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
               </Link>
               <div className="lead-pager">
@@ -582,7 +583,7 @@ export default async function PracticeDetail({
               <div>
                 <div className="lead-title-row">
                   <h2 className="lead-title">{displayTitle}</h2>
-                  <span className="lead-code">{practice.practice_code}</span>
+                  <span className="lead-code">{npiLabel(practice.practice_code)}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
                   {zone && <span className="lead-badge">{zone}</span>}

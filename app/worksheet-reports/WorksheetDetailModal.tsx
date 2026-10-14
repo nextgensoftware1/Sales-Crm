@@ -8,6 +8,7 @@ import { saveWorksheet } from '../worksheet-actions'
 import { DISPOSITIONS, TIMEZONES, US_PHONE_RE, US_PHONE_EXT_RE, EMAIL_RE, NAME_RE } from '../Worksheet'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import { lockPageScroll, unlockPageScroll } from '../../lib/scroll-lock'
+import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 // Same field rules as the practice-page worksheet (app/Worksheet.tsx).
 const phoneOk = (v: string) => !v.trim() || US_PHONE_RE.test(v.trim())
@@ -166,7 +167,7 @@ export default function WorksheetDetailModal({ row, canEdit, readOnlyReason, onC
             <span className="wsm-kicker">{editing ? 'Edit worksheet' : 'Worksheet details'}</span>
             <h2 id="wsm-title">{title}</h2>
             <div className="wsm-chips">
-              <span className="wsm-chip mono">{r.practiceCode}</span>
+              <span className="wsm-chip mono">{npiLabel(r.practiceCode)}</span>
               {r.companyName && <span className="wsm-chip">{r.companyName}</span>}
               {r.disposition && <span className="badge badge-blue">{r.disposition}</span>}
             </div>

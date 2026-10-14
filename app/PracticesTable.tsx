@@ -16,6 +16,7 @@ import {
   SIGNALS, ZONE_KEYS, DEFAULT_LEAD_FILTERS, filterLeads, leadOverview,
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
 } from '../lib/lead-filters'
+import { npiLabel } from '../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 type Practice = LeadRow
 
@@ -90,11 +91,6 @@ type PersistedLeadFilters = {
 }
 
 const LEAD_FILTERS_STORAGE_KEY = 'lead-management-filters-v1'
-
-// These signals are the same filters as the top-row categories (MIPS, RCM,
-// CCM — identical checks), so the Advanced filters row doesn't repeat them.
-const CATEGORY_SIGNAL_KEYS = new Set(['ccm', 'rcmFit', 'mips'])
-const ADVANCED_SIGNALS = SIGNALS.filter((signal) => !CATEGORY_SIGNAL_KEYS.has(signal.key))
 
 export default function PracticesTable({ practices: practicesProp, packedPractices, serverPaging, companies: initialCompanies = [], isSuperAdmin = false, canAssign = false, myAgents: initialAgents = [], myAssignedCodes = [], newLeadCodes = [], workedLeadCodes = [], lazyOptions = false, viewerRole = '', completedWorksheetCount, viewerUserId }: Props) {
   const router = useRouter()
@@ -217,7 +213,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
-          setActiveSignals(new Set(filters.activeSignals.filter(value => ADVANCED_SIGNALS.some(signal => signal.key === value))))
+          setActiveSignals(new Set(filters.activeSignals.filter(value => SIGNALS.some(signal => signal.key === value))))
         }
         if (filters.assignedView === 'all' || filters.assignedView === 'mine') setAssignedView(filters.assignedView)
         if (typeof filters.poolTab === 'string') setPoolTab(filters.poolTab)
@@ -746,7 +742,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
           </div>
           <div className="signal-filter-row">
             <strong>Signals</strong>
-            {ADVANCED_SIGNALS.map((s) => (
+            {SIGNALS.map((s) => (
               <button type="button" aria-pressed={activeSignals.has(s.key)} key={s.key} onClick={() => toggleSignal(s.key)} style={pill(activeSignals.has(s.key))}>{s.label}</button>
             ))}
             <SampleTag note="MIPS year / enrichment filters are display-only" />
@@ -895,7 +891,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                   )}
                   <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
-                    {p.practiceCode}
+                    {npiLabel(p.practiceCode)}{/* ← CHANGED */}
                     {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}
                   </div>
                   {p.assignedAwayTo && (

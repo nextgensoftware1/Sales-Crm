@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react' // ← CHANGED: + useSyncExternalStore
 import { getEmailLeadHistory, type EmailReportRow, type EmailHistoryEntry } from '../email-worksheet-actions' // ← CHANGED
 import { EMAIL_RESPONSES, emailResponseBadge } from '../../lib/email-leads'
+import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 const PAGE_SIZE = 25
 
@@ -68,7 +69,7 @@ function EmailLeadPopup({ row, onClose }: { row: EmailReportRow; onClose: () => 
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <div>
             <h2 id="email-popup-title" style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>{row.practiceName}</h2>
-            <div className="subtle" style={{ fontSize: 12, marginTop: 2 }}>{row.practiceCode}{row.companyName ? ` · ${row.companyName}` : ''}</div>
+            <div className="subtle" style={{ fontSize: 12, marginTop: 2 }}>{npiLabel(row.practiceCode)}{row.companyName ? ` · ${row.companyName}` : ''}</div>
           </div>
           <button type="button" className="btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
@@ -197,7 +198,7 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
                       </button>
                       <Link prefetch={false} href={`/practice/${r.practiceCode}?from=email-reports`} style={{ fontWeight: 700 }}>{r.practiceName}</Link>
                     </div>
-                    <div className="subtle" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>{r.practiceCode}</div>
+                    <div className="subtle" style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>{npiLabel(r.practiceCode)}</div>
                     {r.note && <div className="subtle" style={{ fontSize: 11, marginTop: 2, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.note}>{r.note}</div>}
                   </td>
                   <td>{r.state ?? '—'}</td>

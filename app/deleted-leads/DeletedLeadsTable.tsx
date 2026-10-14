@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { restoreLeads, hardDeleteLeads } from '../actions'
+import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
 
 type DeletedRow = {
   id: string
@@ -178,7 +179,7 @@ export default function DeletedLeadsTable({ rows }: Props) {
                   </td>
                   <td style={{ ...tdLeft, minWidth: 240 }}>
                     <div style={{ fontWeight: 700, color: C.cyan, fontSize: 13.5 }}>{r.name}</div>
-                    <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3 }}>{r.practiceCode}</div>
+                    <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3 }}>{npiLabel(r.practiceCode)}</div>
                   </td>
                   <td style={{ ...td, color: C.text, fontWeight: 700 }}>{r.state ?? '—'}</td>
                   <td style={{ ...tdLeft, color: C.dim }}>{r.specialty ?? '—'}</td>
