@@ -9,7 +9,8 @@ import SectionTabs from '../../SectionTabs'
 import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
 import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
 import { leadReturn } from '../../../lib/lead-return'
-import { npiLabel } from '../../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+import { npiLabel } from '../../../lib/npi-label'
+import { practiceLocations } from '../../../lib/practice-locations' // ← ADDED // ← ADDED: show NPI instead of PR-
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -170,20 +171,27 @@ export default async function PracticeDetail({
       }
     } else if (myTenantId) {
       const ownsIt = rows.some((r) => r.owner_tenant_id === myTenantId)
-      let allocatedToMe = false
-      const allocatedCodes = new Set<string>()
-      if (!ownsIt) {
-        const allocs = await allRows<any>(() => supabase
-          .from('lead_allocations')
-          .select('id, master_practices(practice_code)')
-          .eq('tenant_id', myTenantId)
-          .eq('status', 'active')
-          .order('id'))
-        for (const a of allocs) {
-          if (a.master_practices?.practice_code) allocatedCodes.add(a.master_practices.practice_code)
+      // ← CHANGED: ask only about the practice codes we need, instead of
+      // reading every allocation of the company (~24 requests / ~5 s for a
+      // Company Admin). Same rule: a code is "allocated to me" when any
+      // practice with that code has an active allocation to my company.
+      const allocatedCodesFor = async (codes: string[]) => {
+        const found = new Set<string>()
+        const unique = [...new Set(codes.filter(Boolean))]
+        for (let i = 0; i < unique.length; i += 200) {
+          const { data: allocs } = await supabase
+            .from('lead_allocations')
+            .select('id, master_practices!inner(practice_code)')
+            .eq('tenant_id', myTenantId)
+            .eq('status', 'active')
+            .in('master_practices.practice_code', unique.slice(i, i + 200))
+          for (const a of (allocs ?? []) as any[]) {
+            if (a.master_practices?.practice_code) found.add(a.master_practices.practice_code)
+          }
         }
-        allocatedToMe = allocatedCodes.has(code)
+        return found
       }
+      const allocatedToMe = !ownsIt && (await allocatedCodesFor([code])).has(code)
       authorized = ownsIt || allocatedToMe
 
       // Roster access for company roles: if this is a roster member, allow it
@@ -211,6 +219,7 @@ export default async function PracticeDetail({
           if (orgCodes.some((c) => c.owner === myTenantId)) authorized = true
           // Or is allocated any anchor in this org?
           if (!authorized && orgCodes.length) {
+            const allocatedCodes = await allocatedCodesFor(orgCodes.map((c) => c.code)) // ← CHANGED: only this org's codes
             if (orgCodes.some((c) => allocatedCodes.has(c.code))) authorized = true
           }
         }
@@ -249,6 +258,7 @@ export default async function PracticeDetail({
   const providerLinks = (pr.practice_providers ?? []) as any[]
   const providersList = providerLinks.map((pl) => pl.providers).filter(Boolean)
   const primaryProvider = providersList[0]
+  const locations = practiceLocations(primaryProvider, practice) // ← ADDED: Locations box
 
   let worksheetQuery = supabase.from('lead_worksheets').select(`
     call_details, additional_phone, email, concerned_person, direct_line,
@@ -482,11 +492,27 @@ export default async function PracticeDetail({
 
                   <div className="lead-divider">
                     <span className="lead-subhead">Locations</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14} style={{ color: 'var(--accent)', flexShrink: 0 }}><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
-                      <span style={{ fontWeight: 700, color: 'var(--ink-strong)' }}>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || '—'}</span>
-                      <span className="lead-pill-sm lead-pill-neutral" style={{ fontSize: 9 }}>Primary</span>
-                    </div>
+                    {/* ← CHANGED: primary, mailing and secondary addresses from
+                        NPPES, each shown once (duplicates merged, e.g.
+                        "Primary · Mailing"), with their phone numbers. */}
+                    {locations.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>—</span> : (
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {locations.map((loc) => (
+                          <div key={loc.address} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 12 }}>
+                            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={14} height={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1 }}><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontWeight: 700, color: 'var(--ink-strong)', overflowWrap: 'anywhere' }}>{loc.address}</span>
+                                <span className="lead-pill-sm lead-pill-neutral" style={{ fontSize: 9 }}>{loc.labels.join(' · ')}</span>
+                              </div>
+                              {loc.phones.length > 0 && (
+                                <div className="mono" style={{ marginTop: 2, color: 'var(--muted)', fontSize: 11.5 }}>{loc.phones.join(' · ')}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="lead-divider">

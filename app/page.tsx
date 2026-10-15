@@ -40,7 +40,10 @@ export default async function Home() {
         // Outside a real request (e.g. tests): always load fresh.
       }
       const candidate = wantsFresh ? null : getReusableLeadSnapshot(user.id, profileKey, REUSE_SNAPSHOT_MS)
-      if (candidate && !candidate.data.canAssign) reused = candidate
+      // ← CHANGED: every role now opens instantly from its recent snapshot
+      // (Company Admin / Manager / Team Lead included). Their "My assigned"
+      // list is refreshed together with the leads in the background.
+      if (candidate) reused = candidate
     }
   }
 

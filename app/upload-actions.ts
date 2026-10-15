@@ -888,7 +888,14 @@ const KNOWN_HEADERS = [
   'NPPES_PrimaryState', 'NPPES_State', 'State', 'NPPES_PrimaryCity', 'NPPES_City', 'City',
   'NPPES_PrimaryPostal', 'NPPES_Postal', 'Postal', 'NPPES_PrimaryTaxonomyDesc', 'NPPES_Taxonomy_Desc', 'Specialty',
   'NPPES_PrimaryPhone', 'NPPES_Phone', 'Phone', 'NPPES_MailingPhone', 'NPPES_ContactPhone',
-  'NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address',
+  'NPPES_PrimaryAddr1', 'NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address', // ← CHANGED: + NPPES_PrimaryAddr1
+  // ← ADDED: full addresses for the practice page's Locations box.
+  'NPPES_PrimaryPracticeAddress', 'NPPES_MailingAddress', 'NPPES_SecondaryPracticeAddress', 'NPPES_SecondaryPhone', 'NPPES_SecondaryAddressCount',
+  // ← ADDED: NPI Sheet Updater columns the CRM deliberately doesn't store
+  // (duplicates of other columns / technical) — not reported as "ignored".
+  'NPI_API_Found', 'NPPES_NPI', 'NPPES_EntityCategory', 'NPPES_PrimaryAddr2',
+  'NPPES_MailingAddr1', 'NPPES_MailingAddr2', 'NPPES_MailingCity', 'NPPES_MailingState', 'NPPES_MailingPostal',
+  'NPPES_CreatedEpoch', 'NPPES_LastUpdatedEpoch',
   'NPPES_Credential', 'Credential',
   'NPPES_AuthOfficial_Name', 'NPPES_AuthOfficial_FirstName', 'NPPES_AuthOfficial_MiddleName', 'NPPES_AuthOfficial_LastName',
   'NPPES_AuthOfficial_Title', 'NPPES_AuthOfficial_Phone', 'NPPES_AuthOfficial_Credential',
@@ -967,16 +974,29 @@ export async function uploadLeadsCsv(
     for (const name of names) { const v = col(row, name); if (v) return v }
     return ''
   }
+  // ← ADDED: full primary / mailing / secondary addresses (NPI Sheet Updater
+  // columns). Only used when the file has them, so older files upload
+  // exactly as before — even before the new database columns exist.
+  const ADDRESS_HEADERS = ['NPPES_PrimaryPracticeAddress', 'NPPES_MailingAddress', 'NPPES_SecondaryPracticeAddress', 'NPPES_SecondaryPhone', 'NPPES_SecondaryAddressCount']
+  const hasAddressColumns = ADDRESS_HEADERS.some((h) => keyMap.has(h.toLowerCase()))
+  const addressFields = (row: CsvRow): Record<string, string> => hasAddressColumns ? {
+    primary_practice_address: col(row, 'NPPES_PrimaryPracticeAddress'),
+    mailing_address: col(row, 'NPPES_MailingAddress'),
+    secondary_practice_address: col(row, 'NPPES_SecondaryPracticeAddress'),
+    secondary_phone: col(row, 'NPPES_SecondaryPhone'),
+    secondary_address_count: /^\d+$/.test(col(row, 'NPPES_SecondaryAddressCount')) ? col(row, 'NPPES_SecondaryAddressCount') : '',
+  } : {}
   // ← ADDED: NPPES fields the upload did not read before.
   const extraFields = (row: CsvRow) => ({
     org_name: firstOf(row, ['NPPES_OrganizationName', 'Org_Name']), // ← CHANGED: NPPES organization name first
     credential: firstOf(row, ['NPPES_Credential', 'Credential']),
-    addr1: firstOf(row, ['NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']),
+    addr1: firstOf(row, ['NPPES_PrimaryAddr1', 'NPPES_PrimaryAddress1', 'NPPES_PrimaryAddressLine1', 'NPPES_PrimaryAddress', 'NPPES_Address1', 'Address1', 'Address']), // ← CHANGED: + NPPES_PrimaryAddr1
     auth_official_name: col(row, 'NPPES_AuthOfficial_Name') ||
       ['NPPES_AuthOfficial_FirstName', 'NPPES_AuthOfficial_MiddleName', 'NPPES_AuthOfficial_LastName'].map((h) => col(row, h)).filter(Boolean).join(' '),
     auth_official_title: col(row, 'NPPES_AuthOfficial_Title'),
     auth_official_phone: col(row, 'NPPES_AuthOfficial_Phone'),
     auth_official_credential: col(row, 'NPPES_AuthOfficial_Credential'),
+    ...addressFields(row), // ← ADDED
   })
   // ← ADDED: columns in this file that the CRM does not use.
   const knownHeaders = new Set(KNOWN_HEADERS)
@@ -991,6 +1011,14 @@ export async function uploadLeadsCsv(
     const { error: emailSchemaError } = await supabase.from('master_practices').select('lead_category').limit(1)
     if (emailSchemaError) {
       return { ok: false, message: 'Email leads need the new database column — run database/email-leads.sql in Supabase, then upload again.' }
+    }
+  }
+  // ← ADDED: the address columns must exist before a file that has them is
+  // written (files without them are not affected).
+  if (hasAddressColumns) {
+    const { error: addressSchemaError } = await supabase.from('providers').select('primary_practice_address, mailing_address, secondary_practice_address, secondary_phone, secondary_address_count').limit(1)
+    if (addressSchemaError) {
+      return { ok: false, message: 'This file has the new address columns — run database/nppes-address-fields.sql in Supabase, then upload again.' }
     }
   }
   // ← ADDED: the new columns must exist before anything is written.

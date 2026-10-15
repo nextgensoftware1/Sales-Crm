@@ -84,5 +84,7 @@ export async function refreshLeadSnapshot() {
   }
   const { data: me } = await getCurrentProfile(user.id)
   const snapshot = saveLeadSnapshot(user.id, data, leadProfileKey(me))
-  return { ok: true as const, snapshotId: snapshot.id, overview: snapshot.overview }
+  // ← CHANGED: + the viewer's own assigned leads, so "My assigned" and the
+  // priority order in the browser match the fresh data too.
+  return { ok: true as const, snapshotId: snapshot.id, overview: snapshot.overview, myAssignedCodes: data.myAssignedCodes ?? [] }
 }

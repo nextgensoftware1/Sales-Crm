@@ -183,7 +183,10 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
 
   // Priority = leads assigned to me by my boss. Toggle between showing only
   // those ("My assigned") and the whole company pool ("All company").
-  const prioritySet = useMemo(() => new Set(myAssignedCodes), [myAssignedCodes])
+  // ← CHANGED: after a background refresh, the fresh "My assigned" list wins.
+  const [liveAssigned, setLiveAssigned] = useState<{ forProp: string[]; codes: string[] } | null>(null)
+  const assignedCodes = liveAssigned && liveAssigned.forProp === myAssignedCodes ? liveAssigned.codes : myAssignedCodes
+  const prioritySet = useMemo(() => new Set(assignedCodes), [assignedCodes])
   const hasPriority = prioritySet.size > 0
   const [assignedView, setAssignedView] = useState<'all' | 'mine'>('all')
 
@@ -350,6 +353,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         // filters and page from the fresh data.
         setServerOverview(res.overview)
         setServerSnapshotId(res.snapshotId)
+        if (Array.isArray(res.myAssignedCodes)) setLiveAssigned({ forProp: myAssignedCodes, codes: res.myAssignedCodes }) // ← ADDED
       }
     }).catch(() => { /* keep showing the recent data; a reload fetches fresh */ })
       .finally(() => setRefreshDoneFor(incoming))

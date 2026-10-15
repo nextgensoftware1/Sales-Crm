@@ -6,6 +6,7 @@ import { Eye } from 'lucide-react'
 import { useWorksheetSearch } from '../../lib/worksheet-search-store'
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import WorksheetDetailModal from './WorksheetDetailModal'
+import { dispositionOptions } from '../../lib/dispositions'
 import { toCsv, toXlsx, downloadFile, type ExportTable } from '../../lib/export-file' // ← ADDED: download selected leads
 
 // Opens the worksheet details popup; provided by WorksheetReportsClient so
@@ -433,7 +434,8 @@ export default function WorksheetReportsClient({
   const [updatedTo, setUpdatedTo] = useState('')     // YYYY-MM-DDTHH:MM (local)
   const rangeReversed = !!updatedFrom && !!updatedTo && updatedFrom > updatedTo
 
-  const dispositions = useMemo(() => Array.from(new Set(rows.map((r) => r.disposition).filter((v): v is string => !!v))).sort(), [rows])
+  // Every standard disposition (incl. "Send Mail") plus any other saved value.
+  const dispositions = useMemo(() => dispositionOptions(rows.map((r) => r.disposition)), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
   const filteredRows = useMemo(() => rows.filter((r) => {
