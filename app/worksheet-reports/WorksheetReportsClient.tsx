@@ -43,12 +43,14 @@ function phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {
 function exportTable(rows: WorksheetReportRow[]): ExportTable {
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')
   return {
-    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Contact Phone', 'Official Phone', 'Direct Line',
-      'Additional Phone', 'Email', 'Concerned Person', 'Filled By', 'Closer', 'Disposition', 'Callback', 'Callback Timezone',
+    // ← CHANGED: "Call Disposition" (same name as the page filter) is now the
+    // 3rd column, right after the practice, so it's easy to find and filter.
+    headers: ['NPI', 'Practice', 'Call Disposition', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Contact Phone', 'Official Phone', 'Direct Line',
+      'Additional Phone', 'Email', 'Concerned Person', 'Filled By', 'Closer', 'Callback', 'Callback Timezone',
       'Call Details', 'Handoff Status', 'Last Updated', 'Last Updated By'],
     rows: rows.map((r) => [
-      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.contactPhone, r.officialPhone, r.directLine,
-      r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, r.disposition, when(r.callbackAt), r.timezone,
+      npiOf(r), r.practiceName, r.disposition ?? '', r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.contactPhone, r.officialPhone, r.directLine,
+      r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, when(r.callbackAt), r.timezone,
       r.callDetails, r.handoffStatus, when(r.lastUpdatedAt), r.lastUpdatedBy,
     ]),
   }
@@ -438,13 +440,18 @@ export default function WorksheetReportsClient({
   const dispositions = useMemo(() => dispositionOptions(rows.map((r) => r.disposition)), [rows])
   const filledByOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.filledBy).filter((v): v is string => !!v))).sort(), [rows])
 
-  const filteredRows = useMemo(() => rows.filter((r) => {
+  // ← ADDED: always newest first — the most recently saved worksheet, by any
+  // agent or role (incl. edits from the popup and imports), is at the top.
+  const newestFirst = useMemo(() => [...rows].sort((a, b) =>
+    (Date.parse(b.lastUpdatedAt ?? '') || 0) - (Date.parse(a.lastUpdatedAt ?? '') || 0)
+    || (a.providerName ?? a.practiceName).localeCompare(b.providerName ?? b.practiceName)), [rows])
+  const filteredRows = useMemo(() => newestFirst.filter((r) => { // ← CHANGED: rows → newestFirst
     if (searchText && !worksheetMatchesSearch(r, searchText)) return false
     if (dispositionFilter && r.disposition !== dispositionFilter) return false
     if (showFilledBy && filledByFilter && r.filledBy !== filledByFilter) return false
     if (!withinRange(r.lastUpdatedAt, updatedFrom, updatedTo)) return false
     return true
-  }), [rows, searchText, dispositionFilter, filledByFilter, showFilledBy, updatedFrom, updatedTo])
+  }), [newestFirst, searchText, dispositionFilter, filledByFilter, showFilledBy, updatedFrom, updatedTo])
 
   const resetFilters = () => { setSearchText(''); setDispositionFilter(''); setFilledByFilter(''); setUpdatedFrom(''); setUpdatedTo('') }
   const activeFilterCount = [searchText.trim(), dispositionFilter, showFilledBy ? filledByFilter : '', updatedFrom || updatedTo].filter(Boolean).length
@@ -470,7 +477,10 @@ export default function WorksheetReportsClient({
       if (!byCompany.has(key)) byCompany.set(key, [])
       byCompany.get(key)!.push(r)
     }
-    return Array.from(byCompany.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+    // ← CHANGED: the company with the most recent worksheet comes first
+    // (rows are already newest-first, so each group's first row is its latest).
+    const latest = (list: WorksheetReportRow[]) => Date.parse(list[0]?.lastUpdatedAt ?? '') || 0
+    return Array.from(byCompany.entries()).sort((a, b) => latest(b[1]) - latest(a[1]) || a[0].localeCompare(b[0]))
   }, [filteredRows, scope])
 
   return (
