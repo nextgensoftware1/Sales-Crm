@@ -3,7 +3,7 @@
 /** Responses an agent can record on an Email lead, in display order. */
 export const EMAIL_RESPONSES = [
   'Not Found', 'Undeliverable', 'Unsubscribed', 'Email Sent', 'Got Reply',
-  'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive',
+  'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive','Reachable',
 ] as const
 
 /** Responses that need the email address that was used. */
