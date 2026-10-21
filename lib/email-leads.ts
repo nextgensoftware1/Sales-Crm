@@ -1,23 +1,19 @@
-// ← ADDED (new file) — shared settings for Email leads (browser + server).
+// Shared settings for Email leads (browser + server).
 
 /** Responses an agent can record on an Email lead, in display order. */
 export const EMAIL_RESPONSES = [
   'Not Found', 'Undeliverable', 'Unsubscribed', 'Email Sent', 'Got Reply',
-<<<<<<< HEAD
-  'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive', 'Reachable', // ← CHANGED: + Reachable
-=======
   'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive', 'Reachable',
->>>>>>> 81689dc (Add Filter npi type replacement of Disposition)
 ] as const
 
 /** Responses that need the email address that was used. */
-export const EMAIL_REQUIRED_FOR = ['Email Sent', 'Got Reply', 'Undeliverable', 'Unsubscribed', 'Not Interested', 'Reachable'] as const // ← CHANGED: + Reachable
+export const EMAIL_REQUIRED_FOR = ['Email Sent', 'Got Reply', 'Undeliverable', 'Unsubscribed', 'Not Interested'] as const
 
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 /** Badge colour class per response (existing .badge-* styles). */
 export function emailResponseBadge(response: string): string {
-  if (response === 'Got Reply' || response === 'Email Sent' || response === 'Reachable') return 'badge badge-green' // ← CHANGED: + Reachable
+  if (response === 'Got Reply' || response === 'Email Sent' || response === 'Reachable') return 'badge badge-green'
   if (response === 'Not Interested' || response === 'Unsubscribed' || response === 'Undeliverable' || response === 'Invalid') return 'badge badge-red'
   if (response === 'Not Considerable' || response === 'Repetitive') return 'badge badge-amber'
   return 'badge badge-grey'
