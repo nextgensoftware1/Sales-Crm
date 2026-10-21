@@ -137,6 +137,8 @@ export type LeadFilters = {
   assignedView: 'all' | 'mine'
   companyFilter: string
   enumTypeFilter: string
+  /** ← ADDED: NPI type for every lead ('NPI-1' individual / 'NPI-2' organization). */
+  npiTypeFilter: '' | 'NPI-1' | 'NPI-2'
   lastUpdatedFrom: string
   lastUpdatedTo: string
   enumDateFrom: string
@@ -147,8 +149,18 @@ export type LeadFilters = {
 export const DEFAULT_LEAD_FILTERS: LeadFilters = {
   search: '', stateFilter: '', zoneFilter: '', specialtyFilter: '', specialtyFilters: [], dispositionFilter: '',
   activeSignals: [], catTab: 'All Categories', sourceTab: 'All', poolTab: 'All Leads',
-  assignedView: 'all', companyFilter: '', enumTypeFilter: '', lastUpdatedFrom: '',
+  assignedView: 'all', companyFilter: '', enumTypeFilter: '', npiTypeFilter: '', lastUpdatedFrom: '',
   lastUpdatedTo: '', enumDateFrom: '', enumDateTo: '', assignedDateFilter: '',
+}
+
+/** ← ADDED: "NPI-1" / "NPI-2" from the stored entity type (also accepts
+ * "1", "2", "Individual", "Organization"); '' when unknown. */
+export function npiTypeOf(entityType: string | null | undefined): '' | 'NPI-1' | 'NPI-2' {
+  const t = (entityType ?? '').toString().trim().toLowerCase()
+  if (!t) return ''
+  if (t.includes('2') || t.includes('org')) return 'NPI-2'
+  if (t.includes('1') || t.includes('ind')) return 'NPI-1'
+  return ''
 }
 
 /** Accept only well-formed filter values (they arrive from the browser). */
@@ -179,6 +191,7 @@ export function sanitizeLeadFilters(input: unknown): LeadFilters {
     assignedView: view === 'mine' ? 'mine' : 'all',
     companyFilter: str('companyFilter'),
     enumTypeFilter: str('enumTypeFilter'),
+    npiTypeFilter: raw.npiTypeFilter === 'NPI-1' || raw.npiTypeFilter === 'NPI-2' ? raw.npiTypeFilter : '', // ← ADDED
     lastUpdatedFrom: str('lastUpdatedFrom'),
     lastUpdatedTo: str('lastUpdatedTo'),
     enumDateFrom: str('enumDateFrom'),
@@ -259,6 +272,9 @@ export function filterLeads<T extends LeadRow>(
       if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
     }
     if (dispositionFilter && p.status !== dispositionFilter) return false
+    // ← ADDED: NPI type (from NPPES_EnumerationType). Leads without a known
+    // type don't match a chosen type.
+    if (f.npiTypeFilter && npiTypeOf(p.entityType) !== f.npiTypeFilter) return false
 
     // Signal pills (CCM/PCM/…/MIPS) — each active pill must pass (AND logic).
     for (const key of activeSignals) {

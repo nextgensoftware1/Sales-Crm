@@ -83,6 +83,7 @@ type PersistedLeadFilters = {
   sourceTab: 'All' | 'Allocated' | 'Uploaded'
   catTab: string
   enumTypeFilter: string
+  npiTypeFilter?: '' | 'NPI-1' | 'NPI-2' // ← ADDED
   lastUpdatedFrom: string
   lastUpdatedTo: string
   enumDateFrom: string
@@ -200,6 +201,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const [catTab, setCatTab] = useState('All Categories')
   // Only meaningful — and only shown — when catTab === 'Credentialing'.
   const [enumTypeFilter, setEnumTypeFilter] = useState('')
+  const [npiTypeFilter, setNpiTypeFilter] = useState<'' | 'NPI-1' | 'NPI-2'>('') // ← ADDED: NPI Type in Refine Leads
   const [lastUpdatedFrom, setLastUpdatedFrom] = useState('')
   const [lastUpdatedTo, setLastUpdatedTo] = useState('')
   const [enumDateFrom, setEnumDateFrom] = useState('')
@@ -217,7 +219,9 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         // ← CHANGED: restore the list; older saved filters had one specialty.
         if (Array.isArray(filters.specialtyFilters)) setSpecialtyFilters(filters.specialtyFilters.filter((v): v is string => typeof v === 'string' && v.length > 0))
         else if (typeof filters.specialtyFilter === 'string' && filters.specialtyFilter) setSpecialtyFilters([filters.specialtyFilter])
-        if (typeof filters.dispositionFilter === 'string') setDispositionFilter(filters.dispositionFilter)
+        // ← CHANGED: the Disposition filter was removed from the Leads Engine, so
+        // an older saved disposition is not restored (it would be invisible).
+        if (filters.npiTypeFilter === 'NPI-1' || filters.npiTypeFilter === 'NPI-2') setNpiTypeFilter(filters.npiTypeFilter) // ← ADDED
         if (typeof filters.companyFilter === 'string') setCompanyFilter(filters.companyFilter)
         if (filters.zoneFilter !== undefined && (filters.zoneFilter === '' || ZONE_KEYS.includes(filters.zoneFilter))) setZoneFilter(filters.zoneFilter)
         if (Array.isArray(filters.activeSignals)) {
@@ -245,14 +249,14 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     const filters: PersistedLeadFilters = {
       search, stateFilter, specialtyFilter: '', specialtyFilters, dispositionFilter, companyFilter, zoneFilter, // ← CHANGED
       activeSignals: Array.from(activeSignals), assignedView, poolTab, sourceTab, catTab,
-      enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
+      enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     }
     try {
       localStorage.setItem(filtersStorageKey, JSON.stringify(filters))
     } catch {
       // Keep filtering usable when browser storage is unavailable.
     }
-  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilters, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  }, [filtersRestored, filtersStorageKey, search, stateFilter, specialtyFilters, dispositionFilter, companyFilter, zoneFilter, activeSignals, assignedView, poolTab, sourceTab, catTab, enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   // Dropdown options and summary-card numbers: computed here in legacy mode,
   // computed on the server (same function) in server-paged mode.
@@ -261,7 +265,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     [serverPaging, practices, isSuperAdmin, newLeadSet, workedLeadSet, completedWorksheetCount],
   )
   const overview = (localOverview ?? serverOverview)!
-  const { states, specialties, dispositions, zoneCounts, summaryCounts } = overview
+  const { states, specialties, zoneCounts, summaryCounts } = overview // ← CHANGED: disposition list no longer needed here
 
   const summaryCards = useMemo(() => {
     if (isSuperAdmin) return [
@@ -301,8 +305,8 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     ...DEFAULT_LEAD_FILTERS,
     search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, // ← CHANGED
     activeSignals: Array.from(activeSignals), catTab, sourceTab, poolTab, assignedView, companyFilter,
-    enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
-  }), [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+    enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
+  }), [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters])
 
   // Legacy mode: filter the full list in the browser.
@@ -417,7 +421,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const pageRows = serverPaging ? serverView.rows : filtered.slice(pageStart, pageStart + pageSize)
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
-  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
+  useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
 
   function getPageNumbers(current: number, total: number): (number | '…')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -522,11 +526,11 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
 
   const resetFilters = () => {
     setCompanyFilter('')
-    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilters([]); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
+    setSearch(''); setStateFilter(''); setZoneFilter(''); setSpecialtyFilters([]); setDispositionFilter(''); setActiveSignals(new Set()); setCatTab('All Categories'); setSourceTab('All'); setPoolTab('All Leads'); setAssignedView('all'); setEnumTypeFilter(''); setNpiTypeFilter(''); setLastUpdatedFrom(''); setLastUpdatedTo(''); setEnumDateFrom(''); setEnumDateTo(''); setAssignedDateFilter('')
   }
 
   const activeFilterCount = [
-    search, stateFilter, zoneFilter, dispositionFilter, companyFilter,
+    search, stateFilter, zoneFilter, dispositionFilter, companyFilter, npiTypeFilter, // ← CHANGED: + NPI type
     enumTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
     catTab !== 'All Categories' ? catTab : '', sourceTab !== 'All' ? sourceTab : '',
     poolTab !== 'All Leads' ? poolTab : '', assignedView !== 'all' ? assignedView : '',
@@ -697,7 +701,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         <div className="filter-section-head">
           <div>
             <h2 className="leads-section-title">Refine Leads</h2>
-            <p>Narrow the selected queue by state, specialty, disposition, or advanced criteria.</p>
+            <p>Narrow the selected queue by state, specialty, NPI type, or advanced criteria.</p>
           </div>
           <span className="filter-result-count">{filteredCount} result{filteredCount === 1 ? '' : 's'}{serverLoading ? ' · loading…' : ''}</span>
           {serverError && <span role="alert" style={{ color: 'var(--danger, #f66)', fontSize: 12 }}>{serverError}</span>}
@@ -719,9 +723,11 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
               style={input}
             />
           </div>
-          <label className="filter-control"><span>Disposition</span><select value={dispositionFilter} onChange={(e) => setDispositionFilter(e.target.value)} style={input}>
-            <option value="">All Dispositions</option>
-            {dispositions.map((d) => <option key={d} value={d}>{d}</option>)}
+          {/* ← CHANGED: NPI Type replaces the Disposition filter here */}
+          <label className="filter-control"><span>NPI Type</span><select value={npiTypeFilter} onChange={(e) => setNpiTypeFilter(e.target.value === 'NPI-1' || e.target.value === 'NPI-2' ? e.target.value : '')} style={input}>
+            <option value="">All NPI Types</option>
+            <option value="NPI-1">Type 1 — Individual</option>
+            <option value="NPI-2">Type 2 — Organization</option>
           </select></label>
           {canFilterAssignedDate && <label className="filter-control"><span>Assigned on</span>
             <input
@@ -766,6 +772,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             {stateFilter && <button onClick={() => setStateFilter('')}>{stateFilter} ×</button>}
             {specialtyFilters.map((sp) => <button key={sp} onClick={() => setSpecialtyFilters((prev) => prev.filter((v) => v !== sp))}>{sp} ×</button>)}{/* ← CHANGED */}
             {dispositionFilter && <button onClick={() => setDispositionFilter('')}>{dispositionFilter} ×</button>}
+            {npiTypeFilter && <button onClick={() => setNpiTypeFilter('')}>{npiTypeFilter === 'NPI-1' ? 'NPI Type 1' : 'NPI Type 2'} ×</button>}{/* ← ADDED */}
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
             {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {formatCalendarDate(assignedDateFilter)} ×</button>}
             {enumTypeFilter && <button onClick={() => setEnumTypeFilter('')}>Enumeration: {enumTypeFilter} ×</button>}

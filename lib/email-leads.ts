@@ -3,7 +3,11 @@
 /** Responses an agent can record on an Email lead, in display order. */
 export const EMAIL_RESPONSES = [
   'Not Found', 'Undeliverable', 'Unsubscribed', 'Email Sent', 'Got Reply',
+<<<<<<< HEAD
   'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive', 'Reachable', // ← CHANGED: + Reachable
+=======
+  'Not Considerable', 'Not Interested', 'Invalid', 'Repetitive', 'Reachable',
+>>>>>>> 81689dc (Add Filter npi type replacement of Disposition)
 ] as const
 
 /** Responses that need the email address that was used. */
