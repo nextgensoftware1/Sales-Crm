@@ -8,8 +8,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { getEmailLeadHistory, type EmailReportRow, type EmailHistoryEntry } from '../email-worksheet-actions' // ← CHANGED
 import { EMAIL_RESPONSES, emailResponseBadge } from '../../lib/email-leads'
 import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
+import { toCsv, toXlsx, downloadFile, type ExportTable } from '../../lib/export-file' // ← ADDED: download selected leads
 
-const PAGE_SIZE = 25
+// ← CHANGED: rows per page is now chosen on the page (was fixed at 25).
+const PAGE_SIZES = [20, 40, 100, 200] as const
+
+// ← ADDED: one key per row (the same lead can exist under two companies).
+const rowKey = (r: EmailReportRow) => `${r.tenantId}:${r.practiceId}`
+
+// ← ADDED: the downloaded file's columns (same idea as Active Call).
+function exportTable(rows: EmailReportRow[]): ExportTable {
+  return {
+    headers: ['NPI', 'Practice', 'Response', 'Email', 'Note', 'State', 'Specialty', 'Agent', 'Company', 'Last Updated'],
+    rows: rows.map((r) => [
+      r.practiceCode.replace(/^PR-/i, ''), r.practiceName, r.response, r.email, r.note,
+      r.state, r.specialty, r.agentName, r.companyName, new Date(r.updatedAt).toLocaleString(),
+    ]),
+  }
+}
 
 // ← ADDED: dates are shown in the viewer's own format and time zone, which
 // the server can't know. Rendering them only in the browser avoids the
@@ -118,9 +134,31 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
   const [agent, setAgent] = useState('')
   const [day, setDay] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number>(20) // ← ADDED
   const [viewKey, setViewKey] = useState<string | null>(null) // ← ADDED: row shown in the popup
-  const viewRow = viewKey ? rows.find((r) => `${r.tenantId}:${r.practiceId}` === viewKey) ?? null : null
+  const viewRow = viewKey ? rows.find((r) => rowKey(r) === viewKey) ?? null : null
   const closeView = useCallback(() => setViewKey(null), [])
+
+  // ← ADDED: selected leads (kept across pages and filters) + download.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const toggleSelect = useCallback((key: string) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
+  }), [])
+  const setManySelected = useCallback((keys: string[], on: boolean) => setSelected((prev) => {
+    const next = new Set(prev)
+    for (const k of keys) { if (on) next.add(k); else next.delete(k) }
+    return next
+  }), [])
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(rowKey(r))), [rows, selected])
+  const download = (format: 'csv' | 'xlsx') => {
+    if (!selectedRows.length) return
+    const table = exportTable(selectedRows)
+    const stamp = new Date().toISOString().slice(0, 10)
+    if (format === 'csv') downloadFile(`active-email-${stamp}.csv`, toCsv(table), 'text/csv;charset=utf-8')
+    else downloadFile(`active-email-${stamp}.xlsx`, toXlsx(table, 'Active Email'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  }
 
   const agents = useMemo(() => Array.from(new Set(rows.map((r) => r.agentName).filter((v): v is string => !!v))).sort(), [rows])
   const counts = useMemo(() => {
@@ -138,9 +176,12 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
       (!q || r.practiceName.toLowerCase().includes(q) || r.practiceCode.toLowerCase().includes(q) || (r.email ?? '').toLowerCase().includes(q)))
   }, [rows, search, response, agent, day])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize)) // ← CHANGED: pageSize
   const safePage = Math.min(page, totalPages)
-  const shown = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const pageStart = (safePage - 1) * pageSize // ← ADDED
+  const shown = filtered.slice(pageStart, pageStart + pageSize) // ← CHANGED
+  const pageKeys = shown.map(rowKey) // ← ADDED
+  const pageAllSelected = pageKeys.length > 0 && pageKeys.every((k) => selected.has(k)) // ← ADDED
   const reset = (fn: () => void) => { fn(); setPage(1) }
 
   return (
@@ -179,20 +220,46 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
 
         {truncated && <p className="subtle" style={{ fontSize: 12 }}>Showing the 2,000 most recent email worksheets.</p>}
 
+        {/* ← ADDED: download bar — same as Active Call */}
+        {filtered.length > 0 && (
+          <div role="region" aria-label="Download selected leads"
+            style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', background: selected.size ? 'var(--surface-2)' : undefined }}>
+            <strong style={{ fontSize: 13 }}>{selected.size} selected</strong>
+            {filtered.some((r) => !selected.has(rowKey(r))) && (
+              <button type="button" className="btn" onClick={() => setManySelected(filtered.map(rowKey), true)}>Select all {filtered.length} matching</button>
+            )}
+            {selected.size > 0 && <button type="button" className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>}
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button type="button" className="btn" disabled={!selected.size} onClick={() => download('csv')}>Download CSV</button>
+              <button type="button" className="btn btn-primary" disabled={!selected.size} onClick={() => download('xlsx')}>Download Excel</button>
+            </span>
+          </div>
+        )}
+
         {shown.length === 0 ? <p className="subtle">{rows.length === 0 ? 'No email worksheets saved yet.' : 'No email worksheets match these filters.'}</p> : (
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr>
+              {/* ← ADDED: select every lead on this page */}
+              <th style={{ width: 28 }}>
+                <input type="checkbox" aria-label="Select all leads on this page" checked={pageAllSelected}
+                  onChange={(e) => setManySelected(pageKeys, e.target.checked)} />
+              </th>
               <th>Practice</th><th>State</th><th>Specialty</th><th>Email</th><th>Response</th><th>Agent</th>
               {showCompany && <th>Company</th>}
               <th>Last Updated</th>
             </tr></thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={`${r.tenantId}:${r.practiceId}`}>
+                <tr key={rowKey(r)}>
+                  {/* ← ADDED: row checkbox */}
+                  <td>
+                    <input type="checkbox" aria-label={`Select ${r.practiceName}`}
+                      checked={selected.has(rowKey(r))} onChange={() => toggleSelect(rowKey(r))} />
+                  </td>
                   <td>
                     {/* ← CHANGED: eye button opens the popup */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <button type="button" onClick={() => setViewKey(`${r.tenantId}:${r.practiceId}`)} aria-label={`View email work for ${r.practiceName}`} title="View email work"
+                      <button type="button" onClick={() => setViewKey(rowKey(r))} aria-label={`View email work for ${r.practiceName}`} title="View email work"
                         style={{ flex: 'none', width: 28, height: 28, display: 'inline-grid', placeItems: 'center', border: '1px solid var(--border)', borderRadius: 7, background: 'var(--surface)', color: 'var(--accent-dark, #0f766e)', cursor: 'pointer' }}>
                         <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
                       </button>
@@ -214,11 +281,22 @@ export default function EmailReportsClient({ rows, truncated, showCompany }: {
           </table></div>
         )}
 
-        {totalPages > 1 && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 12 }}>
-            <button type="button" className="btn" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Previous</button>
-            <span className="subtle" style={{ fontSize: 12 }}>Page {safePage} of {totalPages}</span>
-            <button type="button" className="btn" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next</button>
+        {/* ← CHANGED: rows-per-page choice + "Showing x–y of z", next to paging */}
+        {filtered.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: 12 }}>
+            <span className="subtle" style={{ fontSize: 12, marginRight: 'auto' }}>
+              Showing {pageStart + 1}–{Math.min(pageStart + pageSize, filtered.length)} of {filtered.length}
+            </span>
+            <label className="report-page-size"><span>Rows per page</span>
+              <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}>
+                {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            {totalPages > 1 && <>
+              <button type="button" className="btn" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+              <span className="subtle" style={{ fontSize: 12 }}>Page {safePage} of {totalPages}</span>
+              <button type="button" className="btn" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next</button>
+            </>}
           </div>
         )}
       </div>

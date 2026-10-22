@@ -127,6 +127,7 @@
 import { revalidatePath } from 'next/cache'
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { EMAIL_RESPONSES, EMAIL_REQUIRED_FOR, EMAIL_RE } from '../lib/email-leads'
+import { readAllPages } from '../lib/query-utils' // ← ADDED
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -178,8 +179,6 @@ export type EmailReportRow = {
   updatedAt: string
 }
 
-const REPORT_LIMIT = 2000
-
 // Latest email worksheet per lead. Super Admin: every company. Company Admin /
 // Manager / Team Lead: their company. Agent / Closer: what they saved.
 export async function getEmailReports(): Promise<
@@ -197,20 +196,28 @@ export async function getEmailReports(): Promise<
     : roleKey === 'agent' || roleKey === 'closer' ? 'mine' : 'company'
 
   const supabase = await createSupabaseServer()
-  let query = supabase.from('lead_email_worksheets')
-    .select('practice_id, tenant_id, email, response, note, updated_at, users(full_name), tenants(name), master_practices!inner(practice_code, name, state, specialty, deleted_at)')
-    .is('master_practices.deleted_at', null)
-    .order('updated_at', { ascending: false })
-    .limit(REPORT_LIMIT + 1)
-  if (scope === 'company') query = query.eq('tenant_id', me.tenant_id!)
-  if (scope === 'mine') query = query.eq('updated_by', me.id)
+  // ← CHANGED: every email worksheet in scope is loaded (no 2,000 cap), in
+  // pages of 1,000 like Active Call, so the per-company counts in the side
+  // panel are complete. `id` is the tie-breaker so pages never overlap.
+  const makeQuery = (withCount: boolean) => {
+    let query = supabase.from('lead_email_worksheets')
+      .select('practice_id, tenant_id, email, response, note, updated_at, users(full_name), tenants(name), master_practices!inner(practice_code, name, state, specialty, deleted_at)',
+        withCount ? { count: 'exact' } : undefined)
+      .is('master_practices.deleted_at', null)
+    if (scope === 'company') query = query.eq('tenant_id', me.tenant_id!)
+    if (scope === 'mine') query = query.eq('updated_by', me.id)
+    return query.order('updated_at', { ascending: false }).order('id')
+  }
 
-  const { data, error } = await query
-  if (error) {
-    if (error.code === '42P01' || error.code === 'PGRST205') {
+  let data: unknown[]
+  try {
+    data = await readAllPages<unknown>((from, to, isFirst) => makeQuery(isFirst).range(from, to))
+  } catch (e) {
+    const error = e as { code?: string; message?: string }
+    if (error?.code === '42P01' || error?.code === 'PGRST205') {
       return { ok: false, message: 'Email reports are not set up yet — run database/email-leads.sql in Supabase.' }
     }
-    return { ok: false, message: error.message }
+    return { ok: false, message: error?.message ?? 'Could not load email reports.' }
   }
   type Raw = {
     practice_id: string; tenant_id: string; email: string | null; response: string; note: string | null; updated_at: string
@@ -220,9 +227,9 @@ export async function getEmailReports(): Promise<
   const all = (data ?? []) as unknown as Raw[]
   return {
     ok: true,
-    truncated: all.length > REPORT_LIMIT,
+    truncated: false, // ← CHANGED: nothing is cut off any more
     scope,
-    rows: all.slice(0, REPORT_LIMIT).map((r) => ({
+    rows: all.map((r) => ({ // ← CHANGED: every row
       practiceId: r.practice_id,
       tenantId: r.tenant_id,
       practiceCode: r.master_practices.practice_code,

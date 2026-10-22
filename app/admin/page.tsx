@@ -52,6 +52,9 @@ export default async function AdminPage() {
 
   if (roleKey !== 'super_admin') {
     const myCompanyName = (me as any)?.tenants?.name ?? 'Your Company'
+    // ← ADDED: Manager sees the team read-only — no "Add user" form
+    // (creating users is blocked on the server too, in admin-manage-actions.ts).
+    const canCreateUsers = roleKey !== 'manager'
     const [{ data: myUsers }, { data: availableRoles }] = await Promise.all([
       supabase.from('users').select('id, email, full_name, status, roles(key, label, level)')
         .eq('tenant_id', (me as any)?.tenant_id),
@@ -68,7 +71,7 @@ export default async function AdminPage() {
     return (
       <AppShell
         title={`Admin — ${myCompanyName}`}
-        subtitle="Manage your company's team"
+        subtitle={canCreateUsers ? "Manage your company's team" : "Your company's team"} // ← CHANGED
         currentUser={currentUser}
         active="/admin"
         showAdmin={false}
@@ -76,7 +79,7 @@ export default async function AdminPage() {
         canManageUsers={canManageUsers}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />
+          {canCreateUsers && <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />}{/* ← CHANGED */}
           <div className="card">
             <h2 className="h-section">Your Team ({sorted.length})</h2>
             {/* Company Admins can remove junior teammates; other roles see it read-only. */}

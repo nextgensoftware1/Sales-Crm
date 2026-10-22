@@ -19,7 +19,8 @@ export async function loadLeadsData() {
 
   const roleKey = (me as any)?.roles?.key ?? ''
   const isSuperAdmin = roleKey === 'super_admin'
-  const canUpload = ['company_admin', 'manager', 'super_admin'].includes(roleKey)
+  // ← CHANGED: Manager can no longer upload lead CSVs (Company Admin / Super Admin only).
+  const canUpload = ['company_admin', 'super_admin'].includes(roleKey)
   const canAssign = ['company_admin', 'manager', 'team_lead'].includes(roleKey)
   const showTransfers = true
   const canManageUsers = isSuperAdmin || canAssign

@@ -7,7 +7,9 @@ import { roleLabel } from '../lib/roles'
 // Roles allowed to manage/create other users at all. Agent and Closer are
 // intentionally excluded — they're the bottom of the hierarchy and never
 // create anyone.
-const MANAGER_ROLES = ['super_admin', 'company_admin', 'manager', 'team_lead']
+// ← CHANGED: Manager removed — a Manager can no longer create Team Leads,
+// Agents or Closers (Company Admin / Super Admin / Team Lead still can).
+const MANAGER_ROLES = ['super_admin', 'company_admin', 'team_lead']
 
 async function whoAmI() {
   const { data: { user } } = await getCurrentUser()

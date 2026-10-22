@@ -934,8 +934,9 @@ export async function uploadLeadsCsv(
   const roleKey = (me as any)?.roles?.key ?? ''
   let tenantId = (me as any)?.tenant_id
 
-  if (!['company_admin', 'manager', 'super_admin'].includes(roleKey)) {
-    return { ok: false, message: 'Only a Company Admin, Manager, or Super Admin can upload leads.' }
+  // ← CHANGED: Manager removed — only Company Admin or Super Admin may upload.
+  if (!['company_admin', 'super_admin'].includes(roleKey)) {
+    return { ok: false, message: 'Only a Company Admin or Super Admin can upload leads.' }
   }
 
   if (roleKey === 'super_admin') {
