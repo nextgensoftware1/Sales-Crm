@@ -27,6 +27,7 @@ export async function listUsersByRole(roleKey: string): Promise<
   const { data: rows } = await supabase
     .from('users')
     .select('id, full_name, roles(key), tenants(name)')
+    .eq('status', 'active') // ← ADDED: deleted users can't be previewed
     .order('full_name')
   const users = (rows ?? [])
     .filter((u: any) => u.roles?.key === roleKey)

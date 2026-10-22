@@ -27,7 +27,8 @@ export async function getAgentAssignedLeads(): Promise<{
   const myTenantId = (me as any)?.tenant_id
 
   // Find agents/closers in scope.
-  let usersQ = supabase.from('users').select('id, full_name, tenant_id, roles(key, label)')
+  // ← CHANGED: deleted users have no assigned leads any more — don't list them
+  let usersQ = supabase.from('users').select('id, full_name, tenant_id, roles(key, label)').eq('status', 'active')
   if (!isSuperAdmin) usersQ = usersQ.eq('tenant_id', myTenantId)
   const { data: people } = await usersQ
   const agents = (people ?? []).filter((u: any) => ['agent', 'closer'].includes(u.roles?.key))

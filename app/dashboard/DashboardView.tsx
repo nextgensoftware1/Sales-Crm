@@ -13,7 +13,11 @@ type Props = {
   companyName: string
   userName: string
   roleLabel: string
+  /** Call activities logged in range (lead_activity). */
   activityCount: number
+  /** ← ADDED: email saves in range (lead_email_activity) + their responses. */
+  emailActivityCount?: number
+  emailResponseCounts?: Record<string, number>
   transferCount: number
   saleCount: number
   totalValue: number
@@ -35,9 +39,13 @@ type Props = {
 const money = (n: number) => '$' + (Number(n) || 0).toLocaleString()
 
 export default function DashboardView(p: Props) {
+  // ← ADDED: "activities" = calls + emails, so an email agent's work counts.
+  const emailCount = p.emailActivityCount ?? 0
+  const totalActivities = p.activityCount + emailCount
+
   // ---- REAL funnel: activities -> transfers -> sales ----
   const funnel = useMemo(() => {
-    const worked = p.activityCount
+    const worked = totalActivities // ← CHANGED: calls + emails
     const rows = [
       { label: 'Activities logged', value: worked, colorVar: 'var(--accent)' },
       { label: 'Transfers', value: p.transferCount, colorVar: '#22d3ee' },
@@ -45,11 +53,16 @@ export default function DashboardView(p: Props) {
     ]
     const top = Math.max(worked, 1)
     return rows.map((r) => ({ ...r, pct: Math.round((r.value / top) * 100) }))
-  }, [p.activityCount, p.transferCount, p.saleCount])
+  }, [totalActivities, p.transferCount, p.saleCount])
 
+  // ← CHANGED: email responses join the breakdown, labelled "Email · <response>"
+  // so they never mix with a call disposition of the same name.
   const dispoRows = useMemo(
-    () => Object.entries(p.dispoCounts).sort((a, b) => b[1] - a[1]),
-    [p.dispoCounts]
+    () => [
+      ...Object.entries(p.dispoCounts),
+      ...Object.entries(p.emailResponseCounts ?? {}).map(([r, n]) => [`Email · ${r}`, n] as [string, number]),
+    ].sort((a, b) => b[1] - a[1]),
+    [p.dispoCounts, p.emailResponseCounts]
   )
 
   const currentUser = { full_name: p.userName, role: p.roleLabel, company: p.companyName }
@@ -78,7 +91,10 @@ export default function DashboardView(p: Props) {
         <div className="hero-stats-row page-anchor" id="overview">
           <HeroStat label="Total Contract Value" value={money(p.totalValue)} sub="Sales closed, in range" accent="var(--accent)" />
           <div className="hero-stats-divider" />
-          <HeroStat label="Activities Logged" value={p.activityCount} sub="Outbound dialing activity, in range" accent="var(--c-calls)" />
+          {/* ← CHANGED: includes email work; the split is shown when there is any */}
+          <HeroStat label="Activities Logged" value={totalActivities}
+            sub={emailCount ? `Calls ${p.activityCount.toLocaleString()} · Emails ${emailCount.toLocaleString()}, in range` : 'Outbound dialing activity, in range'}
+            accent="var(--c-calls)" />
           <div className="hero-stats-divider" />
           <HeroStat label="Closed Sales" value={p.saleCount} sub="Sales closed, in range" accent="var(--c-sales)" />
         </div>
@@ -121,7 +137,7 @@ export default function DashboardView(p: Props) {
           {/* Conversion ratios (REAL from funnel) */}
           <Panel title="Conversion ratios" subtitle="Lead progression efficiency">
             {[
-              ['Activity → transfer', p.activityCount ? Math.round((p.transferCount / p.activityCount) * 100) : 0],
+              ['Activity → transfer', totalActivities ? Math.round((p.transferCount / totalActivities) * 100) : 0], // ← CHANGED
               ['Transfer → sale', p.transferCount ? Math.round((p.saleCount / p.transferCount) * 100) : 0],
               ['Sale → client', p.saleCount ? Math.round((p.clientCount / p.saleCount) * 100) : 0],
             ].map(([label, pct]) => (

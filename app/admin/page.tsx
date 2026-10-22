@@ -82,7 +82,7 @@ export default async function AdminPage() {
           {canCreateUsers && <AdminManageClient isSuperAdmin={false} roles={toRoleOptions(availableRoles ?? [])} companies={[]} />}{/* ← CHANGED */}
           <div className="card">
             <h2 className="h-section">Your Team ({sorted.length})</h2>
-            {/* Company Admins can remove junior teammates; other roles see it read-only. */}
+            {/* Company Admins can rename / delete junior teammates; other roles see it read-only. */}
             <CompanyTeamClient
               members={sorted.map((u: any) => ({
                 id: u.id, full_name: u.full_name, email: u.email, status: u.status,
@@ -101,7 +101,7 @@ export default async function AdminPage() {
   const [{ data: users }, { data: tenants }, { data: availableRoles }] = await Promise.all([
     supabase
       .from('users')
-      .select('email, full_name, status, roles(key, label, level), tenants(name)'),
+      .select('id, email, full_name, status, roles(key, label, level), tenants(name)'), // ← CHANGED: + id (for Rename / Delete)
     supabase
       .from('tenants')
       .select('id, name, is_platform, status')
@@ -125,13 +125,17 @@ export default async function AdminPage() {
   // the picker below, even ones with zero users so far, not just whichever
   // companies happen to already have someone in them.
   const allCompanyNames = (tenants ?? []).map((t: any) => t.name)
-  const usersByCompany: Record<string, { name: string; email: string; roleKey: string; status: string }[]> = {}
+  // ← CHANGED: same shape as the Company Admin team table (id + role level),
+  // so Super Admin gets Rename / Delete there too.
+  const usersByCompany: Record<string, { id: string; full_name: string | null; email: string | null; status: string | null; roleKey: string | null; roleLevel: number | null }[]> = {}
   for (const company of Object.keys(byCompany)) {
     usersByCompany[company] = byCompany[company].map((u: any) => ({
-      name: u.full_name,
+      id: u.id,
+      full_name: u.full_name,
       email: u.email,
-      roleKey: u.roles?.key ?? '',
       status: u.status,
+      roleKey: u.roles?.key ?? null,
+      roleLevel: u.roles?.level ?? null,
     }))
   }
 
@@ -166,7 +170,8 @@ export default async function AdminPage() {
         </div> },
         { label: 'Users & Teams', content: <div className="card">
           <h2 className="h-section">Users by Company</h2>
-          <AdminUsersByCompanyClient allCompanyNames={allCompanyNames} usersByCompany={usersByCompany} />
+          <AdminUsersByCompanyClient allCompanyNames={allCompanyNames} usersByCompany={usersByCompany}
+            myId={me?.id ?? ''} myLevel={me?.roles?.level ?? 0} />{/* ← CHANGED */}
         </div> },
         { label: 'Manage Companies & Users', content: <AdminManageClient isSuperAdmin={true} roles={toRoleOptions(availableRoles ?? [])}
           companies={(tenants ?? []).filter((t) => !t.is_platform).map((t) => ({ id: t.id, name: t.name }))} /> },

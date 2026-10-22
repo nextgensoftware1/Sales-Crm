@@ -1059,7 +1059,7 @@ function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banE
   }
   const bans = []
   const admin = { from: table, auth: { admin: { updateUserById: async (id, attrs) => { bans.push({ id, attrs }); return { error: banError } } } } }
-  const { removeCompanyUser } = loadTs('app/admin-manage-actions.ts', {
+  const { removeCompanyUser, renameCompanyUser } = loadTs('app/admin-manage-actions.ts', {
     '../lib/supabase-server': {
       createSupabaseServer: async () => ({}),
       getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
@@ -1067,7 +1067,7 @@ function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banE
     },
     '../lib/supabase-admin': { createSupabaseAdmin: () => admin },
   })
-  return { removeCompanyUser, log, bans }
+  return { removeCompanyUser, renameCompanyUser, log, bans }
 }
 const agent = (over = {}) => ({ id: 'u9', auth_id: 'auth-u9', tenant_id: 'T1', status: 'active', full_name: 'Acme Agent', roles: { key: 'agent', level: 5 }, ...over })
 
@@ -1075,7 +1075,7 @@ test('remove user: company admin removes an agent safely', async () => {
   const h = removeUserHarness({ target: agent() })
   const res = await h.removeCompanyUser('u9')
   assert.equal(res.ok, true)
-  assert.match(res.message, /Acme Agent was removed.*2 assigned leads returned to the pool/)
+  assert.match(res.message, /Acme Agent was deleted.*2 assigned leads returned to the pool/)
   const writes = h.log.filter(e => e.op !== 'select')
   assert.deepEqual(writes.map(w => [w.table, w.op]), [['users', 'update'], ['lead_assignments', 'delete']])
   assert.deepEqual(writes[0].values, { status: 'suspended' })
@@ -1087,13 +1087,14 @@ test('remove user: company admin removes an agent safely', async () => {
 })
 
 for (const [label, opts, id, pattern] of [
-  ['manager cannot remove (company admin only)', { meRole: 'manager', meLevel: 3, target: agent() }, 'u9', /Only a Company Admin/],
+  ['manager cannot remove (super admin / company admin only)', { meRole: 'manager', meLevel: 3, target: agent() }, 'u9', /Only Super Admin or a Company Admin/],
   ['cannot remove yourself', { target: agent({ id: 'me' }) }, 'me', /your own account/],
   ['cannot remove another company\'s user', { target: agent({ tenant_id: 'OTHER' }) }, 'u9', /own company/],
-  ['cannot remove a super admin', { target: agent({ roles: { key: 'super_admin', level: 1 } }) }, 'u9', /own company/],
-  ['cannot remove an equal role (another company admin)', { target: agent({ roles: { key: 'company_admin', level: 2 } }) }, 'u9', /more junior role/],
-  ['cannot remove an already removed user', { target: agent({ status: 'suspended' }) }, 'u9', /already been removed/],
-  ['unknown user', { target: null }, 'u9', /own company/],
+  ['cannot remove a super admin', { target: agent({ roles: { key: 'super_admin', level: 1 } }) }, 'u9', /can be deleted here/],
+  ['cannot remove an equal role (another company admin)', { target: agent({ roles: { key: 'company_admin', level: 2 } }) }, 'u9', /can be deleted here/],
+  ['super admin cannot remove a company admin', { meRole: 'super_admin', meLevel: 1, target: agent({ tenant_id: 'OTHER', roles: { key: 'company_admin', level: 2 } }) }, 'u9', /can be deleted here/],
+  ['cannot remove an already removed user', { target: agent({ status: 'suspended' }) }, 'u9', /already been deleted/],
+  ['unknown user', { target: null }, 'u9', /no longer exists/],
 ]) {
   test(`remove user: ${label}`, async () => {
     const h = removeUserHarness(opts)
@@ -1101,6 +1102,51 @@ for (const [label, opts, id, pattern] of [
     assert.equal(res.ok, false); assert.match(res.message, pattern)
     assert.equal(h.log.some(e => e.op !== 'select'), false)   // nothing written
     assert.equal(h.bans.length, 0)
+  })
+}
+
+test('remove user: super admin deletes an agent in any company, scoped to that company', async () => {
+  const h = removeUserHarness({ meRole: 'super_admin', meLevel: 1, target: agent({ tenant_id: 'OTHER' }) })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, true)
+  const writes = h.log.filter(e => e.op !== 'select')
+  assert.deepEqual(writes[0].filters, { id: 'u9', tenant_id: 'OTHER', status: 'active' })
+  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'OTHER', status: 'active' })
+  assert.equal(h.bans.length, 1)
+})
+
+test('rename user: company admin renames an agent; name is tidied and KPI name copies follow', async () => {
+  const h = removeUserHarness({ target: agent({ full_name: 'Muhammad Imran' }) })
+  const res = await h.renameCompanyUser('u9', '  M   Imran ')
+  assert.equal(res.ok, true); assert.match(res.message, /Muhammad Imran is now M Imran/)
+  const writes = h.log.filter(e => e.op !== 'select')
+  assert.deepEqual(writes.map(w => [w.table, w.values, w.filters]), [
+    ['users', { full_name: 'M Imran' }, { id: 'u9' }],
+    ['transfer_kpi_credits', { agent_name: 'M Imran' }, { agent_id: 'u9' }],
+    ['transfer_kpi_credits', { verified_by_name: 'M Imran' }, { verified_by: 'u9' }],
+  ])
+  assert.equal(h.bans.length, 0)
+})
+
+test('rename user: super admin renames a manager in another company; a deleted user can still be renamed', async () => {
+  const h = removeUserHarness({ meRole: 'super_admin', meLevel: 1, target: agent({ tenant_id: 'OTHER', status: 'suspended', roles: { key: 'manager', level: 3 } }) })
+  const res = await h.renameCompanyUser('u9', 'Z Ahmad')
+  assert.equal(res.ok, true)
+  assert.deepEqual(h.log.find(e => e.op === 'update' && e.table === 'users').values, { full_name: 'Z Ahmad' })
+})
+
+for (const [label, opts, name, pattern] of [
+  ['manager cannot rename', { meRole: 'manager', meLevel: 3, target: agent() }, 'X', /Only Super Admin or a Company Admin/],
+  ['company admin cannot rename another company\'s user', { target: agent({ tenant_id: 'OTHER' }) }, 'X', /own company/],
+  ['nobody renames a company admin here', { meRole: 'super_admin', meLevel: 1, target: agent({ roles: { key: 'company_admin', level: 2 } }) }, 'X', /can be renamed here/],
+  ['empty name', { target: agent() }, '   ', /Enter a name/],
+  ['too long', { target: agent() }, 'x'.repeat(101), /too long/],
+]) {
+  test(`rename user: ${label}`, async () => {
+    const h = removeUserHarness(opts)
+    const res = await h.renameCompanyUser('u9', name)
+    assert.equal(res.ok, false); assert.match(res.message, pattern)
+    assert.equal(h.log.some(e => e.op !== 'select'), false)   // nothing written
   })
 }
 
@@ -1488,7 +1534,8 @@ function overviewTables() {
       { id: 'f4', practice_id: 'p6', tenant_id: 'T2', from_user_id: 'b1', to_user_id: 'c9', note: 'Signed', created_at: day },
     ],
     transfer_kpi_credits: [{ transfer_id: 'f1', status: 'verified' }, { transfer_id: 'f2', status: 'rejected' }, { transfer_id: 'f4', status: 'verified' }],
-    users: [['a1', 'Aqsam', 'T1'], ['a2', 'Sam', 'T1'], ['b1', 'Bilal', 'T2'], ['c1', 'Cal', 'T1'], ['m1', 'Mia', 'T1']].map(([id, full_name, tenant_id]) => ({ id, full_name, tenant_id })),
+    users: [['a1', 'Aqsam', 'T1'], ['a2', 'Sam', 'T1'], ['b1', 'Bilal', 'T2'], ['c1', 'Cal', 'T1'], ['m1', 'Mia', 'T1'], ['d1', 'Deleted Dan', 'T1', 'suspended']]
+      .map(([id, full_name, tenant_id, status = 'active']) => ({ id, full_name, tenant_id, status })),
     tenants: [{ id: 'T1', name: 'HBS', is_platform: false }, { id: 'T2', name: 'A1 Healthcare', is_platform: false }],
   }
 }
@@ -1507,9 +1554,18 @@ test('overview (manager): worksheets, transfers, outcomes, dispositions, by agen
   assert.deepEqual(o.handoff, [{ name: 'Pending', count: 2 }, { name: 'Sent', count: 1 }])
   const sam = o.agents.find(a => a.name === 'Sam')
   assert.deepEqual([sam.worksheets, sam.transfers, sam.verified, sam.rejected, sam.dispositions.Interested], [3, 2, 0, 1, 1])
-  assert.deepEqual(o.people.map(p => p.name).sort(), ['Aqsam', 'Cal', 'Mia', 'Sam'])
+  assert.deepEqual(o.people.map(p => p.name).sort(), ['Aqsam', 'Cal', 'Mia', 'Sam'])   // deleted user not offered
   const onlySam = await overviewAs('manager', 'm1', 'T1', { agentId: 'a2' })
   assert.deepEqual([onlySam.worksheets, onlySam.transfers], [3, 2])
+})
+
+test('overview: a deleted agent\'s work still counts, but they are not offered in the Agent filter', async () => {
+  const tables = overviewTables()
+  tables.lead_worksheets.push({ practice_id: 'p9', tenant_id: 'T1', updated_by: 'd1', disposition: 'Voicemail', updated_at: '2026-10-05T10:00:00Z' })
+  const o = await overviewAs('manager', 'm1', 'T1', {}, tables)
+  assert.equal(o.worksheets, 6)
+  assert.equal(o.agents.find(a => a.name === 'Deleted Dan')?.worksheets, 1)
+  assert.equal(o.people.some(p => p.name === 'Deleted Dan'), false)
 })
 
 test('overview (agent): only their own work, no agent table', async () => {

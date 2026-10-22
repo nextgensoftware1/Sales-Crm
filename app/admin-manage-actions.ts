@@ -185,26 +185,29 @@ export async function createUser(input: {
   return { ok: true }
 }
 
-// ---- Remove a user from my company (Company Admin only) ----
-//
-// "Delete" for a company team member, done safely:
-//   1. The profile is marked suspended (they disappear from assign lists and
-//      cannot sign in through the app's login check).
-//   2. Their Supabase login is banned, so they cannot sign in or refresh a
-//      session at all.
-//   3. Their ACTIVE lead assignments are released back to the company pool,
-//      exactly like the existing "unassign" action, so no lead is stuck with
-//      someone who can no longer work it.
-// Their worksheets, call activity, transfers and sales are KEPT: reports and
-// history stay correct, and nothing that references them breaks.
-export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
-  if (!userId || typeof userId !== 'string') return { ok: false, message: 'Choose a user to remove.' }
+// ← CHANGED: rename + delete now work for Super Admin (any company) AND
+// Company Admin (own company). Only these roles can be renamed or deleted —
+// never a Company Admin or the Super Admin.
+const MANAGEABLE_ROLES = ['manager', 'team_lead', 'agent', 'closer']
+
+type ManagedUser = {
+  id: string; auth_id: string | null; tenant_id: string | null; status: string; full_name: string | null
+  roles: { key: string; level: number } | null
+}
+
+// ← ADDED: one permission check shared by rename and delete.
+async function loadManageableUser(userId: string, verb: string): Promise<
+  { ok: true; me: NonNullable<Awaited<ReturnType<typeof whoAmI>>>; admin: ReturnType<typeof createSupabaseAdmin>; target: ManagedUser }
+  | { ok: false; message: string }
+> {
+  if (!userId || typeof userId !== 'string') return { ok: false, message: `Choose a user to ${verb}.` }
   const me = await whoAmI()
   if (!me) return { ok: false, message: 'Not signed in.' }
-  if (me.roleKey !== 'company_admin' || !me.tenantId) {
-    return { ok: false, message: 'Only a Company Admin can remove users from the company.' }
+  const isSuperAdmin = me.roleKey === 'super_admin'
+  if (!isSuperAdmin && (me.roleKey !== 'company_admin' || !me.tenantId)) {
+    return { ok: false, message: `Only Super Admin or a Company Admin can ${verb} users.` }
   }
-  if (userId === me.id) return { ok: false, message: 'You cannot remove your own account.' }
+  if (userId === me.id) return { ok: false, message: `You cannot ${verb} your own account here.` }
 
   let admin
   try {
@@ -212,34 +215,82 @@ export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; 
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'User management is not configured.' }
   }
-
   const { data: row, error: readError } = await admin.from('users')
     .select('id, auth_id, tenant_id, status, full_name, roles(key, level)')
     .eq('id', userId).maybeSingle()
   if (readError) return { ok: false, message: `Could not load that user: ${readError.message}` }
-  const target = row as unknown as {
-    id: string; auth_id: string | null; tenant_id: string | null; status: string; full_name: string | null
-    roles: { key: string; level: number } | null
-  } | null
-  if (!target || target.tenant_id !== me.tenantId || target.roles?.key === 'super_admin') {
-    return { ok: false, message: 'You can only remove users from your own company.' }
+  const target = row as unknown as ManagedUser | null
+  if (!target) return { ok: false, message: 'That user no longer exists.' }
+  if (!isSuperAdmin && target.tenant_id !== me.tenantId) {
+    return { ok: false, message: `You can only ${verb} users in your own company.` }
   }
-  if ((target.roles?.level ?? 0) <= me.level) {
-    return { ok: false, message: 'You can only remove users with a more junior role than yours.' }
+  if (!MANAGEABLE_ROLES.includes(target.roles?.key ?? '')) {
+    return { ok: false, message: `Only Managers, Team Leads, Agents and Closers can be ${verb === 'rename' ? 'renamed' : 'deleted'} here.` }
   }
-  if (target.status !== 'active') return { ok: false, message: 'This user has already been removed or suspended.' }
+  if (!isSuperAdmin && (target.roles?.level ?? 0) <= me.level) {
+    return { ok: false, message: `You can only ${verb} users with a more junior role than yours.` }
+  }
+  return { ok: true, me, admin, target }
+}
 
-  // 1. Deactivate the profile (only if it is still active in my company).
+// ---- ← ADDED: Rename a user (Super Admin, or Company Admin in own company) ----
+// The name lives once on public.users, so Active Call, Active Email, the
+// Dashboard, transfers and reminders all show the new name straight away.
+// The Transfer KPI keeps a copy of the name on each credit, so those copies
+// are updated too.
+export async function renameCompanyUser(userId: string, newName: string): Promise<{ ok: boolean; message: string }> {
+  const fullName = (typeof newName === 'string' ? newName : '').replace(/\s+/g, ' ').trim()
+  if (!fullName) return { ok: false, message: 'Enter a name.' }
+  if (fullName.length > 100) return { ok: false, message: 'Name is too long (100 characters max).' }
+
+  const loaded = await loadManageableUser(userId, 'rename')
+  if (!loaded.ok) return loaded
+  const { admin, target } = loaded
+  if ((target.full_name ?? '') === fullName) return { ok: true, message: 'Name is unchanged.' }
+
+  const { error } = await admin.from('users').update({ full_name: fullName }).eq('id', target.id)
+  if (error) return { ok: false, message: `Could not rename this user: ${error.message}` }
+
+  // Name copies on Transfer KPI records (best effort — the KPI table may not exist).
+  await Promise.all([
+    admin.from('transfer_kpi_credits').update({ agent_name: fullName }).eq('agent_id', target.id),
+    admin.from('transfer_kpi_credits').update({ verified_by_name: fullName }).eq('verified_by', target.id),
+  ]).catch(() => undefined)
+
+  return { ok: true, message: `${target.full_name || 'User'} is now ${fullName}.` }
+}
+
+// ---- Delete a user (Super Admin, or Company Admin in own company) ----
+//
+// "Delete" for a team member, done safely:
+//   1. The profile is marked suspended (shown as "deleted"): they disappear
+//      from every Agent / Assign-to / Transfer-to dropdown and cannot sign in
+//      through the app's login check.
+//   2. Their Supabase login is banned, so they cannot sign in or refresh a
+//      session at all.
+//   3. Their ACTIVE lead assignments are released back to the company pool,
+//      exactly like the existing "unassign" action, so no lead is stuck with
+//      someone who can no longer work it.
+// Their worksheets, email work, call activity, transfers and sales are KEPT,
+// under their name: Active Call, Active Email and reports stay correct.
+export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
+  const loaded = await loadManageableUser(userId, 'delete') // ← CHANGED: Super Admin allowed too
+  if (!loaded.ok) return loaded
+  const { admin, target } = loaded
+  if (target.status !== 'active') return { ok: false, message: 'This user has already been deleted or suspended.' }
+  const tenantId = target.tenant_id ?? '' // ← CHANGED: the user's own company (works for Super Admin)
+
+  // 1. Deactivate the profile (only if it is still active).
   const { error: deactivateError } = await admin.from('users').update({ status: 'suspended' })
-    .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'active')
-  if (deactivateError) return { ok: false, message: `Could not remove this user: ${deactivateError.message}` }
+    .eq('id', target.id).eq('tenant_id', tenantId).eq('status', 'active')
+  if (deactivateError) return { ok: false, message: `Could not delete this user: ${deactivateError.message}` }
 
   // 2. Revoke their login. If that fails, undo step 1 so nothing is half-done.
   if (target.auth_id) {
     const { error: banError } = await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: '876000h' })
     if (banError) {
       const { error: restoreError } = await admin.from('users').update({ status: 'active' })
-        .eq('id', target.id).eq('tenant_id', me.tenantId).eq('status', 'suspended')
+        .eq('id', target.id).eq('tenant_id', tenantId).eq('status', 'suspended')
       return { ok: false, message: restoreError
         ? `Could not revoke login (${banError.message}) or restore the profile (${restoreError.message}). Please contact support.`
         : `Could not revoke this user's login, so nothing was changed: ${banError.message}` }
@@ -250,15 +301,15 @@ export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; 
   const { data: released, error: releaseError } = await admin.from('lead_assignments')
     .delete()
     .eq('assigned_to', target.id)
-    .eq('tenant_id', me.tenantId)
+    .eq('tenant_id', tenantId)
     .eq('status', 'active')
     .select('practice_id')
   const name = target.full_name || 'This user'
   if (releaseError) {
-    return { ok: true, message: `${name} was removed and can no longer sign in, but their assigned leads could not be released (${releaseError.message}). Unassign them from Manage Assignments.` }
+    return { ok: true, message: `${name} was deleted and can no longer sign in, but their assigned leads could not be released (${releaseError.message}). Unassign them from Manage Assignments.` }
   }
   const count = released?.length ?? 0
-  return { ok: true, message: `${name} was removed and can no longer sign in. ${count} assigned lead${count === 1 ? '' : 's'} returned to the pool. Their worksheets and history were kept.` }
+  return { ok: true, message: `${name} was deleted and can no longer sign in. ${count} assigned lead${count === 1 ? '' : 's'} returned to the pool. Their saved work stays on Active Call / Active Email.` }
 }
 
 // ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----

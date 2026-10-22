@@ -1,6 +1,7 @@
 'use server'
 
-// Dashboard "Worksheets & Transfers" overview: how many worksheets were saved,
+// Dashboard "Worksheets & Transfers" overview: how many worksheets were saved
+// (call worksheets AND email worksheets from Active Email — ← CHANGED),
 // how many leads were transferred (and how they were reviewed), the Call
 // Disposition breakdown, and the same numbers per agent.
 //
@@ -24,6 +25,9 @@ export type OverviewAgentRow = {
   rejected: number
   /** Worksheets per disposition for this agent (for the disposition sub-filter). */
   dispositions: Record<string, number>
+  /** ← ADDED: email leads worked (Active Email) and their responses. */
+  emails: number
+  emailResponses: Record<string, number>
 }
 
 export type WorkOverview = {
@@ -37,6 +41,9 @@ export type WorkOverview = {
   pending: number
   kpiAvailable: boolean
   dispositions: { name: string; count: number }[]
+  /** ← ADDED: email leads worked in the range (latest per lead) + responses. */
+  emailWorksheets: number
+  emailResponses: { name: string; count: number }[]
   handoff: { name: string; count: number }[]
   agents: OverviewAgentRow[]
   companies: { id: string; name: string }[]
@@ -46,7 +53,7 @@ export type WorkOverview = {
 
 const empty = (scope: WorkOverview['scope'], message?: string): WorkOverview => ({
   ok: !message, message, scope, worksheets: 0, transfers: 0, verified: 0, rejected: 0, pending: 0,
-  kpiAvailable: true, dispositions: [], handoff: [], agents: [], companies: [], people: [],
+  kpiAvailable: true, dispositions: [], emailWorksheets: 0, emailResponses: [], handoff: [], agents: [], companies: [], people: [],
 })
 
 export async function getWorkOverview(input: { from: string; to: string; companyId?: string; agentId?: string }): Promise<WorkOverview> {
@@ -91,9 +98,25 @@ export async function getWorkOverview(input: { from: string; to: string; company
     return q.order('id')
   }
 
-  let worksheets: Ws[], transfers: Tr[]
+  // ← ADDED: email worksheets saved in the range (latest per email lead,
+  // same idea as call worksheets above). Same scope + company/agent filters.
+  type Em = { practice_id: string; tenant_id: string; updated_by: string | null; response: string | null }
+  const emailQuery = () => {
+    let q = supabase.from('lead_email_worksheets').select('practice_id, tenant_id, updated_by, response')
+      .gte('updated_at', fromISO).lte('updated_at', toISO)
+    if (scope === 'own') q = q.eq('updated_by', myId)
+    if (scope === 'team') q = q.eq('tenant_id', myTenantId ?? '')
+    if (companyId) q = q.eq('tenant_id', companyId)
+    if (agentId) q = q.eq('updated_by', agentId)
+    return q.order('practice_id').order('tenant_id')
+  }
+  // If the email tables aren't installed, the dashboard still works (0 emails).
+  const emailRows = allRows<Em>(emailQuery as never).catch((e: { code?: string }) =>
+    e?.code === '42P01' || e?.code === 'PGRST205' ? [] as Em[] : Promise.reject(e))
+
+  let worksheets: Ws[], transfers: Tr[], emails: Em[] // ← CHANGED: + emails
   try {
-    [worksheets, transfers] = await Promise.all([allRows<Ws>(worksheetQuery as never), allRows<Tr>(transferQuery as never)])
+    [worksheets, transfers, emails] = await Promise.all([allRows<Ws>(worksheetQuery as never), allRows<Tr>(transferQuery as never), emailRows])
   } catch (error) {
     return empty(scope, error instanceof Error ? error.message : 'Could not load the overview.')
   }
@@ -113,8 +136,9 @@ export async function getWorkOverview(input: { from: string; to: string; company
   }
 
   // ---- names ----
-  const userIds = Array.from(new Set([...worksheets.map((w) => w.updated_by), ...transfers.map((t) => t.from_user_id)].filter(Boolean))) as string[]
-  const tenantIds = Array.from(new Set([...worksheets.map((w) => w.tenant_id), ...transfers.map((t) => t.tenant_id)].filter(Boolean)))
+  // ← CHANGED: email agents are named too
+  const userIds = Array.from(new Set([...worksheets.map((w) => w.updated_by), ...transfers.map((t) => t.from_user_id), ...emails.map((e) => e.updated_by)].filter(Boolean))) as string[]
+  const tenantIds = Array.from(new Set([...worksheets.map((w) => w.tenant_id), ...transfers.map((t) => t.tenant_id), ...emails.map((e) => e.tenant_id)].filter(Boolean)))
   const names = new Map<string, string>()
   const userTenant = new Map<string, string | null>()
   for (let i = 0; i < userIds.length; i += 300) {
@@ -136,7 +160,8 @@ export async function getWorkOverview(input: { from: string; to: string; company
   const peopleTenant = scope === 'team' ? myTenantId : companyId || null
   let people: { id: string; name: string }[] = []
   if (scope !== 'own' && peopleTenant) {
-    const { data } = await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).order('full_name')
+    // ← CHANGED: active people only (deleted users' work still counts above)
+    const { data } = await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).eq('status', 'active').order('full_name')
     people = ((data ?? []) as { id: string; full_name: string | null }[]).map((u) => ({ id: u.id, name: u.full_name ?? 'Unknown' }))
   }
 
@@ -150,7 +175,7 @@ export async function getWorkOverview(input: { from: string; to: string; company
     if (!row) {
       const tenant = id ? userTenant.get(id) ?? null : null
       row = { id: key, name: id ? names.get(id) ?? 'Unknown' : 'Unknown', company: tenant ? tenantNames.get(tenant) ?? null : null,
-        worksheets: 0, transfers: 0, verified: 0, rejected: 0, dispositions: {} }
+        worksheets: 0, transfers: 0, verified: 0, rejected: 0, dispositions: {}, emails: 0, emailResponses: {} } // ← CHANGED
       agents.set(key, row)
     }
     return row
@@ -161,6 +186,15 @@ export async function getWorkOverview(input: { from: string; to: string; company
     const row = agentRow(w.updated_by)
     row.worksheets += 1
     row.dispositions[d] = (row.dispositions[d] ?? 0) + 1
+  }
+  // ← ADDED: email responses, overall and per agent
+  const emailResponseCounts = new Map<string, number>()
+  for (const e of emails) {
+    const r = (e.response ?? '').trim() || 'No response'
+    emailResponseCounts.set(r, (emailResponseCounts.get(r) ?? 0) + 1)
+    const row = agentRow(e.updated_by)
+    row.emails += 1
+    row.emailResponses[r] = (row.emailResponses[r] ?? 0) + 1
   }
   let verified = 0, rejected = 0
   for (const t of transfers) {
@@ -179,7 +213,9 @@ export async function getWorkOverview(input: { from: string; to: string; company
     worksheets: worksheets.length, transfers: transfers.length, verified, rejected,
     pending: transfers.length - verified - rejected, kpiAvailable,
     dispositions: sorted(dispositionCounts), handoff: sorted(handoffCounts),
-    agents: scope === 'own' ? [] : Array.from(agents.values()).sort((a, b) => b.worksheets + b.transfers - (a.worksheets + a.transfers) || a.name.localeCompare(b.name)),
+    emailWorksheets: emails.length, emailResponses: sorted(emailResponseCounts), // ← ADDED
+    // ← CHANGED: email work counts toward the agent's ranking too
+    agents: scope === 'own' ? [] : Array.from(agents.values()).sort((a, b) => b.worksheets + b.emails + b.transfers - (a.worksheets + a.emails + a.transfers) || a.name.localeCompare(b.name)),
     companies: Array.from(tenantNames, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
     people,
   }

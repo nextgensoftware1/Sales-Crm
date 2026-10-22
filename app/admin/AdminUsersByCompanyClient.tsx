@@ -1,22 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { roleLabel } from '../../lib/roles'
+import CompanyTeamClient, { type TeamMember } from './CompanyTeamClient' // ← CHANGED: shared table with Rename / Delete
 
-type CompanyUser = { name: string; email: string; roleKey: string; status: string }
-
-function statusBadge(status: string) {
-  const s = (status || '').toLowerCase()
-  const cls = s === 'active' ? 'badge-green' : s === 'inactive' ? 'badge-grey' : 'badge-amber'
-  return <span className={`badge ${cls}`}>{status}</span>
-}
-
+// Super Admin → Admin → Users & Teams. Pick a company on the left; its users
+// are listed on the right with Rename and Delete for Managers, Team Leads,
+// Agents and Closers (same table a Company Admin sees for their own team).
 export default function AdminUsersByCompanyClient({
   allCompanyNames,
   usersByCompany,
+  myId,
+  myLevel,
 }: {
   allCompanyNames: string[]
-  usersByCompany: Record<string, CompanyUser[]>
+  usersByCompany: Record<string, TeamMember[]> // ← CHANGED: carries id + role level
+  myId: string     // ← ADDED
+  myLevel: number  // ← ADDED
 }) {
   const [selected, setSelected] = useState(allCompanyNames[0] ?? '')
   const currentUsers = usersByCompany[selected] ?? []
@@ -58,23 +57,8 @@ export default function AdminUsersByCompanyClient({
         {currentUsers.length === 0 ? (
           <p className="subtle">No users yet.</p>
         ) : (
-          <div className="tbl-wrap">
-            <table className="tbl">
-              <thead>
-                <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr>
-              </thead>
-              <tbody>
-                {currentUsers.map((u, i) => (
-                  <tr key={i}>
-                    <td>{u.name}</td>
-                    <td>{u.email}</td>
-                    <td><strong>{roleLabel(u.roleKey)}</strong></td>
-                    <td>{statusBadge(u.status)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          // ← CHANGED: key resets an open Rename when switching company
+          <CompanyTeamClient key={selected} members={currentUsers} canRemove myId={myId} myLevel={myLevel} />
         )}
       </div>
     </div>

@@ -54,7 +54,8 @@ export default async function DashboardPage({
   const companyFilter = isSuperAdmin && isUuid(sp.company) && companies.some((c) => c.id === sp.company) ? sp.company : ''
   const peopleTenant = isSuperAdmin ? companyFilter || null : isAgentOrCloser ? null : myTenantId
   const { data: peopleRows } = peopleTenant
-    ? await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).order('full_name')
+    // ← CHANGED: deleted (suspended) users are not offered in the Agent dropdown
+    ? await supabase.from('users').select('id, full_name').eq('tenant_id', peopleTenant).eq('status', 'active').order('full_name')
     : { data: null }
   const people = ((peopleRows ?? []) as { id: string; full_name: string | null }[]).map((u) => ({ id: u.id, name: u.full_name ?? 'Unknown' }))
   const agentFilter = isUuid(sp.agent) && people.some((p) => p.id === sp.agent) ? sp.agent : ''
@@ -84,6 +85,16 @@ export default async function DashboardPage({
     q = scope(q)
     return q.order('created_at').order('practice_id').order('agent_id').range(from, to)
   }).then((data) => ({ data, count: data.length }))
+
+  // ← ADDED: every email save (Active Email) in the range — lead_email_activity
+  // keeps one row per save, like lead_activity does for calls. Same scope and
+  // Company / Agent filters. Missing table (email SQL not run) → 0 emails.
+  const emailActQ = readAllPages<{ response: string | null }>((from, to, withCount) => {
+    let q = supabase.from('lead_email_activity').select('response', withCount ? { count: 'exact' } : undefined)
+      .gte('created_at', fromISO).lte('created_at', toISO)
+    q = scope(q)
+    return q.order('created_at').order('id').range(from, to)
+  }).catch((e: { code?: string }) => (['42P01', 'PGRST205'].includes(e?.code ?? '') ? [] : Promise.reject(e)))
 
   const transQ = scope(supabase.from('lead_transfers').select('id', { count: 'exact', head: true })
     .gte('created_at', fromISO).lte('created_at', toISO), 'from_user_id')
@@ -124,7 +135,7 @@ export default async function DashboardPage({
     .catch((e) => (missingColumn(e) ? creditsIn(false) : Promise.reject(e)))
     .catch(() => null)   // KPI not set up yet → shown as "not set up", never breaks the page
 
-  const [actRes, transRes, sales, clientRes, credits] = await Promise.all([actQ, transQ, salesQ, clientQ, creditsQ])
+  const [actRes, transRes, sales, clientRes, credits, emailActs] = await Promise.all([actQ, transQ, salesQ, clientQ, creditsQ, emailActQ]) // ← CHANGED: + emailActs
 
   const activities = actRes.data
   const activityCount = actRes.count
@@ -151,6 +162,13 @@ export default async function DashboardPage({
   for (const a of (activities ?? []) as any[]) {
     const d = a.disposition ?? 'none'
     dispoCounts[d] = (dispoCounts[d] ?? 0) + 1
+  }
+
+  // ← ADDED: email responses in the range (shown in the Disposition Breakdown)
+  const emailResponseCounts: Record<string, number> = {}
+  for (const e of emailActs ?? []) {
+    const r = (e.response ?? '').trim() || 'No response'
+    emailResponseCounts[r] = (emailResponseCounts[r] ?? 0) + 1
   }
 
   const saleCount = sales?.length ?? 0
@@ -186,6 +204,8 @@ export default async function DashboardPage({
       userName={(me as any)?.full_name ?? 'User'}
       roleLabel={roleLabel}
       activityCount={activityCount ?? 0}
+      emailActivityCount={emailActs?.length ?? 0}
+      emailResponseCounts={emailResponseCounts}
       transferCount={transferCount ?? 0}
       saleCount={saleCount}
       totalValue={totalValue}
