@@ -808,9 +808,10 @@ function referenceFilter(practices, f, { isSuperAdmin, prioritySet, newLeadSet, 
     if (catTab === 'Credentialing' && !p.npiFound) return false
     if (catTab === 'Credentialing') {
       if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
-      if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
       if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
     }
+    // Intentional change: NPPES Last Updated applies in every category (Refine Leads).
+    if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
     if (dispositionFilter && p.status !== dispositionFilter) return false
     for (const key of activeSignals) { const sig = SIGNALS.find((s) => s.key === key); if (sig && !sig.test(p)) return false }
     if (sourceTab !== 'All') { const src = (p.source ?? '').toLowerCase(); const isAllocated = src.includes('alloc')
@@ -869,6 +870,35 @@ test('shared lead filter matches the original browser filter for 3,000 random fi
     const expected = referenceFilter(leads, f, ctx).map(p => p.practiceCode)
     assert.deepEqual(lf.filterLeads(leads, lf.sanitizeLeadFilters(f), ctx).map(p => p.practiceCode), expected, JSON.stringify(f))
   }
+})
+
+test('NPPES Last Updated: any common date format is understood', () => {
+  const { toIsoCalendarDate } = loadTs('lib/lead-filters.ts')
+  for (const [input, expected] of [
+    ['2024-05-12', '2024-05-12'], ['2024-05-12T10:30:00Z', '2024-05-12'], ['2024/5/2', '2024-05-02'],
+    ['5/12/2024', '2024-05-12'], ['05-12-2024', '2024-05-12'], ['12.31.2023', '2023-12-31'],
+    ['45424', '2024-05-12'],                       // Excel day number
+    ['  2024-05-12  ', '2024-05-12'],
+    ['2024-02-30', ''], ['13/01/2024', ''], ['n/a', ''], ['', ''], [null, ''], ['123', ''],
+  ]) assert.equal(toIsoCalendarDate(input), expected, String(input))
+})
+
+test('NPPES Last Updated: filters in every category, inclusive range, blanks excluded', () => {
+  const lf = loadTs('lib/lead-filters.ts')
+  const leads = [
+    { practiceCode: 'A', name: 'A', lastUpdated: '2024-05-12' },
+    { practiceCode: 'B', name: 'B', lastUpdated: '6/30/2025' },     // Excel-style
+    { practiceCode: 'C', name: 'C', lastUpdated: '2023-01-01' },
+    { practiceCode: 'D', name: 'D', lastUpdated: null },
+    { practiceCode: 'E', name: 'E', lastUpdated: 'unknown' },
+  ]
+  const ctx = { isSuperAdmin: false, prioritySet: new Set(), newLeadSet: new Set(), workedLeadSet: new Set() }
+  const run = (f) => lf.filterLeads(leads, lf.sanitizeLeadFilters(f), ctx).map(p => p.practiceCode)
+  assert.deepEqual(run({}), ['A', 'B', 'C', 'D', 'E'])                                  // no filter: everyone
+  assert.deepEqual(run({ lastUpdatedFrom: '2024-05-12', lastUpdatedTo: '2025-06-30' }), ['A', 'B'])   // both ends included
+  assert.deepEqual(run({ lastUpdatedFrom: '2025-01-01' }), ['B'])
+  assert.deepEqual(run({ lastUpdatedTo: '2023-12-31' }), ['C'])
+  assert.deepEqual(run({ lastUpdatedFrom: '2024-01-01', catTab: 'All Categories' }), ['A', 'B'])     // not only Credentialing
 })
 
 test('shared lead overview matches the original summary and dropdown logic', () => {
@@ -1038,7 +1068,8 @@ test('lead snapshots stay bounded: newest 3 per user', () => {
 // ---------------------------------------------------------------------------
 // Company Admin: remove a team member (soft delete).
 // ---------------------------------------------------------------------------
-function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banError = null, releaseError = null, released = [{ practice_id: 'p1' }, { practice_id: 'p2' }] } = {}) {
+function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banError = null, releaseError = null, statusError = null,
+  assigned = ['p1', 'p2', 'p3', 'p4'], workedCalls = ['p3'], workedEmails = ['p4'] } = {}) {
   const log = []
   const table = (name) => {
     const q = { op: 'select', filters: {}, values: null }
@@ -1047,11 +1078,17 @@ function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banE
       update(v) { q.op = 'update'; q.values = v; return api },
       delete() { q.op = 'delete'; return api },
       eq(k, v) { q.filters[k] = v; return api },
+      in(k, v) { q.filters[k] = v; return api },
       maybeSingle() { log.push({ table: name, ...q }); return Promise.resolve({ data: target, error: null }) },
       then(res, rej) {
         log.push({ table: name, ...q })
-        const out = name === 'lead_assignments' && q.op === 'delete'
-          ? { data: releaseError ? null : released, error: releaseError } : { data: null, error: null }
+        const pick = (ids) => ids.filter(id => !q.filters.practice_id || q.filters.practice_id.includes(id)).map(practice_id => ({ practice_id }))
+        let out = { data: null, error: null }
+        if (name === 'users' && q.op === 'update' && statusError && q.values.status !== 'active' && !q.values.full_name) out = { data: null, error: statusError }
+        else if (name === 'lead_assignments' && q.op === 'select') out = { data: assigned.map(practice_id => ({ practice_id })), error: null }
+        else if (name === 'lead_assignments' && q.op === 'delete') out = releaseError ? { data: null, error: releaseError } : { data: pick(assigned), error: null }
+        else if (name === 'lead_worksheets') out = { data: pick(workedCalls), error: null }
+        else if (name === 'lead_email_worksheets') out = { data: pick(workedEmails), error: null }
         return Promise.resolve(out).then(res, rej)
       },
     }
@@ -1059,7 +1096,7 @@ function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banE
   }
   const bans = []
   const admin = { from: table, auth: { admin: { updateUserById: async (id, attrs) => { bans.push({ id, attrs }); return { error: banError } } } } }
-  const { removeCompanyUser, renameCompanyUser } = loadTs('app/admin-manage-actions.ts', {
+  const actions = loadTs('app/admin-manage-actions.ts', {
     '../lib/supabase-server': {
       createSupabaseServer: async () => ({}),
       getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
@@ -1067,23 +1104,28 @@ function removeUserHarness({ meRole = 'company_admin', meLevel = 2, target, banE
     },
     '../lib/supabase-admin': { createSupabaseAdmin: () => admin },
   })
-  return { removeCompanyUser, renameCompanyUser, log, bans }
+  const { removeCompanyUser, renameCompanyUser, suspendCompanyUser, activateCompanyUser } = actions
+  return { removeCompanyUser, renameCompanyUser, suspendCompanyUser, activateCompanyUser, log, bans }
 }
 const agent = (over = {}) => ({ id: 'u9', auth_id: 'auth-u9', tenant_id: 'T1', status: 'active', full_name: 'Acme Agent', roles: { key: 'agent', level: 5 }, ...over })
 
-test('remove user: company admin removes an agent safely', async () => {
-  const h = removeUserHarness({ target: agent() })
+test('remove user: company admin deletes an agent; only never-worked leads go back to the pool', async () => {
+  const h = removeUserHarness({ target: agent() })   // p1, p2 unworked · p3 call worksheet · p4 email worksheet
   const res = await h.removeCompanyUser('u9')
   assert.equal(res.ok, true)
-  assert.match(res.message, /Acme Agent was deleted.*2 assigned leads returned to the pool/)
+  assert.match(res.message, /Acme Agent was deleted.*2 leads not yet worked returned.*2 leads already worked stay/)
   const writes = h.log.filter(e => e.op !== 'select')
   assert.deepEqual(writes.map(w => [w.table, w.op]), [['users', 'update'], ['lead_assignments', 'delete']])
-  assert.deepEqual(writes[0].values, { status: 'suspended' })
+  assert.deepEqual(writes[0].values, { status: 'deleted' })
   assert.deepEqual(writes[0].filters, { id: 'u9', tenant_id: 'T1', status: 'active' })
-  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'T1', status: 'active' })   // only their ACTIVE leads, only in my company
+  // only their ACTIVE, NEVER-WORKED leads, only in that company
+  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'T1', status: 'active', practice_id: ['p1', 'p2'] })
+  // "worked" is checked in that company, on both call and email worksheets
+  assert.deepEqual(h.log.filter(e => ['lead_worksheets', 'lead_email_worksheets'].includes(e.table)).map(e => [e.table, e.filters.tenant_id]),
+    [['lead_worksheets', 'T1'], ['lead_email_worksheets', 'T1']])
   assert.deepEqual(h.bans, [{ id: 'auth-u9', attrs: { ban_duration: '876000h' } }])
-  // History tables are never touched.
-  assert.equal(h.log.some(e => ['lead_worksheets', 'lead_activity', 'sales', 'lead_transfers'].includes(e.table)), false)
+  // History tables are only READ (to see what was worked) — never changed.
+  assert.equal(h.log.some(e => e.op !== 'select' && ['lead_worksheets', 'lead_email_worksheets', 'lead_activity', 'sales', 'lead_transfers'].includes(e.table)), false)
 })
 
 for (const [label, opts, id, pattern] of [
@@ -1093,7 +1135,7 @@ for (const [label, opts, id, pattern] of [
   ['cannot remove a super admin', { target: agent({ roles: { key: 'super_admin', level: 1 } }) }, 'u9', /can be deleted here/],
   ['cannot remove an equal role (another company admin)', { target: agent({ roles: { key: 'company_admin', level: 2 } }) }, 'u9', /can be deleted here/],
   ['super admin cannot remove a company admin', { meRole: 'super_admin', meLevel: 1, target: agent({ tenant_id: 'OTHER', roles: { key: 'company_admin', level: 2 } }) }, 'u9', /can be deleted here/],
-  ['cannot remove an already removed user', { target: agent({ status: 'suspended' }) }, 'u9', /already been deleted/],
+  ['cannot remove an already deleted user', { target: agent({ status: 'deleted' }) }, 'u9', /already been deleted/],
   ['unknown user', { target: null }, 'u9', /no longer exists/],
 ]) {
   test(`remove user: ${label}`, async () => {
@@ -1111,8 +1153,84 @@ test('remove user: super admin deletes an agent in any company, scoped to that c
   assert.equal(res.ok, true)
   const writes = h.log.filter(e => e.op !== 'select')
   assert.deepEqual(writes[0].filters, { id: 'u9', tenant_id: 'OTHER', status: 'active' })
-  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'OTHER', status: 'active' })
+  assert.deepEqual(writes[1].filters, { assigned_to: 'u9', tenant_id: 'OTHER', status: 'active', practice_id: ['p1', 'p2'] })
   assert.equal(h.bans.length, 1)
+})
+
+test('remove user: a suspended user can be deleted', async () => {
+  const h = removeUserHarness({ target: agent({ status: 'suspended' }) })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, true)
+  const update = h.log.find(e => e.table === 'users' && e.op === 'update')
+  assert.deepEqual([update.values, update.filters.status], [{ status: 'deleted' }, 'suspended'])
+})
+
+test('remove user: when every lead was worked, nothing is released', async () => {
+  const h = removeUserHarness({ target: agent(), assigned: ['p3', 'p4'] })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, true); assert.match(res.message, /0 leads not yet worked.*2 leads already worked/)
+  assert.equal(h.log.some(e => e.table === 'lead_assignments' && e.op === 'delete'), false)
+})
+
+test('remove user: database without the "deleted" status gives a clear fix', async () => {
+  const h = removeUserHarness({ target: agent(), statusError: { code: '23514', message: 'check violation' } })
+  const res = await h.removeCompanyUser('u9')
+  assert.equal(res.ok, false); assert.match(res.message, /user-status-deleted\.sql/)
+  assert.equal(h.bans.length, 0)
+})
+
+test('suspend user: login revoked, status suspended, only never-worked leads released', async () => {
+  const h = removeUserHarness({ target: agent() })
+  const res = await h.suspendCompanyUser('u9')
+  assert.equal(res.ok, true); assert.match(res.message, /was suspended.*2 leads not yet worked/)
+  const writes = h.log.filter(e => e.op !== 'select')
+  assert.deepEqual(writes[0].values, { status: 'suspended' })
+  assert.deepEqual(writes[1].filters.practice_id, ['p1', 'p2'])
+  assert.deepEqual(h.bans, [{ id: 'auth-u9', attrs: { ban_duration: '876000h' } }])
+})
+
+for (const [label, opts, pattern] of [
+  ['already suspended', { target: agent({ status: 'suspended' }) }, /already suspended/],
+  ['deleted user', { target: agent({ status: 'deleted' }) }, /already been deleted/],
+  ['manager cannot suspend', { meRole: 'manager', meLevel: 3, target: agent() }, /Only Super Admin or a Company Admin/],
+  ['nobody suspends a company admin here', { meRole: 'super_admin', meLevel: 1, target: agent({ roles: { key: 'company_admin', level: 2 } }) }, /can be suspended here/],
+]) {
+  test(`suspend user: refused — ${label}`, async () => {
+    const h = removeUserHarness(opts)
+    const res = await h.suspendCompanyUser('u9')
+    assert.equal(res.ok, false); assert.match(res.message, pattern)
+    assert.equal(h.log.some(e => e.op !== 'select'), false); assert.equal(h.bans.length, 0)
+  })
+}
+
+test('activate user: login restored first, then status active', async () => {
+  const h = removeUserHarness({ target: agent({ status: 'suspended', tenants: { status: 'active' } }) })
+  const res = await h.activateCompanyUser('u9')
+  assert.equal(res.ok, true); assert.match(res.message, /active again/)
+  assert.deepEqual(h.bans, [{ id: 'auth-u9', attrs: { ban_duration: 'none' } }])
+  const update = h.log.find(e => e.op === 'update')
+  assert.deepEqual([update.values, update.filters], [{ status: 'active' }, { id: 'u9', tenant_id: 'T1', status: 'suspended' }])
+  assert.equal(h.log.some(e => e.table === 'lead_assignments'), false)   // leads are not touched
+})
+
+for (const [label, opts, pattern] of [
+  ['already active', { target: agent() }, /already active/],
+  ['deleted user stays deleted', { target: agent({ status: 'deleted' }) }, /Only a suspended user/],
+  ['company is suspended', { target: agent({ status: 'suspended', tenants: { status: 'suspended' } }) }, /reactivate the company first/],
+  ['other company (company admin)', { target: agent({ status: 'suspended', tenant_id: 'OTHER' }) }, /own company/],
+]) {
+  test(`activate user: refused — ${label}`, async () => {
+    const h = removeUserHarness(opts)
+    const res = await h.activateCompanyUser('u9')
+    assert.equal(res.ok, false); assert.match(res.message, pattern)
+    assert.equal(h.log.some(e => e.op !== 'select'), false); assert.equal(h.bans.length, 0)
+  })
+}
+
+test('rename user: a deleted user cannot be renamed', async () => {
+  const h = removeUserHarness({ target: agent({ status: 'deleted' }) })
+  const res = await h.renameCompanyUser('u9', 'New')
+  assert.equal(res.ok, false); assert.match(res.message, /has been deleted/)
 })
 
 test('rename user: company admin renames an agent; name is tidied and KPI name copies follow', async () => {
@@ -1155,7 +1273,7 @@ test('remove user: if login cannot be revoked, the profile is restored and no le
   const res = await h.removeCompanyUser('u9')
   assert.equal(res.ok, false); assert.match(res.message, /nothing was changed/)
   const writes = h.log.filter(e => e.op !== 'select')
-  assert.deepEqual(writes.map(w => [w.table, w.op, w.values]), [['users', 'update', { status: 'suspended' }], ['users', 'update', { status: 'active' }]])
+  assert.deepEqual(writes.map(w => [w.table, w.op, w.values]), [['users', 'update', { status: 'deleted' }], ['users', 'update', { status: 'active' }]])
 })
 
 test('remove user: if releasing leads fails, the user is still removed and the admin is told', async () => {

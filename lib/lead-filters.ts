@@ -55,11 +55,36 @@ export const ZONE_BY_STATE: Record<string, ZoneKey> = {
   AK: 'Other', HI: 'Other',
 }
 
-// Compare the stored calendar date directly to avoid timezone shifts.
+// ← ADDED: a stored date as YYYY-MM-DD, whatever format the CSV used.
+// NPPES gives 2024-05-12, but a CSV saved from Excel often has 5/12/2024,
+// 05-12-2024 or even an Excel day number (45424). Unknown text → ''.
+export function toIsoCalendarDate(value: string | null | undefined): string {
+  const v = (value ?? '').trim()
+  if (!v) return ''
+  const valid = (y: number, m: number, d: number) => {
+    if (m < 1 || m > 12 || d < 1 || d > 31) return ''
+    const date = new Date(Date.UTC(y, m - 1, d))
+    if (date.getUTCMonth() !== m - 1) return '' // e.g. 31 Feb
+    return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  }
+  let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(v)            // 2024-05-12, 2024/5/12, 2024-05-12T…
+  if (m) return valid(+m[1], +m[2], +m[3])
+  m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?!\d)/.exec(v)          // 5/12/2024, 05-12-2024 (US month first)
+  if (m) return valid(+m[3], +m[1], +m[2])
+  if (/^\d{5}(\.\d+)?$/.test(v)) {                                  // Excel day number
+    const serial = Math.floor(Number(v))
+    if (serial < 20000 || serial > 80000) return ''
+    const date = new Date(Date.UTC(1899, 11, 30) + serial * 86400000)
+    return valid(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate())
+  }
+  return ''
+}
+
+// Compare calendar dates directly (no time zones). ← CHANGED: any date format
 export function isWithinDateRange(value: string | null | undefined, from: string, to: string): boolean {
   if (!from && !to) return true
-  if (!value) return false
-  const date = value.trim().slice(0, 10)
+  const date = toIsoCalendarDate(value)
+  if (!date) return false
   return (!from || date >= from) && (!to || date <= to)
 }
 
@@ -268,9 +293,11 @@ export function filterLeads<T extends LeadRow>(
     // is selected, since these fields only mean anything for NPPES data.
     if (catTab === 'Credentialing') {
       if (enumTypeFilter && (p.entityType ?? '') !== enumTypeFilter) return false
-      if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
       if (!isWithinDateRange(p.enumerationDate, enumDateFrom, enumDateTo)) return false
     }
+    // ← CHANGED: NPPES Last Updated now lives in Refine Leads and works in
+    // every category (it used to apply only on the Credentialing tab).
+    if (!isWithinDateRange(p.lastUpdated, lastUpdatedFrom, lastUpdatedTo)) return false
     if (dispositionFilter && p.status !== dispositionFilter) return false
     // ← ADDED: NPI type (from NPPES_EnumerationType). Leads without a known
     // type don't match a chosen type.

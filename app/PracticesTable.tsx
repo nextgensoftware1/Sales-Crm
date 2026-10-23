@@ -678,13 +678,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                 <option value="NPI-2">NPI-2</option>
               </select>
             </label>
-            <label className="filter-control"><span>NPPES Last Updated</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input aria-label="NPPES Last Updated from" type="date" value={lastUpdatedFrom} onChange={(e) => setLastUpdatedFrom(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
-                <span style={{ color: C.faint, fontSize: 11, textTransform: 'none' }}>to</span>
-                <input aria-label="NPPES Last Updated to" type="date" value={lastUpdatedTo} onChange={(e) => setLastUpdatedTo(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
-              </div>
-            </label>
+            {/* ← CHANGED: NPPES Last Updated moved to Refine Leads (works for every category) */}
             <label className="filter-control"><span>NPPES Enumeration Date</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input aria-label="NPPES Enumeration Date from" type="date" value={enumDateFrom} onChange={(e) => setEnumDateFrom(e.target.value)} style={{ ...input, width: 145, minWidth: 0 }} />
@@ -738,6 +732,18 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
               style={{ ...input, minWidth: 145 }}
             />
           </label>}
+          {/* ← ADDED: NPPES Last Updated (from the NPPES_LastUpdated column), any category */}
+          <div className="filter-control"><span>NPPES Last Updated</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input aria-label="NPPES Last Updated from" type="date" value={lastUpdatedFrom}
+                max={lastUpdatedTo || undefined}
+                onChange={(e) => setLastUpdatedFrom(e.target.value)} style={{ ...input, minWidth: 0, flex: 1 }} />
+              <span style={{ color: C.faint, fontSize: 11, textTransform: 'none' }}>to</span>
+              <input aria-label="NPPES Last Updated to" type="date" value={lastUpdatedTo}
+                min={lastUpdatedFrom || undefined}
+                onChange={(e) => setLastUpdatedTo(e.target.value)} style={{ ...input, minWidth: 0, flex: 1 }} />
+            </div>
+          </div>
         </div>
 
         <details className="advanced-lead-tools">
@@ -776,7 +782,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
             {companyFilter && <button onClick={() => setCompanyFilter('')}>{companyFilter === '__unassigned__' ? 'Not assigned' : companyFilterOptions.find((c) => c.id === companyFilter)?.name ?? 'Company'} ×</button>}
             {assignedDateFilter && <button onClick={() => setAssignedDateFilter('')}>Assigned on: {formatCalendarDate(assignedDateFilter)} ×</button>}
             {enumTypeFilter && <button onClick={() => setEnumTypeFilter('')}>Enumeration: {enumTypeFilter} ×</button>}
-            {(lastUpdatedFrom || lastUpdatedTo) && <button onClick={() => { setLastUpdatedFrom(''); setLastUpdatedTo('') }}>Last updated: {lastUpdatedFrom || 'Any'} to {lastUpdatedTo || 'Any'} ×</button>}
+            {(lastUpdatedFrom || lastUpdatedTo) && <button onClick={() => { setLastUpdatedFrom(''); setLastUpdatedTo('') }}>NPPES last updated: {lastUpdatedFrom ? formatCalendarDate(lastUpdatedFrom) : 'Any'} to {lastUpdatedTo ? formatCalendarDate(lastUpdatedTo) : 'Any'} ×</button>}{/* ← CHANGED */}
             {(enumDateFrom || enumDateTo) && <button onClick={() => { setEnumDateFrom(''); setEnumDateTo('') }}>Enumeration date: {enumDateFrom || 'Any'} to {enumDateTo || 'Any'} ×</button>}
             {poolTab !== 'All Leads' && <button onClick={() => setPoolTab('All Leads')}>{poolTab} ×</button>}
             {sourceTab !== 'All' && <button onClick={() => setSourceTab('All')}>{sourceTab} source ×</button>}
