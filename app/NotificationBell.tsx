@@ -2,30 +2,63 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getActiveReminders, type Reminder } from './reminders-actions' // ← CHANGED: active-only (smaller) list
+import { getBellReminders, type Reminder } from './reminders-actions' // ← CHANGED: once-a-day, windowed list
 import { classifyReminderAttention, getReminderNotificationSlot } from '../lib/reminder-utils'
 import { leadHref } from '../lib/lead-return'
 
-// Keep the bell quiet after its first successful load. A full browser reload
-// starts a fresh cache, while route changes reuse this in-memory result.
-let reminderCache: { reminders: Reminder[] } | null = null
+// ← CHANGED (free-plan egress saver): the bell now asks the database ONCE A
+// DAY instead of every 5 minutes. The list (reminders due from 24h ago to 24h
+// ahead) is kept in this browser's localStorage, so page changes and reloads
+// reuse it. It reloads early only when a reminder is saved or marked done
+// (the 'reminders:changed' event). Countdown pop-ups run off the browser
+// clock and need no database calls. The saved copy is cleared on sign-in and
+// sign-out (see lib/reset-saved-filters.ts).
+const STORAGE_KEY = 'hbs-reminder-bell'
+const DAY_MS = 24 * 60 * 60 * 1000
+const RETRY_AFTER_FAIL_MS = 30 * 60 * 1000 // don't hammer the DB if a load fails
+
+type StoredReminders = { savedAt: number; reminders: Reminder[] }
+
+let reminderCache: StoredReminders | null = null
 let reminderRequest: Promise<Reminder[] | null> | null = null
+let lastFailedAt = 0
+
+function readStored(): StoredReminders | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw) as StoredReminders
+    if (typeof v?.savedAt !== 'number' || !Array.isArray(v.reminders)) return null
+    return v
+  } catch { return null }
+}
 
 function primeReminderCache(reminders: Reminder[]) {
-  reminderCache = { reminders }
+  reminderCache = { savedAt: Date.now(), reminders }
+  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reminderCache)) } catch { /* storage full/blocked: memory copy still works */ }
+}
+
+function isFresh(c: StoredReminders | null) {
+  return !!c && Date.now() - c.savedAt < DAY_MS
 }
 
 async function getCachedReminders(force = false): Promise<Reminder[] | null> {
-  if (!force && reminderCache) return reminderCache.reminders
+  if (!force) {
+    if (!reminderCache) reminderCache = readStored()
+    if (isFresh(reminderCache)) return reminderCache!.reminders
+    if (Date.now() - lastFailedAt < RETRY_AFTER_FAIL_MS) return reminderCache?.reminders ?? null
+  }
   if (reminderRequest) return reminderRequest
 
-  reminderRequest = getActiveReminders() // ← CHANGED
+  const now = Date.now()
+  reminderRequest = getBellReminders(new Date(now - DAY_MS).toISOString(), new Date(now + DAY_MS).toISOString())
     .then((res) => {
-      if (!res.ok) return null
+      if (!res.ok) { lastFailedAt = Date.now(); return reminderCache?.reminders ?? null }
       const reminders = res.reminders ?? []
       primeReminderCache(reminders)
       return reminders
     })
+    .catch(() => { lastFailedAt = Date.now(); return reminderCache?.reminders ?? null })
     .finally(() => { reminderRequest = null })
 
   return reminderRequest
@@ -63,16 +96,18 @@ export default function NotificationBell({ initialReminders }: { initialReminder
     if (initialReminders !== undefined) primeReminderCache(initialReminders)
   }, [initialReminders])
 
-  // Load without waiting for the bell to be clicked, then refresh at a low
-  // frequency so newly scheduled callbacks can notify an already-open app.
+  // ← CHANGED: load once (from the saved daily copy when it exists), no
+  // 5-minute polling. The 30-second tick only moves the local clock, and
+  // fetches again only if the saved copy is over a day old (tab left open).
   useEffect(() => {
     if (initialReminders === undefined) void load()
-    const poll = window.setInterval(() => { void load(true) }, 5 * 60 * 1000)
-    const tick = window.setInterval(() => setClock(Date.now()), 30 * 1000)
+    const tick = window.setInterval(() => {
+      setClock(Date.now())
+      if (!isFresh(reminderCache)) void load()
+    }, 30 * 1000)
     const refresh = () => { void load(true) }
     window.addEventListener('reminders:changed', refresh)
     return () => {
-      window.clearInterval(poll)
       window.clearInterval(tick)
       window.removeEventListener('reminders:changed', refresh)
     }

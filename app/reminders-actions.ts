@@ -65,7 +65,20 @@ export async function getActiveReminders(): Promise<{
   return readReminders(true)
 }
 
-async function readReminders(activeOnly: boolean): Promise<{ // ← CHANGED: shared by both
+// ← ADDED (free-plan egress saver): the notification bell's once-a-day load.
+// Only active reminders due inside one time window (the bell asks for
+// "24 hours ago → 24 hours ahead"), capped at 100 rows. Older overdue and
+// later reminders are still on the /reminders page.
+export async function getBellReminders(fromISO: string, toISO: string): Promise<{
+  ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
+}> {
+  const from = new Date(fromISO)
+  const to = new Date(toISO)
+  if (isNaN(+from) || isNaN(+to) || +to <= +from) return { ok: false, message: 'Invalid reminder window.' }
+  return readReminders(true, { from: from.toISOString(), to: to.toISOString(), limit: 100 })
+}
+
+async function readReminders(activeOnly: boolean, window?: { from: string; to: string; limit: number }): Promise<{ // ← CHANGED: shared by all three
   ok: boolean; message?: string; reminders?: Reminder[]; scope?: 'all' | 'company' | 'mine'
 }> {
   const supabase = await createSupabaseServer()
@@ -84,6 +97,7 @@ async function readReminders(activeOnly: boolean): Promise<{ // ← CHANGED: sha
     if (scope === 'company') q = q.eq('tenant_id', me.tenantId)
     else if (scope === 'mine') q = q.eq('agent_id', me.id)
     if (activeOnly) q = q.or('done.is.null,done.eq.false') // ← ADDED
+    if (window) q = q.gte('remind_at', window.from).lte('remind_at', window.to).limit(window.limit) // ← ADDED: bell window
     return q
   }
 

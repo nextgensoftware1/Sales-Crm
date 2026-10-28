@@ -4,7 +4,9 @@
 // signing out and again after signing in (which also covers sessions that
 // ended without pressing Sign Out). Preferences such as theme, sidebar and
 // panel open/closed are kept — they are not filters.
-const SAVED_FILTER_PREFIXES = ['lead-management-filters']
+// 'hbs-reminder-bell' = the bell's once-a-day reminder copy; cleared so the
+// next person signing in on this computer never sees the previous user's list.
+const SAVED_FILTER_PREFIXES = ['lead-management-filters', 'hbs-reminder-bell'] // ← CHANGED
 
 export function clearSavedFilters() {
   try {

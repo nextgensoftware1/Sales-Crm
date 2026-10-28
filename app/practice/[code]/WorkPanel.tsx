@@ -65,6 +65,7 @@ export default function WorkPanel({ practiceCode }: { practiceCode: string }) {
     if (res.ok) {
       setRemindAt('')
       setRemindNote('')
+      window.dispatchEvent(new CustomEvent('reminders:changed')) // ← ADDED: bell reloads once
       router.refresh()
     }
   }

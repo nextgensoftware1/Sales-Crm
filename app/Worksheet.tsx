@@ -123,6 +123,8 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
     setMsg(res.message)
     if (res.ok) {
       setSavedSnapshot(formSnapshot)
+      // ← ADDED: a saved callback creates a reminder, so tell the bell to reload once.
+      if (callbackAt) window.dispatchEvent(new CustomEvent('reminders:changed'))
       router.refresh()
     }
   }
