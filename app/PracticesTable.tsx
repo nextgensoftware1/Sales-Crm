@@ -562,6 +562,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
               { key: 'All Leads', label: 'All', count: summaryCounts.total, icon: Inbox },
               { key: 'New Leads', label: 'New', count: overview.newCount, icon: Sparkles },
               { key: 'Worked Leads', label: 'Worked', count: overview.workedCount, icon: TimerReset },
+              { key: 'Not Worked Leads', label: 'Not worked', count: overview.notWorkedCount, icon: TimerReset },
             ] as const).map((item) => {
               const Icon = item.icon
               const active = poolTab === item.key

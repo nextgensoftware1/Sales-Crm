@@ -317,9 +317,10 @@ export function filterLeads<T extends LeadRow>(
       if (sourceTab === 'Uploaded' && isAllocated) return false
     }
 
-    // Pool tab filter (All Leads / New Leads / Worked Leads)
+    // Pool tab filter (All Leads / New Leads / Worked Leads / Not Worked Leads)
     if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
     if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
+    if (poolTab === 'Not Worked Leads' && workedLeadSet.has(p.practiceCode)) return false
 
     // "My assigned" view: only leads assigned to me (priority).
     if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
@@ -353,6 +354,7 @@ export type LeadOverview = {
   leadCompanies: { id: string; name: string }[]
   newCount: number
   workedCount: number
+  notWorkedCount: number
 }
 
 /** Dropdown options and summary-card numbers (unchanged from PracticesTable). */
@@ -395,5 +397,6 @@ export function leadOverview(
     leadCompanies: Array.from(leadCompanies, ([id, name]) => ({ id, name })),
     newCount: newLeadSet.size,
     workedCount: workedLeadSet.size,
+    notWorkedCount: practices.filter((practice) => !workedLeadSet.has(practice.practiceCode)).length,
   }
 }
