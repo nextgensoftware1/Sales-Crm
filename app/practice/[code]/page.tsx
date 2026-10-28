@@ -11,7 +11,8 @@ import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Em
 import { leadReturn } from '../../../lib/lead-return'
 import { npiLabel } from '../../../lib/npi-label'
 import { practiceLocations } from '../../../lib/practice-locations' // ← ADDED // ← ADDED: show NPI instead of PR-
-import { getLeadNavigation, leadProfileKey } from '../../../lib/lead-snapshots'
+import { getLeadNavigation, leadProfileKey, resolveLeadNavigation } from '../../../lib/lead-snapshots'
+import { getNotWorkedLeadNavigation } from '../../../lib/lead-navigation'
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -53,13 +54,13 @@ export default async function PracticeDetail({
   searchParams,
 }: {
   params: Promise<{ code: string }>
-  searchParams: Promise<{ from?: string; company?: string; view?: string; snapshot?: string; nav?: string }>
+  searchParams: Promise<{ from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string }>
 }) {
   const { code } = await params
-  const { from, company, view, snapshot, nav } = await searchParams
+  const { from, company, view, snapshot, nav, pool, pos } = await searchParams
   // Where "Back" goes and the query kept on Previous / Next and related
   // links — one shared rule for every page that opens a lead (lib/lead-return).
-  const back = leadReturn({ from, company, view, snapshot, nav })
+  const back = leadReturn({ from, company, view, snapshot, nav, pool, pos })
   const navQuery = back.query
   // Opened from Active Email → Previous / Next move through its leads only.
   const fromEmailReport = from === 'email-reports'
@@ -317,9 +318,18 @@ export default async function PracticeDetail({
     fromEmailReport
       ? getEmailReports().then((res) => res.ok ? Array.from(new Set(res.rows.map((r) => r.practiceCode))) : null).catch(() => null)
       : from === 'leads'
-        ? Promise.resolve(snapshot && nav && myAuthUserId
-          ? getLeadNavigation(snapshot, nav, myAuthUserId, myProfileKey)
-          : null)
+        ? (async () => {
+            const cached = snapshot && nav && myAuthUserId
+              ? getLeadNavigation(snapshot, nav, myAuthUserId, myProfileKey)
+              : null
+            if (cached) return cached
+            return pool === 'not-worked' && myAuthUserId
+              ? getNotWorkedLeadNavigation(myAuthUserId)
+              : getPracticeNavigation(supabase, {
+                  role: roleKey, userId: myUserId, tenantId: myTenantId,
+                  personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined,
+                })
+          })().catch(() => null)
         : getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
           personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined })
           .catch(() => null),
@@ -342,10 +352,16 @@ export default async function PracticeDetail({
   ])
   const emailInfo = await emailInfoRead // ← ADDED (ran in parallel with the reads above)
   const codesList = navigationCodes ?? []
-  const currentIndex = codesList.indexOf(code)
+  const requestedPosition = /^\d{1,6}$/.test(pos ?? '') ? Number(pos) : 0
+  const navigation = resolveLeadNavigation(codesList, code, requestedPosition)
+  const { currentIndex, previousCode: prevCode, nextCode } = navigation
   const totalCount = codesList.length
-  const prevCode = currentIndex > 0 ? codesList[currentIndex - 1] : null
-  const nextCode = currentIndex >= 0 && currentIndex < codesList.length - 1 ? codesList[currentIndex + 1] : null
+  const navigationQueryForPosition = (position: number | null) => {
+    if (from !== 'leads' || position === null) return navQuery
+    const params = new URLSearchParams(navQuery.slice(1))
+    params.set('pos', String(position))
+    return `?${params.toString()}`
+  }
 
   const orgName: string | null = providersList
     .map((prov: any) => (prov?.org_name ?? '').toString().trim())
@@ -598,13 +614,13 @@ export default async function PracticeDetail({
               </Link>
               <div className="lead-pager">
                 {prevCode ? (
-                  <Link prefetch={false} href={`/practice/${prevCode}${navQuery}`} title="Previous Lead">
+                  <Link prefetch={false} href={`/practice/${encodeURIComponent(prevCode)}${navigationQueryForPosition(navigation.previousPosition)}`} title="Previous Lead">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
                   </Link>
                 ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg></span>}
-                <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : <>{totalCount} {fromEmailReport ? 'email leads' : 'available leads'}</>}</span>
+                <span className="lead-pager-count">{navigationCodes === null ? 'Count unavailable' : currentIndex >= 0 ? <>{currentIndex + 1} / {totalCount}</> : from === 'leads' && navigation.nextPosition !== null ? <>Next {navigation.nextPosition + 1} / {totalCount}</> : <>{totalCount} {fromEmailReport ? 'email leads' : 'available leads'}</>}</span>
                 {nextCode ? (
-                  <Link prefetch={false} href={`/practice/${nextCode}${navQuery}`} title="Next Lead">
+                  <Link prefetch={false} href={`/practice/${encodeURIComponent(nextCode)}${navigationQueryForPosition(navigation.nextPosition)}`} title="Next Lead">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
                   </Link>
                 ) : <span className="lead-pager-disabled"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg></span>}

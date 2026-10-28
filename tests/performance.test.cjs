@@ -1090,6 +1090,31 @@ test('lead snapshots stay bounded: newest 3 per user', () => {
   assert.equal(snapshots.getLeadSnapshot(ids[0], 'bounded-user'), null)
 })
 
+test('lead navigation recovers its position when working a lead removes it from the filtered list', () => {
+  const { resolveLeadNavigation } = loadTs('lib/lead-snapshots.ts')
+  assert.deepEqual(resolveLeadNavigation(['A', 'B', 'C'], 'B', 1), {
+    currentIndex: 1, position: 1, previousCode: 'A', previousPosition: 0, nextCode: 'C', nextPosition: 2,
+  })
+  assert.deepEqual(resolveLeadNavigation(['A', 'C'], 'B', 1), {
+    currentIndex: -1, position: 1, previousCode: 'A', previousPosition: 0, nextCode: 'C', nextPosition: 1,
+  })
+})
+
+test('not-worked navigation rebuilds the filtered list for the signed-in user', async () => {
+  const lf = loadTs('lib/lead-filters.ts')
+  const data = {
+    kind: 'ok', authUserId: 'auth-user', isSuperAdmin: false, myAssignedCodes: [],
+    newLeadCodes: [], workedLeadCodes: ['B'],
+    practices: ['A', 'B', 'C'].map(practiceCode => ({ practiceCode, name: practiceCode })),
+  }
+  const { getNotWorkedLeadNavigation } = loadTs('lib/lead-navigation.ts', {
+    './leads-data': { loadLeadsData: async () => data },
+    './lead-filters': lf,
+  })
+  assert.deepEqual(await getNotWorkedLeadNavigation('auth-user'), ['A', 'C'])
+  assert.equal(await getNotWorkedLeadNavigation('other-user'), null)
+})
+
 // ---------------------------------------------------------------------------
 // Company Admin: remove a team member (soft delete).
 // ---------------------------------------------------------------------------
@@ -2032,7 +2057,8 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
     [{ from: 'sold-leads' }, '/clients?tab=sold', 'Back to Sold leads', '?from=sold-leads'],
     [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
     [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
-    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001'],
+    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001', pool: 'not-worked', pos: '12' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001&pool=not-worked&pos=12'],
+    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001&pool=all&pos=0'],
     [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
     [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Active Call', '?from=worksheet-reports&company=T1&view=sheet'],
     [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page
@@ -2052,7 +2078,8 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
   }
   for (const [file, source] of Object.entries(expected)) assert.ok(read(file).includes(`leadHref(`) && read(file).includes(source), file)
   const lead = read('app/practice/[code]/page.tsx')
-  assert.match(lead, /href=\{`\/practice\/\$\{prevCode\}\$\{navQuery\}`\}/); assert.match(lead, /href=\{`\/practice\/\$\{nextCode\}\$\{navQuery\}`\}/)
+  assert.match(lead, /encodeURIComponent\(prevCode\).*navigationQueryForPosition\(navigation\.previousPosition\)/)
+  assert.match(lead, /encodeURIComponent\(nextCode\).*navigationQueryForPosition\(navigation\.nextPosition\)/)
   assert.match(lead, /linkQuery=\{navQuery\}/); assert.doesNotMatch(lead, /returnQuery/)
 })
 

@@ -105,6 +105,24 @@ export function getLeadNavigation(
   return snap.navigations.get(navigationId) ?? null
 }
 
+export function resolveLeadNavigation(codes: string[], currentCode: string, requestedPosition: number) {
+  const currentIndex = codes.indexOf(currentCode)
+  const position = currentIndex >= 0
+    ? currentIndex
+    : Math.min(codes.length, Math.max(0, Math.floor(requestedPosition) || 0))
+  const previousIndex = currentIndex >= 0 ? currentIndex - 1 : position - 1
+  const nextIndex = currentIndex >= 0 ? currentIndex + 1 : position
+
+  return {
+    currentIndex,
+    position,
+    previousCode: previousIndex >= 0 ? codes[previousIndex] ?? null : null,
+    previousPosition: previousIndex >= 0 ? previousIndex : null,
+    nextCode: nextIndex < codes.length ? codes[nextIndex] ?? null : null,
+    nextPosition: nextIndex < codes.length ? nextIndex : null,
+  }
+}
+
 // ← ADDED: identifies the profile a snapshot was built for. If the user's
 // role, company or status changes, old snapshots no longer match.
 export function leadProfileKey(profile: { id?: string | null; status?: string | null; tenant_id?: string | null; roles?: { key?: string | null } | null } | null | undefined): string | null {

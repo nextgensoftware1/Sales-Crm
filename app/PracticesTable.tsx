@@ -309,6 +309,13 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter,
   }), [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters])
+  const poolNavigationKey = poolTab === 'New Leads'
+    ? 'new'
+    : poolTab === 'Worked Leads'
+      ? 'worked'
+      : poolTab === 'Not Worked Leads'
+        ? 'not-worked'
+        : 'all'
 
   // Legacy mode: filter the full list in the browser.
   const filtered = useMemo(
@@ -417,6 +424,10 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const filteredCodes = useMemo(
     () => (serverPaging ? serverView.codes : filtered.map((p) => p.practiceCode)),
     [serverPaging, serverView.codes, filtered],
+  )
+  const filteredPositionByCode = useMemo(
+    () => new Map(filteredCodes.map((code, index) => [code, index])),
+    [filteredCodes],
   )
   const filteredCount = filteredCodes.length
   const totalPages = Math.max(1, Math.ceil(filteredCount / pageSize))
@@ -922,7 +933,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                     <Link
                       prefetch={false}
                       href={serverPaging
-                        ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}`
+                        ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}&pool=${poolNavigationKey}&pos=${filteredPositionByCode.get(p.practiceCode) ?? 0}`
                         : `/practice/${encodeURIComponent(p.practiceCode)}`}
                       style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}
                     >

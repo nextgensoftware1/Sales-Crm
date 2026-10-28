@@ -30,7 +30,7 @@ export function leadHref(practiceCode: string | null | undefined, from: LeadSour
  * Back link + the query to keep on further lead links (Previous / Next,
  * related practices), from the lead page's search params.
  */
-export function leadReturn(sp: { from?: string; company?: string; view?: string; snapshot?: string; nav?: string }): { href: string; label: string; query: string } {
+export function leadReturn(sp: { from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string }): { href: string; label: string; query: string } {
   // Only the listed pages (an own key — not inherited names like "__proto__").
   const from = (typeof sp.from === 'string' && Object.prototype.hasOwnProperty.call(SOURCES, sp.from) ? sp.from : null) as LeadSource | null
   if (!from) return { href: '/', label: 'Back to all practices', query: '' }
@@ -42,7 +42,9 @@ export function leadReturn(sp: { from?: string; company?: string; view?: string;
   }
   if (from === 'leads' && typeof sp.snapshot === 'string' && /^[0-9a-f-]{36}$/i.test(sp.snapshot)
       && typeof sp.nav === 'string' && /^[0-9a-f-]{36}$/i.test(sp.nav)) {
-    const keep = `from=leads&snapshot=${encodeURIComponent(sp.snapshot)}&nav=${encodeURIComponent(sp.nav)}`
+    const pool = ['all', 'new', 'worked', 'not-worked'].includes(sp.pool ?? '') ? sp.pool! : 'all'
+    const position = /^\d{1,6}$/.test(sp.pos ?? '') ? sp.pos! : '0'
+    const keep = `from=leads&snapshot=${encodeURIComponent(sp.snapshot)}&nav=${encodeURIComponent(sp.nav)}&pool=${pool}&pos=${position}`
     return { href: SOURCES[from].path, label: SOURCES[from].label, query: `?${keep}` }
   }
   return { href: SOURCES[from].path, label: SOURCES[from].label, query: `?from=${from}` }
