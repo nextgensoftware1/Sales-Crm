@@ -25,6 +25,8 @@ export type LeadSnapshot = {
   overview: LeadOverview
   /** Deep-search results per search text (phone/email/city/ZIP/contact). */
   deepSearch: Map<string, Set<string>>
+  /** Filtered lead order used by Previous/Next from the Leads page. */
+  navigations: Map<string, string[]>
   // ← ADDED: everything the Leads page needs to render from this snapshot,
   // plus the signed-in profile (id|status|role|company) it was built for.
   data: LeadsData
@@ -65,6 +67,7 @@ export function saveLeadSnapshot(userId: string, data: LeadsData, profileKey: st
     deepSearch: new Map(),
     data, // ← ADDED
     profileKey, // ← ADDED
+    navigations: new Map(),
   }
   // Keep only this user's newest snapshots.
   const mine = [...store.values()].filter((s) => s.userId === userId).sort((a, b) => a.createdAt - b.createdAt)
@@ -79,6 +82,27 @@ export function getLeadSnapshot(id: string, userId: string): LeadSnapshot | null
   if (!snap || snap.userId !== userId) return null
   if (Date.now() - snap.createdAt > TTL_MS) { store.delete(id); return null }
   return snap
+}
+
+export function saveLeadNavigation(snap: LeadSnapshot, codes: string[]): string {
+  const id = globalThis.crypto.randomUUID()
+  if (snap.navigations.size >= 30) {
+    const oldestId = snap.navigations.keys().next().value
+    if (oldestId) snap.navigations.delete(oldestId)
+  }
+  snap.navigations.set(id, [...codes])
+  return id
+}
+
+export function getLeadNavigation(
+  snapshotId: string,
+  navigationId: string,
+  userId: string,
+  profileKey: string | null,
+): string[] | null {
+  const snap = getLeadSnapshot(snapshotId, userId)
+  if (!snap || !profileKey || snap.profileKey !== profileKey) return null
+  return snap.navigations.get(navigationId) ?? null
 }
 
 // ← ADDED: identifies the profile a snapshot was built for. If the user's

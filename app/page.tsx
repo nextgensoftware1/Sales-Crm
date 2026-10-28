@@ -5,7 +5,7 @@ import { compactRow } from '../lib/query-utils'
 import { packRows } from '../lib/lead-pack'
 import { cookies } from 'next/headers' // ← ADDED
 import { loadLeadsData } from '../lib/leads-data'
-import { saveLeadSnapshot, queryLeadSnapshot, getReusableLeadSnapshot, leadProfileKey, type LeadSnapshot } from '../lib/lead-snapshots' // ← CHANGED
+import { saveLeadSnapshot, queryLeadSnapshot, getReusableLeadSnapshot, leadProfileKey, saveLeadNavigation, type LeadSnapshot } from '../lib/lead-snapshots' // ← CHANGED
 import { DEFAULT_LEAD_FILTERS } from '../lib/lead-filters'
 import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // ← ADDED
 
@@ -82,9 +82,11 @@ export default async function Home() {
     }
     const snapshot = reused ?? saveLeadSnapshot(data.authUserId, data, profileKey) // ← CHANGED
     const first = queryLeadSnapshot(snapshot, DEFAULT_LEAD_FILTERS, null, 1, initialPageSize, true)
+    const navigationId = saveLeadNavigation(snapshot, first.codes ?? [])
     tableData = {
       serverPaging: {
         snapshotId: snapshot.id,
+        navigationId,
         overview: snapshot.overview,
         rows: first.rows,
         codes: first.codes,

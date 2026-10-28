@@ -11,6 +11,7 @@ import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Em
 import { leadReturn } from '../../../lib/lead-return'
 import { npiLabel } from '../../../lib/npi-label'
 import { practiceLocations } from '../../../lib/practice-locations' // ← ADDED // ← ADDED: show NPI instead of PR-
+import { getLeadNavigation, leadProfileKey } from '../../../lib/lead-snapshots'
 
 const ZONE_BY_STATE: Record<string, string> = {
   CT: 'EST', DE: 'EST', FL: 'EST', GA: 'EST', ME: 'EST', MD: 'EST', MA: 'EST', NH: 'EST',
@@ -52,13 +53,13 @@ export default async function PracticeDetail({
   searchParams,
 }: {
   params: Promise<{ code: string }>
-  searchParams: Promise<{ from?: string; company?: string; view?: string }>
+  searchParams: Promise<{ from?: string; company?: string; view?: string; snapshot?: string; nav?: string }>
 }) {
   const { code } = await params
-  const { from, company, view } = await searchParams
+  const { from, company, view, snapshot, nav } = await searchParams
   // Where "Back" goes and the query kept on Previous / Next and related
   // links — one shared rule for every page that opens a lead (lib/lead-return).
-  const back = leadReturn({ from, company, view })
+  const back = leadReturn({ from, company, view, snapshot, nav })
   const navQuery = back.query
   // Opened from Active Email → Previous / Next move through its leads only.
   const fromEmailReport = from === 'email-reports'
@@ -69,14 +70,18 @@ export default async function PracticeDetail({
   let isSuperAdmin = false
   let myTenantId: string | null = null
   let myUserId: string | null = null
+  let myAuthUserId: string | null = null
+  let myProfileKey: string | null = null
   let roleKey = ''
   let showTransfers = false
   let canManageUsers = false
   try {
     const { data: { user: authUser } } = await getCurrentUser()
     if (authUser) {
+      myAuthUserId = authUser.id
       const { data: me } = await getCurrentProfile(authUser.id)
       if (me) {
+        myProfileKey = leadProfileKey(me)
         currentUser = {
           full_name: (me as any).full_name,
           role: roleLabel((me as any).roles?.key),
@@ -311,7 +316,11 @@ export default async function PracticeDetail({
     // order and visibility as the report); otherwise the Leads Engine list.
     fromEmailReport
       ? getEmailReports().then((res) => res.ok ? Array.from(new Set(res.rows.map((r) => r.practiceCode))) : null).catch(() => null)
-      : getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
+      : from === 'leads'
+        ? Promise.resolve(snapshot && nav && myAuthUserId
+          ? getLeadNavigation(snapshot, nav, myAuthUserId, myProfileKey)
+          : null)
+        : getPracticeNavigation(supabase, { role: roleKey, userId: myUserId, tenantId: myTenantId,
           personalIds: personalScope ? [...(myAssignments ?? []), ...(myTransfers ?? [])].map(row => row.practice_id) : undefined })
           .catch(() => null),
     activityQuery.order('created_at', { ascending: false }).limit(20),

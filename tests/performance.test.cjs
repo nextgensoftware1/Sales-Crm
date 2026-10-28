@@ -818,6 +818,7 @@ function referenceFilter(practices, f, { isSuperAdmin, prioritySet, newLeadSet, 
       if (sourceTab === 'Allocated' && !isAllocated) return false; if (sourceTab === 'Uploaded' && isAllocated) return false }
     if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
     if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
+    if (poolTab === 'Not Worked Leads' && workedLeadSet.has(p.practiceCode)) return false
     if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
     if (assignedDateFilter && toLocalCalendarDate(p.allocatedOn) !== assignedDateFilter) return false
     return true
@@ -851,7 +852,7 @@ function randomFilters(rnd, pick) {
     zoneFilter: maybe(pick(['EST', 'CST', 'PST', 'Other'])) ?? '', specialtyFilter: maybe(pick(['Cardiology', 'Family'])) ?? '',
     dispositionFilter: maybe(pick(['Qualified', 'Follow Up'])) ?? '', activeSignals: rnd() < .4 ? ['ccm', 'mips', 'rcmFit', 'pcm'].filter(() => rnd() < .4) : [],
     catTab: pick(['All Categories', 'All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing']), sourceTab: pick(['All', 'All', 'Allocated', 'Uploaded']),
-    poolTab: pick(['All Leads', 'All Leads', 'New Leads', 'Worked Leads']), assignedView: pick(['all', 'all', 'mine']),
+    poolTab: pick(['All Leads', 'All Leads', 'New Leads', 'Worked Leads', 'Not Worked Leads']), assignedView: pick(['all', 'all', 'mine']),
     companyFilter: maybe(pick(['__unassigned__', 't1', 't2'])) ?? '', enumTypeFilter: maybe(pick(['NPI-1', 'NPI-2'])) ?? '',
     lastUpdatedFrom: maybe('2024-06-01') ?? '', lastUpdatedTo: maybe('2025-12-31') ?? '', enumDateFrom: maybe('2016-01-01') ?? '', enumDateTo: maybe('2021-01-01') ?? '',
     assignedDateFilter: maybe(pick(['2026-09-14', '2026-09-15', '2026-09-16'])) ?? '',
@@ -997,10 +998,12 @@ test('server-paged table renders the identical first screen', () => {
     const ctx = { isSuperAdmin: !!props.isSuperAdmin, prioritySet: new Set(props.myAssignedCodes ?? []), newLeadSet: new Set(newLeadCodes), workedLeadSet: new Set(workedLeadCodes) }
     const all = lf.filterLeads(leads, lf.DEFAULT_LEAD_FILTERS, ctx)
     const serverPaging = { snapshotId: 's1', overview: lf.leadOverview(leads, { ...ctx, completedWorksheetCount: props.completedWorksheetCount }),
-      rows: all.slice(0, pageSize), codes: all.map(p => p.practiceCode), pageSize }
+      navigationId: 'navigation-1', rows: all.slice(0, pageSize), codes: all.map(p => p.practiceCode), pageSize }
     const legacy = renderToStaticMarkup(React.createElement(Table, { practices: leads, newLeadCodes, workedLeadCodes, lazyOptions: true, ...props }))
     const paged = renderToStaticMarkup(React.createElement(Table, { serverPaging, lazyOptions: true, ...props }))
-    assert.equal(paged, legacy)
+    assert.ok(paged.includes('?from=leads&amp;snapshot=s1&amp;nav=navigation-1'))
+    const normalizePracticeLinks = (html) => html.replace(/href="\/practice\/[^"]+"/g, 'href="/practice/LEAD"')
+    assert.equal(normalizePracticeLinks(paged), normalizePracticeLinks(legacy))
   }
 })
 
@@ -1008,6 +1011,7 @@ test('lead page action: signed-in check, per-user snapshots, rebuild when missin
   process.env.CRM_SERVER_PAGED_LEADS = '1'
   try {
     const { me, tables } = homeFixture('super_admin')
+    me.status = 'active'
     let authUser = { id: 'auth-me' }, loads = 0
     const supabaseServer = {
       createSupabaseServer: async () => { loads++; return database(tables, []) },
@@ -1029,14 +1033,35 @@ test('lead page action: signed-in check, per-user snapshots, rebuild when missin
     authUser = { id: 'auth-me' }
     const first = await queryLeadPage({ snapshotId: 'does-not-exist', filters: {}, page: 1, pageSize: 2, wantCodes: false })
     assert.equal(first.ok, true); assert.ok(first.overview); assert.ok(Array.isArray(first.codes)); assert.equal(loads, 1)
+    assert.ok(first.navigationId)
     const data = await loadLeadsData()
     const ctx = { isSuperAdmin: true, prioritySet: new Set(data.myAssignedCodes), newLeadSet: new Set(data.newLeadCodes), workedLeadSet: new Set(data.workedLeadCodes) }
     assert.deepEqual(first.codes, lf.filterLeads(data.practices, lf.DEFAULT_LEAD_FILTERS, ctx).map(p => p.practiceCode))
+    assert.deepEqual(
+      snapshots.getLeadNavigation(first.snapshotId, first.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
+      first.codes,
+    )
 
     // Existing snapshot: reused, no database work.
     loads = 0
     const again = await queryLeadPage({ snapshotId: first.snapshotId, filters: { search: 'p' }, page: 1, pageSize: 2, wantCodes: true })
     assert.equal(again.ok, true); assert.equal(again.snapshotId, first.snapshotId); assert.equal(again.overview, undefined); assert.equal(loads, 0)
+    assert.ok(again.navigationId)
+    assert.deepEqual(
+      snapshots.getLeadNavigation(again.snapshotId, again.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
+      again.codes,
+    )
+
+    const notWorked = await queryLeadPage({
+      snapshotId: first.snapshotId, filters: { poolTab: 'Not Worked Leads' },
+      page: 1, pageSize: 2, wantCodes: true,
+    })
+    assert.equal(notWorked.ok, true)
+    assert.deepEqual(
+      snapshots.getLeadNavigation(notWorked.snapshotId, notWorked.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
+      notWorked.codes,
+    )
+    assert.ok(notWorked.codes.every(code => !data.workedLeadCodes.includes(code)))
 
     // Another user cannot read that snapshot: they get their own, rebuilt.
     authUser = { id: 'someone-else' }
@@ -2007,6 +2032,7 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
     [{ from: 'sold-leads' }, '/clients?tab=sold', 'Back to Sold leads', '?from=sold-leads'],
     [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
     [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
+    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001'],
     [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
     [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Active Call', '?from=worksheet-reports&company=T1&view=sheet'],
     [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page

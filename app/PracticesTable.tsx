@@ -31,6 +31,7 @@ type Props = {
   // results come from app/leads-page-actions.ts (see lib/lead-snapshots.ts).
   serverPaging?: {
     snapshotId: string
+    navigationId: string
     overview: LeadOverview
     rows: Practice[]
     codes?: string[]
@@ -329,6 +330,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const [serverView, setServerView] = useState(() => ({
     key: serverPaging ? JSON.stringify(DEFAULT_LEAD_FILTERS) : '',
     snapshotId: serverPaging?.snapshotId ?? '',
+    navigationId: serverPaging?.navigationId ?? '',
     codes: serverPaging?.codes ?? [],
     rows: serverPaging?.rows ?? [],
     page: 1,
@@ -372,6 +374,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
     setServerOverview(serverPaging.overview)
     setServerView({
       key: JSON.stringify(DEFAULT_LEAD_FILTERS), snapshotId: serverPaging.snapshotId,
+      navigationId: serverPaging.navigationId,
       codes: serverPaging.codes ?? [], rows: serverPaging.rows, page: 1, pageSize: serverPaging.pageSize,
     })
     // Only a new snapshot id matters here.
@@ -397,6 +400,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
         if (res.snapshotId !== serverSnapshotId) setServerSnapshotId(res.snapshotId)
         setServerView((prev) => ({
           key: filtersKey, snapshotId: res.snapshotId, codes: res.codes ?? prev.codes,
+          navigationId: res.navigationId ?? prev.navigationId,
           rows: res.rows as Practice[], page: res.page, pageSize: res.pageSize,
         }))
         setServerError('')
@@ -632,7 +636,7 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
       <section style={{ ...panel, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 className="leads-section-title">Lead Pool <span className="leads-section-count">({filteredCount} leads)</span>
-            {refreshing && <span role="status" className="leads-section-count" style={{ marginLeft: 8, fontSize: 12 }}>· Updating…</span>}{/* ← ADDED */}
+            {refreshing && <span role="status" className="leads-section-count" style={{ marginLeft: 8, fontSize: 12 }}></span>}{/* ← ADDED */}
           </h2>
           <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>Explore and manage your lead pool</div>
         </div>
@@ -912,7 +916,19 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                   {prioritySet.has(p.practiceCode) && (
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                   )}
-                  <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
+                  {serverPaging && serverView.key !== filtersKey ? (
+                    <span style={{ color: C.cyan, fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</span>
+                  ) : (
+                    <Link
+                      prefetch={false}
+                      href={serverPaging
+                        ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}`
+                        : `/practice/${encodeURIComponent(p.practiceCode)}`}
+                      style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}
+                    >
+                      {p.name}
+                    </Link>
+                  )}
                   <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
                     {npiLabel(p.practiceCode)}{/* ← CHANGED */}
                     {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}

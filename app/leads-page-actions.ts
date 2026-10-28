@@ -6,7 +6,7 @@
 // restart, expired), the snapshot is rebuilt with the same loader the page uses.
 
 import { loadLeadsData } from '../lib/leads-data'
-import { getLeadSnapshot, saveLeadSnapshot, queryLeadSnapshot, leadProfileKey } from '../lib/lead-snapshots' // ← CHANGED: + leadProfileKey
+import { getLeadSnapshot, saveLeadSnapshot, queryLeadSnapshot, leadProfileKey, saveLeadNavigation } from '../lib/lead-snapshots' // ← CHANGED: + leadProfileKey
 import { sanitizeLeadFilters } from '../lib/lead-filters'
 import { deepSearchLeadCodes } from '../lib/lead-deep-search'
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // ← CHANGED: + getCurrentProfile
@@ -56,17 +56,22 @@ export async function queryLeadPage(input: {
     }
   }
 
+  const shouldReturnCodes = Boolean(input?.wantCodes) || rebuilt
   const result = queryLeadSnapshot(
     snapshot, filters, timeZone,
     Number(input?.page), Number(input?.pageSize),
     // A rebuilt snapshot may differ, so always send its codes and counts.
-    Boolean(input?.wantCodes) || rebuilt,
+    shouldReturnCodes,
     searchExtraCodes,
   )
+  const navigationId = shouldReturnCodes && result.codes
+    ? saveLeadNavigation(snapshot, result.codes)
+    : undefined
   return {
     ok: true as const,
     snapshotId: snapshot.id,
     overview: rebuilt ? snapshot.overview : undefined,
+    navigationId,
     ...result,
   }
 }
