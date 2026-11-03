@@ -270,6 +270,7 @@ export default function LeadSpreadsheet({ rows, viewerUserId, onSaved }: {
             <tr>
               <th className={`${styles.stickyLeft} ${styles.practice}`}>Practice</th>
               <th>Phone</th>
+              <th>Authorized Official</th>{/* ← ADDED */}
               <th>Call details * / Note</th>
               <th>Disposition / Response</th>
               <th>Callback (practice time)</th>
@@ -312,6 +313,20 @@ export default function LeadSpreadsheet({ rows, viewerUserId, onSaved }: {
                   <td className={styles.wPhone}>
                     {loading ? <span className={styles.na}>…</span>
                       : d?.phone ? <a className={styles.phone} href={`tel:${d.phone.replace(/[^\d+]/g, '')}`}>{d.phone}</a>
+                      : <span className={styles.na}>—</span>}
+                  </td>
+                  {/* ← ADDED: Authorized Official — name, title / credential, phone (click to dial) */}
+                  <td className={styles.wOfficial}>
+                    {loading ? <span className={styles.na}>…</span>
+                      : d?.official ? (<>
+                        {d.official.name && <div className={styles.officialName}>{d.official.name}</div>}
+                        {(d.official.title || d.official.credential) && (
+                          <div className={styles.hint}>{[d.official.title, d.official.credential].filter(Boolean).join(' · ')}</div>
+                        )}
+                        {d.official.phone && (
+                          <a className={styles.phone} href={`tel:${d.official.phone.replace(/[^\d+]/g, '')}`}>{d.official.phone}</a>
+                        )}
+                      </>)
                       : <span className={styles.na}>—</span>}
                   </td>
                   {/* Call details (call lead) or Note (Email lead) */}

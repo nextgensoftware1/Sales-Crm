@@ -905,7 +905,6 @@ function referenceFilter(practices, f, { isSuperAdmin, prioritySet, newLeadSet, 
       if (sourceTab === 'Allocated' && !isAllocated) return false; if (sourceTab === 'Uploaded' && isAllocated) return false }
     if (poolTab === 'New Leads' && !newLeadSet.has(p.practiceCode)) return false
     if (poolTab === 'Worked Leads' && !workedLeadSet.has(p.practiceCode)) return false
-    if (poolTab === 'Not Worked Leads' && workedLeadSet.has(p.practiceCode)) return false
     if (assignedView === 'mine' && !prioritySet.has(p.practiceCode)) return false
     if (assignedDateFilter && toLocalCalendarDate(p.allocatedOn) !== assignedDateFilter) return false
     return true
@@ -939,7 +938,7 @@ function randomFilters(rnd, pick) {
     zoneFilter: maybe(pick(['EST', 'CST', 'PST', 'Other'])) ?? '', specialtyFilter: maybe(pick(['Cardiology', 'Family'])) ?? '',
     dispositionFilter: maybe(pick(['Qualified', 'Follow Up'])) ?? '', activeSignals: rnd() < .4 ? ['ccm', 'mips', 'rcmFit', 'pcm'].filter(() => rnd() < .4) : [],
     catTab: pick(['All Categories', 'All Categories', 'MIPS', 'RCM', 'CCM', 'Credentialing']), sourceTab: pick(['All', 'All', 'Allocated', 'Uploaded']),
-    poolTab: pick(['All Leads', 'All Leads', 'New Leads', 'Worked Leads', 'Not Worked Leads']), assignedView: pick(['all', 'all', 'mine']),
+    poolTab: pick(['All Leads', 'All Leads', 'New Leads', 'Worked Leads']), assignedView: pick(['all', 'all', 'mine']),
     companyFilter: maybe(pick(['__unassigned__', 't1', 't2'])) ?? '', enumTypeFilter: maybe(pick(['NPI-1', 'NPI-2'])) ?? '',
     lastUpdatedFrom: maybe('2024-06-01') ?? '', lastUpdatedTo: maybe('2025-12-31') ?? '', enumDateFrom: maybe('2016-01-01') ?? '', enumDateTo: maybe('2021-01-01') ?? '',
     assignedDateFilter: maybe(pick(['2026-09-14', '2026-09-15', '2026-09-16'])) ?? '',
@@ -1085,12 +1084,10 @@ test('server-paged table renders the identical first screen', () => {
     const ctx = { isSuperAdmin: !!props.isSuperAdmin, prioritySet: new Set(props.myAssignedCodes ?? []), newLeadSet: new Set(newLeadCodes), workedLeadSet: new Set(workedLeadCodes) }
     const all = lf.filterLeads(leads, lf.DEFAULT_LEAD_FILTERS, ctx)
     const serverPaging = { snapshotId: 's1', overview: lf.leadOverview(leads, { ...ctx, completedWorksheetCount: props.completedWorksheetCount }),
-      navigationId: 'navigation-1', rows: all.slice(0, pageSize), codes: all.map(p => p.practiceCode), pageSize }
+      rows: all.slice(0, pageSize), codes: all.map(p => p.practiceCode), pageSize }
     const legacy = renderToStaticMarkup(React.createElement(Table, { practices: leads, newLeadCodes, workedLeadCodes, lazyOptions: true, ...props }))
     const paged = renderToStaticMarkup(React.createElement(Table, { serverPaging, lazyOptions: true, ...props }))
-    assert.ok(paged.includes('?from=leads&amp;snapshot=s1&amp;nav=navigation-1'))
-    const normalizePracticeLinks = (html) => html.replace(/href="\/practice\/[^"]+"/g, 'href="/practice/LEAD"')
-    assert.equal(normalizePracticeLinks(paged), normalizePracticeLinks(legacy))
+    assert.equal(paged, legacy)
   }
 })
 
@@ -1098,7 +1095,6 @@ test('lead page action: signed-in check, per-user snapshots, rebuild when missin
   process.env.CRM_SERVER_PAGED_LEADS = '1'
   try {
     const { me, tables } = homeFixture('super_admin')
-    me.status = 'active'
     let authUser = { id: 'auth-me' }, loads = 0
     const supabaseServer = {
       createSupabaseServer: async () => { loads++; return database(tables, []) },
@@ -1120,35 +1116,14 @@ test('lead page action: signed-in check, per-user snapshots, rebuild when missin
     authUser = { id: 'auth-me' }
     const first = await queryLeadPage({ snapshotId: 'does-not-exist', filters: {}, page: 1, pageSize: 2, wantCodes: false })
     assert.equal(first.ok, true); assert.ok(first.overview); assert.ok(Array.isArray(first.codes)); assert.equal(loads, 1)
-    assert.ok(first.navigationId)
     const data = await loadLeadsData()
     const ctx = { isSuperAdmin: true, prioritySet: new Set(data.myAssignedCodes), newLeadSet: new Set(data.newLeadCodes), workedLeadSet: new Set(data.workedLeadCodes) }
     assert.deepEqual(first.codes, lf.filterLeads(data.practices, lf.DEFAULT_LEAD_FILTERS, ctx).map(p => p.practiceCode))
-    assert.deepEqual(
-      snapshots.getLeadNavigation(first.snapshotId, first.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
-      first.codes,
-    )
 
     // Existing snapshot: reused, no database work.
     loads = 0
     const again = await queryLeadPage({ snapshotId: first.snapshotId, filters: { search: 'p' }, page: 1, pageSize: 2, wantCodes: true })
     assert.equal(again.ok, true); assert.equal(again.snapshotId, first.snapshotId); assert.equal(again.overview, undefined); assert.equal(loads, 0)
-    assert.ok(again.navigationId)
-    assert.deepEqual(
-      snapshots.getLeadNavigation(again.snapshotId, again.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
-      again.codes,
-    )
-
-    const notWorked = await queryLeadPage({
-      snapshotId: first.snapshotId, filters: { poolTab: 'Not Worked Leads' },
-      page: 1, pageSize: 2, wantCodes: true,
-    })
-    assert.equal(notWorked.ok, true)
-    assert.deepEqual(
-      snapshots.getLeadNavigation(notWorked.snapshotId, notWorked.navigationId, 'auth-me', snapshots.leadProfileKey(me)),
-      notWorked.codes,
-    )
-    assert.ok(notWorked.codes.every(code => !data.workedLeadCodes.includes(code)))
 
     // Another user cannot read that snapshot: they get their own, rebuilt.
     authUser = { id: 'someone-else' }
@@ -1175,31 +1150,6 @@ test('lead snapshots stay bounded: newest 3 per user', () => {
   assert.equal(ids.filter(id => snapshots.getLeadSnapshot(id, 'bounded-user')).length, 3)
   assert.ok(snapshots.getLeadSnapshot(ids[4], 'bounded-user'))
   assert.equal(snapshots.getLeadSnapshot(ids[0], 'bounded-user'), null)
-})
-
-test('lead navigation recovers its position when working a lead removes it from the filtered list', () => {
-  const { resolveLeadNavigation } = loadTs('lib/lead-snapshots.ts')
-  assert.deepEqual(resolveLeadNavigation(['A', 'B', 'C'], 'B', 1), {
-    currentIndex: 1, position: 1, previousCode: 'A', previousPosition: 0, nextCode: 'C', nextPosition: 2,
-  })
-  assert.deepEqual(resolveLeadNavigation(['A', 'C'], 'B', 1), {
-    currentIndex: -1, position: 1, previousCode: 'A', previousPosition: 0, nextCode: 'C', nextPosition: 1,
-  })
-})
-
-test('not-worked navigation rebuilds the filtered list for the signed-in user', async () => {
-  const lf = loadTs('lib/lead-filters.ts')
-  const data = {
-    kind: 'ok', authUserId: 'auth-user', isSuperAdmin: false, myAssignedCodes: [],
-    newLeadCodes: [], workedLeadCodes: ['B'],
-    practices: ['A', 'B', 'C'].map(practiceCode => ({ practiceCode, name: practiceCode })),
-  }
-  const { getNotWorkedLeadNavigation } = loadTs('lib/lead-navigation.ts', {
-    './leads-data': { loadLeadsData: async () => data },
-    './lead-filters': lf,
-  })
-  assert.deepEqual(await getNotWorkedLeadNavigation('auth-user'), ['A', 'C'])
-  assert.equal(await getNotWorkedLeadNavigation('other-user'), null)
 })
 
 // ---------------------------------------------------------------------------
@@ -1371,9 +1321,13 @@ function sheetHarness({ role = 'agent', tables = {} } = {}) {
   const calls = []
   const db = database({
     master_practices: [
-      { id: 'p1', practice_code: 'PR-1', phone: '(555) 111-2222', lead_category: null, deleted_at: null },
+      { id: 'p1', practice_code: 'PR-1', phone: '(555) 111-2222', lead_category: null, deleted_at: null,
+        practice_providers: [{ providers: { name: 'Org Clinic', phone: '5550000000', entity_type: 'NPI-2', is_anchor: true,
+          auth_official_name: 'DERRICK WAYNE SMITH', auth_official_title: 'CEO', auth_official_credential: 'MD', auth_official_phone: '8185157991' } }] },
       { id: 'p2', practice_code: 'PR-2', phone: null, lead_category: 'Email', deleted_at: null },
-      { id: 'p3', practice_code: 'PR-3', phone: '555', lead_category: null, deleted_at: null },
+      { id: 'p3', practice_code: 'PR-3', phone: '555', lead_category: null, deleted_at: null,
+        practice_providers: [{ providers: { name: 'JANE DOE', phone: '5553334444', entity_type: '1', is_anchor: false,
+          auth_official_name: null, auth_official_title: null, auth_official_credential: null, auth_official_phone: null } }] },
       { id: 'p9', practice_code: 'PR-9', phone: '1', lead_category: null, deleted_at: '2026-10-01' },
     ],
     lead_worksheets: [
@@ -1409,6 +1363,10 @@ test('spreadsheet details: phone, own company worksheet prefill, email worksheet
   assert.equal(by['PR-3'].worksheet, null)                                    // another company's worksheet is never shown
   assert.equal(by['PR-2'].isEmailLead, true); assert.equal(by['PR-2'].emailWorksheet.response, 'Email Sent')
   assert.equal(by['PR-3'].locked, true); assert.equal(by['PR-1'].locked, false)
+  // Authorized Official — same rule as the practice page
+  assert.deepEqual(by['PR-1'].official, { name: 'DERRICK WAYNE SMITH', title: 'CEO', credential: 'MD', phone: '8185157991' })
+  assert.deepEqual(by['PR-3'].official, { name: 'JANE DOE', title: null, credential: null, phone: '5553334444' })   // individual: own name + phone
+  assert.equal(by['PR-2'].official, null)                                                                         // no provider linked
   assert.deepEqual(h.calls.map(c => c.table).sort(), ['lead_email_worksheets', 'lead_transfers', 'lead_worksheets', 'master_practices'])
   assert.equal(h.calls.every(c => c.operation === 'select'), true)            // read only
 })
@@ -2378,8 +2336,6 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
     [{ from: 'sold-leads' }, '/clients?tab=sold', 'Back to Sold leads', '?from=sold-leads'],
     [{ from: 'assignments' }, '/assignments', 'Back to Assigned Leads', '?from=assignments'],
     [{ from: 'agent-assigned' }, '/agent-assigned', 'Back to my assigned leads', '?from=agent-assigned'],
-    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001', pool: 'not-worked', pos: '12' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001&pool=not-worked&pos=12'],
-    [{ from: 'leads', snapshot: '123e4567-e89b-12d3-a456-426614174000', nav: '123e4567-e89b-12d3-a456-426614174001' }, '/', 'Back to leads', '?from=leads&snapshot=123e4567-e89b-12d3-a456-426614174000&nav=123e4567-e89b-12d3-a456-426614174001&pool=all&pos=0'],
     [{ from: 'role-view' }, '/admin/view', 'Back to role view', '?from=role-view'],
     [{ from: 'worksheet-reports', company: 'T1', view: 'sheet' }, '/worksheet-reports?company=T1&view=sheet', 'Back to Active Call', '?from=worksheet-reports&company=T1&view=sheet'],
     [{ from: 'https://evil.example' }, '/', 'Back to all practices', ''],      // unknown → Leads page
@@ -2399,8 +2355,7 @@ test('lead page "Back": returns to the page that opened the lead (all routes)', 
   }
   for (const [file, source] of Object.entries(expected)) assert.ok(read(file).includes(`leadHref(`) && read(file).includes(source), file)
   const lead = read('app/practice/[code]/page.tsx')
-  assert.match(lead, /encodeURIComponent\(prevCode\).*navigationQueryForPosition\(navigation\.previousPosition\)/)
-  assert.match(lead, /encodeURIComponent\(nextCode\).*navigationQueryForPosition\(navigation\.nextPosition\)/)
+  assert.match(lead, /href=\{`\/practice\/\$\{prevCode\}\$\{navQuery\}`\}/); assert.match(lead, /href=\{`\/practice\/\$\{nextCode\}\$\{navQuery\}`\}/)
   assert.match(lead, /linkQuery=\{navQuery\}/); assert.doesNotMatch(lead, /returnQuery/)
 })
 

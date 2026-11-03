@@ -53,6 +53,8 @@
 textarea.cell { resize: vertical; min-height: 34px; line-height: 1.35; }
 
 .wPhone { width: 128px; }
+.wOfficial { width: 180px; min-width: 180px; } /* ← ADDED: Authorized Official */
+.officialName { font-weight: 700; font-size: 12.5px; color: var(--ink); line-height: 1.25; margin-bottom: 2px; }
 .wDetails { width: 270px; }
 .wDispo { width: 150px; }
 .wCallback { width: 238px; }

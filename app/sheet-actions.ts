@@ -30,10 +30,13 @@ export type SheetWorksheet = {
   directLine: string; callbackAt: string | null; timezone: string | null; disposition: string
 }
 export type SheetEmailWorksheet = { email: string; response: string; note: string }
+// ← ADDED: the Authorized Official, as on the practice page.
+export type SheetOfficial = { name: string | null; title: string | null; credential: string | null; phone: string | null }
 export type SheetDetail = {
   practiceCode: string
   practiceId: string
   phone: string | null
+  official: SheetOfficial | null // ← ADDED
   isEmailLead: boolean
   locked: boolean
   worksheet: SheetWorksheet | null
@@ -45,7 +48,36 @@ function cleanCodes(codes: unknown): string[] {
   return Array.from(new Set(codes.filter((c): c is string => typeof c === 'string' && CODE_RE.test(c)))).slice(0, MAX_CODES)
 }
 
-type PracticeRow = { id: string; practice_code: string; phone: string | null; lead_category: string | null }
+// ← CHANGED: + the linked provider's Authorized Official fields
+type ProviderBits = {
+  name: string | null; phone: string | null; entity_type: string | null; is_anchor: boolean | null
+  auth_official_name: string | null; auth_official_title: string | null; auth_official_credential: string | null; auth_official_phone: string | null
+}
+type PracticeRow = {
+  id: string; practice_code: string; phone: string | null; lead_category: string | null
+  practice_providers?: { providers: ProviderBits | ProviderBits[] | null }[] | null
+}
+
+// ← ADDED: same rule as the practice page's "Authorized Official" panel:
+// the NPPES Authorized Official of the lead's first provider; an individual
+// (NPI-1) has no separate official, so their own name and phone are shown.
+function officialFor(p: PracticeRow): SheetOfficial | null {
+  const link = (p.practice_providers ?? [])[0]
+  const provider = Array.isArray(link?.providers) ? link?.providers[0] : link?.providers
+  if (!provider) return null
+  const entity = (provider.entity_type ?? '').toString().trim().toLowerCase()
+  const type2 = entity ? entity.includes('2') || entity.includes('org') : !!provider.is_anchor
+  const type1 = entity ? entity.includes('1') || entity.includes('ind') : !provider.is_anchor
+  const individual = type1 && !type2
+  const clean = (v: string | null | undefined) => (v ?? '').toString().trim() || null
+  const official = {
+    name: clean(provider.auth_official_name) ?? (individual ? clean(provider.name) : null),
+    title: clean(provider.auth_official_title),
+    credential: clean(provider.auth_official_credential),
+    phone: clean(provider.auth_official_phone) ?? (individual ? clean(provider.phone) ?? clean(p.phone) : null),
+  }
+  return official.name || official.phone || official.title ? official : null
+}
 
 export async function getSheetDetails(codes: string[]): Promise<{ ok: boolean; message?: string; details?: SheetDetail[] }> {
   const list = cleanCodes(codes)
@@ -60,7 +92,7 @@ export async function getSheetDetails(codes: string[]): Promise<{ ok: boolean; m
 
   const supabase = await createSupabaseServer()
   const { data: practiceRows, error } = await supabase.from('master_practices')
-    .select('id, practice_code, phone, lead_category')
+    .select('id, practice_code, phone, lead_category, practice_providers(providers(name, phone, entity_type, is_anchor, auth_official_name, auth_official_title, auth_official_credential, auth_official_phone))') // ← CHANGED: + Authorized Official
     .in('practice_code', list)
     .is('deleted_at', null)
   if (error) return { ok: false, message: error.message }
@@ -108,6 +140,7 @@ export async function getSheetDetails(codes: string[]): Promise<{ ok: boolean; m
       practiceCode: p.practice_code,
       practiceId: p.id,
       phone: p.phone ?? null,
+      official: officialFor(p), // ← ADDED
       isEmailLead: p.lead_category === 'Email',
       locked: lockedIds.has(p.id),
       worksheet: w ? {
