@@ -1,6 +1,7 @@
 'use server'
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
+import { zoneForState } from '../lib/us-time' // ← ADDED
 
 export type Reminder = {
   id: string
@@ -8,6 +9,8 @@ export type Reminder = {
   practiceCode: string | null
   practiceName: string
   remindAt: string
+  /** ← ADDED: the practice's US zone (Eastern / Central / …) to show the time in, e.g. "10:00 AM EST". */
+  zone: string
   note: string | null
   done: boolean
   completedAt: string | null
@@ -27,7 +30,7 @@ type ReminderRow = {
   note: string | null
   done: boolean
   completed_at: string | null
-  master_practices: { practice_code: string; name: string } | null
+  master_practices: { practice_code: string; name: string; state?: string | null } | null
   users: { full_name: string } | null
   tenants: { name: string } | null
 }
@@ -92,7 +95,7 @@ async function readReminders(activeOnly: boolean, window?: { from: string; to: s
   const readRows = (includeCompletedAt: boolean) => {
     let q = supabase
       .from('lead_reminders')
-      .select(`id, practice_id, tenant_id, agent_id, remind_at, note, done, ${includeCompletedAt ? 'completed_at,' : ''} master_practices(practice_code, name), users(full_name), tenants(name)`)
+      .select(`id, practice_id, tenant_id, agent_id, remind_at, note, done, ${includeCompletedAt ? 'completed_at,' : ''} master_practices(practice_code, name, state), users(full_name), tenants(name)`)
       .order('remind_at', { ascending: true })
     if (scope === 'company') q = q.eq('tenant_id', me.tenantId)
     else if (scope === 'mine') q = q.eq('agent_id', me.id)
@@ -116,6 +119,7 @@ async function readReminders(activeOnly: boolean, window?: { from: string; to: s
       practiceCode: p?.practice_code ?? null,
       practiceName: p?.name ?? '(deleted lead)',
       remindAt: r.remind_at,
+      zone: zoneForState(p?.state), // ← ADDED (same request — no extra query)
       note: r.note ?? null,
       done: !!r.done,
       completedAt: r.completed_at ?? null,

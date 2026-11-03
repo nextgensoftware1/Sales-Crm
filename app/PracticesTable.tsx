@@ -956,51 +956,6 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                     />
                   </th>
                 )}
-<<<<<<< HEAD
-                <td style={{ ...tdLeft, minWidth: 240 }}>
-                  {prioritySet.has(p.practiceCode) && (
-                    <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
-                  )}
-                  {serverPaging && serverView.key !== filtersKey ? (
-                    <span style={{ color: C.cyan, fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</span>
-                  ) : (
-                    <Link
-                      prefetch={false}
-                      href={serverPaging
-                        ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}&pool=${poolNavigationKey}&pos=${filteredPositionByCode.get(p.practiceCode) ?? 0}`
-                        : `/practice/${encodeURIComponent(p.practiceCode)}`}
-                      style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}
-                    >
-                      {p.name}
-                    </Link>
-                  )}
-                  <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
-                    {npiLabel(p.practiceCode)}{/* ← CHANGED */}
-                    {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}
-                  </div>
-                  {p.assignedAwayTo && (
-                    <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
-                      → {p.assignedAwayTo.name} <span style={{ color: C.dim, fontWeight: 500 }}>({p.assignedAwayTo.role})</span>
-                    </div>
-                  )}
-                </td>
-                <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
-                <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
-                <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
-                <td style={{ ...td, color: p.paymentAdj ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.paymentAdj ?? '—'}</td>
-                <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source)}</td>
-                {isSuperAdmin && (
-                  <td style={{ ...tdLeft, fontSize: 12, minWidth: 170 }}>
-                    {p.allocatedTo
-                      ? <span className="leads-company-name">{p.allocatedTo}</span>
-                      : <span className="leads-unassigned">Unassigned</span>}
-                  </td>
-                )}
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.lastDialed)}</td>
-                <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.allocatedOn)}</td>
-                <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
-=======
                 <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
                 <th style={th}>State</th>
                 <th style={thLeft}>Specialty</th>
@@ -1012,7 +967,6 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                 <th style={thLeft}>Last Dialed</th>
                 <th style={thLeft}>Assigned On</th>
                 <th style={thLeft}>Status</th>
->>>>>>> edc47c0 (Describe your changes)
               </tr>
             </thead>
             <tbody>
@@ -1033,7 +987,19 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                     {prioritySet.has(p.practiceCode) && (
                       <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
                     )}
-                    <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
+                    {serverPaging && serverView.key !== filtersKey ? (
+                      <span style={{ color: C.cyan, fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</span>
+                    ) : (
+                      <Link
+                        prefetch={false}
+                        href={serverPaging
+                          ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}&pool=${poolNavigationKey}&pos=${filteredPositionByCode.get(p.practiceCode) ?? 0}`
+                          : `/practice/${encodeURIComponent(p.practiceCode)}`}
+                        style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}
+                      >
+                        {p.name}
+                      </Link>
+                    )}
                     <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
                       {npiLabel(p.practiceCode)}{/* ← CHANGED */}
                       {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}
