@@ -134,15 +134,10 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
     setMsg(res.message)
     if (res.ok) {
       setSavedSnapshot(formSnapshot)
-<<<<<<< HEAD
-      // ← ADDED: a saved callback creates a reminder, so tell the bell to reload once.
-      if (callbackAt) window.dispatchEvent(new CustomEvent('reminders:changed'))
-=======
       // ← ADDED: tell the bell to reload once. With a callback, a reminder was
       // created/moved. Without one, the database closes this lead's open
       // reminder — reload only if the bell is actually showing one for it.
       if (callbackAt || bellHasReminderFor(practiceCode)) window.dispatchEvent(new CustomEvent('reminders:changed'))
->>>>>>> edc47c0 (Describe your changes)
       router.refresh()
     }
   }
