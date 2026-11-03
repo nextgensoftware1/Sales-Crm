@@ -1,0 +1,78 @@
+/* ← ADDED (new file) — Leads Engine spreadsheet view. Uses the app's colour
+   variables, so light and dark mode both work. */
+
+.toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); font-size: 12.5px; color: var(--muted);
+}
+.toolbar strong { color: var(--ink); }
+.toolbarSpacer { flex: 1; }
+.flash { font-weight: 600; color: var(--ok); }
+.flashError { font-weight: 600; color: var(--danger); }
+.kbd {
+  font-family: ui-monospace, monospace; font-size: 11px; padding: 1px 5px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
+}
+
+.scroller { overflow-x: auto; }
+.grid { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.grid th {
+  position: sticky; top: 0; z-index: 2; background: var(--th-bg); color: var(--th-ink);
+  text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 9px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.grid td { padding: 6px 6px; border-bottom: 1px solid var(--border); vertical-align: top; background: var(--surface); }
+.grid tr:hover td { background: var(--row-hover); }
+
+/* Practice column stays visible while scrolling sideways; Save column too. */
+.stickyLeft { position: sticky; left: 0; z-index: 1; box-shadow: 1px 0 0 var(--border); }
+.grid th.stickyLeft { z-index: 3; }
+.stickyRight { position: sticky; right: 0; z-index: 1; box-shadow: -1px 0 0 var(--border); }
+.grid th.stickyRight { z-index: 3; }
+
+.dirty td.stickyLeft { box-shadow: inset 3px 0 0 var(--warn), 1px 0 0 var(--border); }
+.lockedRow td { opacity: 0.6; }
+
+.practice { width: 230px; min-width: 230px; }
+.practiceName { font-weight: 700; color: var(--accent-dark); text-decoration: none; font-size: 13px; line-height: 1.25; }
+.practiceMeta { margin-top: 3px; font-size: 10.5px; color: var(--muted); font-family: ui-monospace, monospace; }
+.emailTag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #e0f2fe; color: #0369a1;
+  font-size: 9.5px; font-weight: 800; font-family: inherit;
+}
+.unsaved { margin-left: 6px; color: var(--warn); font-weight: 800; font-size: 10.5px; }
+
+.cell {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 12.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 7px;
+}
+.cell:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.cell:disabled { background: var(--surface-2); cursor: not-allowed; }
+.cellInvalid { border-color: var(--danger); }
+textarea.cell { resize: vertical; min-height: 34px; line-height: 1.35; }
+
+.wPhone { width: 128px; }
+.wDetails { width: 270px; }
+.wDispo { width: 150px; }
+.wCallback { width: 238px; }
+.wText { width: 160px; }
+.wEmail { width: 200px; }
+.wAction { width: 104px; }
+
+.callbackRow { display: flex; gap: 4px; }
+.callbackRow .cell:first-child { flex: 1; min-width: 0; }
+.zone { width: 76px; flex: 0 0 76px; padding-left: 4px; padding-right: 2px; }
+.hint { margin-top: 3px; font-size: 10.5px; color: var(--muted); line-height: 1.3; }
+.hintPast { color: var(--danger); }
+.fieldError { margin-top: 3px; font-size: 10.5px; color: var(--danger); line-height: 1.3; }
+.na { color: var(--muted); font-size: 12px; padding: 6px 2px; display: inline-block; }
+
+.phone { font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+.saveBtn {
+  width: 100%; border: 0; border-radius: 7px; padding: 8px 6px; font-weight: 800; font-size: 12px;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+.saveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rowMsg { margin-top: 4px; font-size: 10.5px; color: var(--danger); line-height: 1.3; }
+.empty { padding: 24px; color: var(--muted); font-size: 13px; }

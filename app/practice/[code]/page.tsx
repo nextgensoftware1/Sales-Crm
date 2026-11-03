@@ -10,6 +10,7 @@ import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } fro
 import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
 import { leadReturn } from '../../../lib/lead-return'
 import { npiLabel } from '../../../lib/npi-label'
+import { normalizeZone, zoneForState, utcToZonedWallTime } from '../../../lib/us-time' // ← ADDED
 import { practiceLocations } from '../../../lib/practice-locations' // ← ADDED // ← ADDED: show NPI instead of PR-
 import { getLeadNavigation, leadProfileKey, resolveLeadNavigation } from '../../../lib/lead-snapshots'
 import { getNotWorkedLeadNavigation } from '../../../lib/lead-navigation'
@@ -457,20 +458,19 @@ export default async function PracticeDetail({
   // belongs to. Super Admin can also still edit — matches their oversight
   // access everywhere else in the app.
   const worksheetLocked = !!existingTransfer && existingTransfer.toUserId !== myUserId && !isSuperAdmin
-  const toLocalInput = (iso: string | null) => {
-    if (!iso) return ''
-    const d = new Date(iso)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  }
+  // ← CHANGED: a saved callback is shown on the PRACTICE'S clock in its saved
+  // zone (it used to use the server's own clock). With no saved zone, the
+  // practice's zone from its state is pre-selected.
+  const practiceZone = zoneForState(practice.state)
+  const savedZone = normalizeZone(companyWorksheet?.timezone) ?? practiceZone
   const worksheetInitial = {
     callDetails: companyWorksheet?.call_details ?? '',
     additionalPhone: companyWorksheet?.additional_phone ?? '',
     email: companyWorksheet?.email ?? '',
     concernedPerson: companyWorksheet?.concerned_person ?? '',
     directLine: companyWorksheet?.direct_line ?? '',
-    callbackAt: toLocalInput(companyWorksheet?.callback_at ?? null),
-    timezone: companyWorksheet?.timezone ?? 'Eastern',
+    callbackAt: utcToZonedWallTime(companyWorksheet?.callback_at ?? null, savedZone), // ← CHANGED
+    timezone: savedZone, // ← CHANGED
     disposition: companyWorksheet?.disposition ?? 'New',
     updatedByName,
     updatedAt: companyWorksheet?.updated_at ?? null,
@@ -738,7 +738,7 @@ export default async function PracticeDetail({
             <div className="lead-2col">
               {profileAside}{/* ← CHANGED: shared with the Email Worksheet tab */}
               <div style={{ minWidth: 0 }}>
-                <Worksheet key={code} practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} />
+                <Worksheet key={code} practiceCode={code} initial={worksheetInitial} existingTransfer={existingTransfer} locked={worksheetLocked} defaultTimezone={practiceZone} />
               </div>
             </div>
           ) },

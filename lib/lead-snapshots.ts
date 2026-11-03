@@ -172,3 +172,29 @@ export function queryLeadSnapshot(
     codes: wantCodes ? filtered.map((p) => p.practiceCode) : undefined,
   }
 }
+
+// ← ADDED: spreadsheet view. When an Agent/Closer saves a lead's worksheet,
+// that lead leaves their queue. Instead of reloading the whole lead list from
+// the database (heavy egress), the saved leads are removed from this user's
+// cached snapshots in memory, and the "Worked" count goes up by the same
+// number. Returns the updated counts of the newest snapshot (or null when
+// this server has no snapshot for the user — the next page load rebuilds it).
+export function removeLeadsFromSnapshots(userId: string, codes: string[]): LeadOverview | null {
+  const drop = new Set(codes)
+  if (!drop.size) return null
+  let newest: LeadSnapshot | null = null
+  for (const snap of store.values()) {
+    if (snap.userId !== userId) continue
+    const kept = snap.practices.filter((p) => !drop.has(p.practiceCode))
+    const removed = snap.practices.length - kept.length
+    if (removed > 0) {
+      const completed = (snap.data.completedWorksheetCount ?? 0) + removed
+      snap.practices = kept
+      snap.data = { ...snap.data, practices: kept as unknown as LeadsData['practices'], completedWorksheetCount: completed }
+      snap.overview = leadOverview(kept, { ...snap.ctx, completedWorksheetCount: completed })
+      snap.deepSearch.clear()
+    }
+    if (!newest || snap.createdAt > newest.createdAt) newest = snap
+  }
+  return newest?.overview ?? null
+}

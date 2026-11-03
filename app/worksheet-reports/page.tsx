@@ -78,7 +78,9 @@ export default async function WorksheetReportsPage({ searchParams }: { searchPar
       active="/worksheet-reports"
       showAdmin={isSuperAdmin}
       canManageUsers={canManageUsers}
-      headerRight={isSuperAdmin ? <UploadWorksheetCsvButton /> : null}
+      // ← CHANGED: the upload panel lists the companies and pre-selects the one being viewed
+      headerRight={isSuperAdmin ? <UploadWorksheetCsvButton companies={companies.map(({ id, name }) => ({ id, name }))}
+        defaultCompanyId={selectedCompany !== '__all__' ? selectedCompany : undefined} /> : null}
       contextExtra={worksheetReports.ok ? <><WorksheetSearchBox /><WorksheetCompanyFilter companies={companies} selected={selectedCompany} showAll={isSuperAdmin} /></> : null}
       contextItemsHidden
       contextHelpText="Choose a company to filter both Report View and Spreadsheet View. Row-count controls are available inside each view."

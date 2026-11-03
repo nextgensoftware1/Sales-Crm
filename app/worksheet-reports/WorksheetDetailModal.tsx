@@ -5,7 +5,9 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Building2, ClipboardList, Pencil, X } from 'lucide-react'
 import { saveWorksheet } from '../worksheet-actions'
-import { DISPOSITIONS, TIMEZONES, US_PHONE_RE, US_PHONE_EXT_RE, EMAIL_RE, NAME_RE } from '../Worksheet'
+import { DISPOSITIONS, US_PHONE_RE, US_PHONE_EXT_RE, EMAIL_RE, NAME_RE } from '../Worksheet'
+import { US_ZONES, normalizeZone, utcToZonedWallTime, zonedWallTimeToUtcIso, formatInZone } from '../../lib/us-time' // ← ADDED
+import { bellHasReminderFor } from '../../lib/reminder-bell-cache' // ← ADDED (standalone: works with the old or new bell)
 import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import { lockPageScroll, unlockPageScroll } from '../../lib/scroll-lock'
 import { npiLabel } from '../../lib/npi-label' // ← ADDED: show NPI instead of PR-
@@ -23,14 +25,8 @@ function fmt(iso: string | null): string {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-/** ISO timestamp -> value for <input type="datetime-local"> in the viewer's time. */
-function toLocalInput(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+// ← CHANGED: callback times are edited on the PRACTICE'S clock in the saved
+// zone (EST / CST / MST / PST), not on the viewer's computer clock.
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
@@ -41,7 +37,8 @@ type Form = {
   directLine: string; additionalPhone: string; email: string; callDetails: string
 }
 const formFrom = (r: WorksheetReportRow): Form => ({
-  disposition: r.disposition ?? '', callbackAt: toLocalInput(r.callbackAt), timezone: r.timezone ?? '',
+  disposition: r.disposition ?? '', // ← CHANGED (next line): practice clock + known zone
+  callbackAt: utcToZonedWallTime(r.callbackAt, normalizeZone(r.timezone) ?? 'Eastern'), timezone: normalizeZone(r.timezone) ?? 'Eastern',
   concernedPerson: r.concernedPerson ?? '', directLine: r.directLine ?? '', additionalPhone: r.additionalPhone ?? '',
   email: r.email ?? '', callDetails: r.callDetails ?? '',
 })
@@ -119,7 +116,7 @@ export default function WorksheetDetailModal({ row, canEdit, readOnlyReason, onC
       const res = await saveWorksheet(current.practiceCode, {
         callDetails: form.callDetails, additionalPhone: form.additionalPhone, email: form.email,
         concernedPerson: form.concernedPerson, directLine: form.directLine,
-        callbackAt: form.callbackAt ? new Date(form.callbackAt).toISOString() : '',
+        callbackAt: form.callbackAt, // ← CHANGED: practice clock; the server converts it using the zone
         timezone: form.timezone, disposition: form.disposition,
       })
       setMessage({ ok: res.ok, text: res.message })
@@ -127,12 +124,14 @@ export default function WorksheetDetailModal({ row, canEdit, readOnlyReason, onC
         // Show the saved values right away; refresh the report from the server.
         setCurrent((r) => ({
           ...r, disposition: form.disposition || 'New',
-          callbackAt: form.callbackAt ? new Date(form.callbackAt).toISOString() : null,
+          callbackAt: form.callbackAt ? zonedWallTimeToUtcIso(form.callbackAt, form.timezone) : null, // ← CHANGED
           timezone: form.timezone || null, concernedPerson: form.concernedPerson || null,
           directLine: form.directLine || null, additionalPhone: form.additionalPhone || null,
           email: form.email || null, callDetails: form.callDetails.trim(), lastUpdatedAt: new Date().toISOString(),
         }))
         setEditing(false)
+        // ← ADDED: reminder created/moved (callback) or closed by the database (no callback)
+        if (form.callbackAt || bellHasReminderFor(current.practiceCode)) window.dispatchEvent(new CustomEvent('reminders:changed'))
         router.refresh()
       }
     } catch {
@@ -195,7 +194,7 @@ export default function WorksheetDetailModal({ row, canEdit, readOnlyReason, onC
             {!editing ? (
               <div className="wsm-grid">
                 {field('Disposition', r.disposition ? <span className="badge badge-blue">{r.disposition}</span> : null)}
-                {field('Callback', r.callbackAt ? `${fmt(r.callbackAt)}${r.timezone ? ` · ${r.timezone}` : ''}` : null)}
+                {field('Callback', r.callbackAt ? formatInZone(r.callbackAt, r.timezone) : null)}{/* ← CHANGED: practice time, e.g. 10:00 AM EST */}
                 {field('Concerned person', r.concernedPerson)}
                 {field('Direct line', r.directLine)}
                 {field('Additional phone', r.additionalPhone)}
@@ -214,9 +213,8 @@ export default function WorksheetDetailModal({ row, canEdit, readOnlyReason, onC
                 </label>
                 <label className="wsm-field"><span>Time zone</span>
                   <select className="input" value={form.timezone} onChange={set('timezone')}>
-                    <option value="">— Select —</option>
-                    {form.timezone && !TIMEZONES.includes(form.timezone) && <option value={form.timezone}>{form.timezone}</option>}
-                    {TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}
+                    {/* ← CHANGED: EST / CST / MST / PST */}
+                    {US_ZONES.map((z) => <option key={z.value} value={z.value}>{z.name}</option>)}
                   </select>
                 </label>
                 {input('Callback', 'callbackAt', { type: 'datetime-local' })}

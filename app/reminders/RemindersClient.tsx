@@ -5,6 +5,7 @@ import { Fragment, useEffect, useState } from 'react' // ← CHANGED: + Fragment
 import { getReminders, markReminderDone, getLeadNotes, type Reminder, type LeadNote, type LeadCallback } from '../reminders-actions' // ← CHANGED
 import { useReminderCompanyFilter } from './ReminderCompanyFilter'
 import { leadHref } from '../../lib/lead-return'
+import { formatInZone } from '../../lib/us-time' // ← ADDED
 
 // ← ADDED: rows drawn per section at first. Counts in the headings stay
 // exact; "Show more" draws the next rows. Drawing hundreds of completed
@@ -144,7 +145,7 @@ export default function RemindersClient({ initialData, initialMessage, companies
         <table className="tbl">
           <thead>
             <tr>
-              <th>When</th>
+              <th>When (practice time)</th>{/* ← CHANGED */}
               <th>Practice</th>
               {showAgentCol && <th>Set By</th>}
               {showCompanyCol && <th>Company</th>}
@@ -157,7 +158,11 @@ export default function RemindersClient({ initialData, initialMessage, companies
             {rows.map((r) => (
               <Fragment key={r.id}>{/* ← CHANGED: row + optional history row */}
               <tr>
-                <td style={{ fontSize: 12 }}>{new Date(r.remindAt).toLocaleString()}</td>
+                {/* ← CHANGED: practice time (e.g. 10:00 AM EST) + the same moment on this computer */}
+                <td style={{ fontSize: 12 }}>
+                  <strong>{formatInZone(r.remindAt, r.zone)}</strong>
+                  <div className="subtle" style={{ fontSize: 11 }}>{new Date(r.remindAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} your time</div>
+                </td>
                 <td>
                   {r.practiceDeleted ? (
                     <span className="subtle" title="This lead was permanently deleted">{r.practiceName}</span>

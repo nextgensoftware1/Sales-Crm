@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef, useSyncExternalStore } from 'react' // ← CHANGED: + useSyncExternalStore
 import { useRouter } from 'next/navigation'
 import { Inbox, Search, Sparkles, TimerReset } from 'lucide-react'
 import { allocatePractices, softDeleteLeads } from './actions'
@@ -17,8 +17,25 @@ import {
   type LeadRow, type LeadFilters, type LeadOverview, type ZoneKey,
 } from '../lib/lead-filters'
 import { npiLabel } from '../lib/npi-label' // ← ADDED: show NPI instead of PR-
+import LeadSpreadsheet from './LeadSpreadsheet' // ← ADDED: spreadsheet view for Agents / Closers
+import type { LeadOverview as SheetOverview } from '../lib/lead-filters' // ← ADDED
 
 type Practice = LeadRow
+
+// ← ADDED: the Table / Spreadsheet choice, remembered on this computer.
+const VIEW_KEY = 'lead-view-mode'
+const viewListeners = new Set<() => void>()
+function readViewMode(): 'table' | 'sheet' {
+  try { return window.localStorage.getItem(VIEW_KEY) === 'sheet' ? 'sheet' : 'table' } catch { return 'table' }
+}
+function writeViewMode(mode: 'table' | 'sheet') {
+  try { window.localStorage.setItem(VIEW_KEY, mode) } catch { /* storage unavailable */ }
+  viewListeners.forEach((listener) => listener())
+}
+function subscribeViewMode(listener: () => void) {
+  viewListeners.add(listener)
+  return () => { viewListeners.delete(listener) }
+}
 
 type Company = { id: string; slug: string; name: string }
 
@@ -328,6 +345,17 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   // Real client-side pagination over the already-fetched/filtered array —
   // no new queries, same `filtered` rows, just windowed into pages instead
   // of rendering the entire result set at once.
+  // ← ADDED: Table / Spreadsheet view. Only Agents and Closers work leads
+  // from their queue, so only they get the spreadsheet. The choice is
+  // remembered on this computer (it is a layout preference, not a filter).
+  const canUseSheet = viewerRole === 'agent' || viewerRole === 'closer' // ← ADDED
+  const viewMode = useSyncExternalStore(subscribeViewMode, readViewMode, () => 'table' as const) // ← ADDED
+  const chooseView = writeViewMode // ← ADDED
+  const showSheet = canUseSheet && viewMode === 'sheet' // ← ADDED
+  // ← ADDED: leads saved from the spreadsheet leave the queue at once (the
+  // server's cached list is updated too; this also covers a cache on another server).
+  const [sheetSavedCodes, setSheetSavedCodes] = useState<Set<string>>(new Set())
+
   const [pageSize, setPageSize] = useState(serverPaging?.pageSize ?? (isSuperAdmin ? 20 : 8))
   const [page, setPage] = useState(1)
 
@@ -422,8 +450,9 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   }, [serverPaging, filtersRestored, filters, filtersKey, page, pageSize, serverSnapshotId, serverView])
 
   const filteredCodes = useMemo(
-    () => (serverPaging ? serverView.codes : filtered.map((p) => p.practiceCode)),
-    [serverPaging, serverView.codes, filtered],
+    () => (serverPaging ? serverView.codes : filtered.map((p) => p.practiceCode))
+      .filter((code) => !sheetSavedCodes.has(code)), // ← CHANGED: minus leads just saved in the spreadsheet
+    [serverPaging, serverView.codes, filtered, sheetSavedCodes],
   )
   const filteredPositionByCode = useMemo(
     () => new Map(filteredCodes.map((code, index) => [code, index])),
@@ -433,7 +462,21 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
   const totalPages = Math.max(1, Math.ceil(filteredCount / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageStart = (safePage - 1) * pageSize
-  const pageRows = serverPaging ? serverView.rows : filtered.slice(pageStart, pageStart + pageSize)
+  const pageRows = (serverPaging ? serverView.rows : filtered.filter((p) => !sheetSavedCodes.has(p.practiceCode)).slice(pageStart, pageStart + pageSize)) // ← CHANGED
+    .filter((p) => !sheetSavedCodes.has(p.practiceCode)) // ← ADDED: a saved lead disappears at once
+
+  // ← ADDED: a spreadsheet row was saved. Hide it now, show the new counts,
+  // and (shortly after, once for several quick saves) ask the server for the
+  // page again so the next lead in the queue moves up. That re-read comes
+  // from the server's cached list in memory — not from the database.
+  const sheetRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleSheetSaved = (code: string, overview: SheetOverview | null) => {
+    setSheetSavedCodes((prev) => new Set(prev).add(code))
+    if (overview) setServerOverview(overview)
+    if (!serverPaging) return
+    if (sheetRefreshTimer.current) clearTimeout(sheetRefreshTimer.current)
+    sheetRefreshTimer.current = setTimeout(() => setServerView((prev) => ({ ...prev, key: '' })), 600)
+  }
   // Any change to the filtered set (search, a filter, a tab) should land
   // back on page 1 rather than leaving the user stranded past the end.
   useEffect(() => { setPage(1) }, [search, stateFilter, zoneFilter, specialtyFilters, dispositionFilter, activeSignals, catTab, sourceTab, poolTab, assignedView, companyFilter, enumTypeFilter, npiTypeFilter, lastUpdatedFrom, lastUpdatedTo, enumDateFrom, enumDateTo, assignedDateFilter])
@@ -881,48 +924,39 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
       )}
 
       {optionsError && <p role="alert">{optionsError} <button type="button" onClick={() => void loadOptions()} disabled={optionsBusy}>Retry</button></p>}
+      {/* ← ADDED: Table / Spreadsheet switch (Agents and Closers) */}
+      {canUseSheet && (
+        <div role="group" aria-label="Lead view" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.dim, marginRight: 4 }}>View</span>
+          {(['table', 'sheet'] as const).map((mode) => (
+            <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={() => chooseView(mode)}
+              style={{ ...btnGhost, padding: '6px 14px', ...(viewMode === mode ? { background: C.green, color: '#fff', borderColor: C.green, fontWeight: 700 } : {}) }}>
+              {mode === 'table' ? 'Table' : 'Spreadsheet'}
+            </button>
+          ))}
+        </div>
+      )}
       {/* ---- Table ---- */}
-      <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${C.line}` }}>
-              {(isSuperAdmin || canAssign) && (
-                <th style={th}>
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleSelectAll}
-                    title={allSelected ? 'Clear all' : 'Select all'}
-                  />
-                </th>
-              )}
-              <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
-              <th style={th}>State</th>
-              <th style={thLeft}>Specialty</th>
-              <th style={th}>Sex</th>
-              <th style={th}>Risk</th>
-              <th style={th}>Payment Adj %</th>
-              <th style={thLeft}>Source</th>
-              {isSuperAdmin && <th style={thLeft}>Assigned Company</th>}
-              <th style={thLeft}>Last Dialed</th>
-              <th style={thLeft}>Assigned On</th>
-              <th style={thLeft}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((p) => (
-              <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
+      {showSheet ? ( // ← ADDED: spreadsheet view — type the worksheet straight into each row
+        <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
+          <LeadSpreadsheet rows={pageRows} viewerUserId={viewerUserId ?? ''} onSaved={handleSheetSaved} />
+        </section>
+      ) : (
+        <section className="tbl-wrap" style={{ ...panel, padding: 0 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {(isSuperAdmin || canAssign) && (
-                  <td style={td}>
+                  <th style={th}>
                     <input
                       type="checkbox"
-                      checked={selected.has(p.practiceCode)}
-                      onChange={() => toggleSelect(p.practiceCode)}
-                      disabled={!!p.assignedAwayTo}
-                      title={p.assignedAwayTo ? `Already assigned to ${p.assignedAwayTo.name} — can't be re-assigned from here` : undefined}
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      title={allSelected ? 'Clear all' : 'Select all'}
                     />
-                  </td>
+                  </th>
                 )}
+<<<<<<< HEAD
                 <td style={{ ...tdLeft, minWidth: 240 }}>
                   {prioritySet.has(p.practiceCode) && (
                     <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
@@ -966,14 +1000,75 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.lastDialed)}</td>
                 <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.allocatedOn)}</td>
                 <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
+=======
+                <th style={{ ...thLeft, minWidth: 240 }}>Practice</th>
+                <th style={th}>State</th>
+                <th style={thLeft}>Specialty</th>
+                <th style={th}>Sex</th>
+                <th style={th}>Risk</th>
+                <th style={th}>Payment Adj %</th>
+                <th style={thLeft}>Source</th>
+                {isSuperAdmin && <th style={thLeft}>Assigned Company</th>}
+                <th style={thLeft}>Last Dialed</th>
+                <th style={thLeft}>Assigned On</th>
+                <th style={thLeft}>Status</th>
+>>>>>>> edc47c0 (Describe your changes)
               </tr>
-            ))}
-            {filteredCount === 0 && (
-              <tr><td colSpan={tableColumnCount} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {pageRows.map((p) => (
+                <tr key={p.practiceCode} className="leads-row" style={{ borderBottom: `1px solid ${C.line}` }}>
+                  {(isSuperAdmin || canAssign) && (
+                    <td style={td}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(p.practiceCode)}
+                        onChange={() => toggleSelect(p.practiceCode)}
+                        disabled={!!p.assignedAwayTo}
+                        title={p.assignedAwayTo ? `Already assigned to ${p.assignedAwayTo.name} — can't be re-assigned from here` : undefined}
+                      />
+                    </td>
+                  )}
+                  <td style={{ ...tdLeft, minWidth: 240 }}>
+                    {prioritySet.has(p.practiceCode) && (
+                      <span title="Assigned to you" style={{ color: C.amber, marginRight: 6 }}>★</span>
+                    )}
+                    <Link prefetch={false} href={`/practice/${p.practiceCode}`} style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>{p.name}</Link>
+                    <div style={{ fontSize: 10, color: C.faint, fontFamily: 'ui-monospace, monospace', fontWeight: 600, letterSpacing: 0.3, marginTop: 3, lineHeight: 1 }}>
+                      {npiLabel(p.practiceCode)}{/* ← CHANGED */}
+                      {p.isEmailLead && <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 999, background: '#e0f2fe', color: '#0369a1', fontFamily: 'inherit', fontSize: 9.5, fontWeight: 800 }}>EMAIL</span>}{/* ← ADDED */}
+                    </div>
+                    {p.assignedAwayTo && (
+                      <div style={{ fontSize: 11, color: C.violet, fontWeight: 700, marginTop: 4 }}>
+                        → {p.assignedAwayTo.name} <span style={{ color: C.dim, fontWeight: 500 }}>({p.assignedAwayTo.role})</span>
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...td, color: C.text, fontWeight: 700, fontSize: 13 }}>{p.state ?? '—'}</td>
+                  <td style={{ ...tdLeft, color: C.dim, fontSize: 13 }}>{p.specialty ?? '—'}</td>
+                  <td style={{ ...td, color: C.dim, fontSize: 13 }}>{p.sex ?? '—'}</td>
+                  <td style={{ ...td, color: p.risk ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.risk ?? '—'}</td>
+                  <td style={{ ...td, color: p.paymentAdj ? C.text : C.faint, fontSize: 13, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{p.paymentAdj ?? '—'}</td>
+                  <td style={{ ...tdLeft, fontSize: 12 }}>{sourceBadge(p.source)}</td>
+                  {isSuperAdmin && (
+                    <td style={{ ...tdLeft, fontSize: 12, minWidth: 170 }}>
+                      {p.allocatedTo
+                        ? <span className="leads-company-name">{p.allocatedTo}</span>
+                        : <span className="leads-unassigned">Unassigned</span>}
+                    </td>
+                  )}
+                  <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.lastDialed)}</td>
+                  <td style={{ ...tdLeft, color: C.dim, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{fmtDateTime(p.allocatedOn)}</td>
+                  <td style={{ ...tdLeft, fontSize: 12 }}>{statusBadge(p.status)}</td>
+                </tr>
+              ))}
+              {filteredCount === 0 && (
+                <tr><td colSpan={tableColumnCount} style={{ ...tdLeft, color: C.faint, padding: 24 }}>No leads match these filters. Clear them to see the full pool.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 13, color: C.dim, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

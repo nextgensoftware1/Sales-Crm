@@ -50,7 +50,9 @@ export default async function Home() {
   const data = reused ? reused.data : await loadLeadsData() // ← CHANGED
 
   if (data.kind === 'error') {
-    const error: any = data.error
+    // ← CHANGED: typed explicitly (no `any`), so the editor can't mark these
+    // fields as "never" — this is only the "could not load leads" screen.
+    const error = (data as { error?: { message?: string; details?: string; hint?: string; code?: string } | null }).error
     return (
       <div style={{ padding: 40 }}>
         <h1 style={{ color: 'red' }}>Error loading practices</h1>
@@ -135,4 +137,5 @@ export default async function Home() {
       />
     </AppShell>
   )
+  
 }

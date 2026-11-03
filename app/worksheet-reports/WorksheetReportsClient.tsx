@@ -8,6 +8,7 @@ import type { WorksheetReportRow } from '../worksheet-reports-actions'
 import WorksheetDetailModal from './WorksheetDetailModal'
 import { dispositionOptions } from '../../lib/dispositions'
 import { toCsv, toXlsx, downloadFile, type ExportTable } from '../../lib/export-file' // ← ADDED: download selected leads
+import { formatInZone, zoneInfo } from '../../lib/us-time' // ← ADDED: callbacks in practice time
 
 // Opens the worksheet details popup; provided by WorksheetReportsClient so
 // every table (including each company group) can use it.
@@ -50,7 +51,8 @@ function exportTable(rows: WorksheetReportRow[]): ExportTable {
       'Call Details', 'Handoff Status', 'Last Updated', 'Last Updated By'],
     rows: rows.map((r) => [
       npiOf(r), r.practiceName, r.disposition ?? '', r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.contactPhone, r.officialPhone, r.directLine,
-      r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, when(r.callbackAt), r.timezone,
+      r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser,
+      r.callbackAt ? formatInZone(r.callbackAt, r.timezone) : '', r.callbackAt || r.timezone ? zoneInfo(r.timezone).label : '', // ← CHANGED: practice time + EST/CST/MST/PST
       r.callDetails, r.handoffStatus, when(r.lastUpdatedAt), r.lastUpdatedBy,
     ]),
   }
@@ -161,7 +163,7 @@ function WorksheetSheet({ rows }: { rows: WorksheetReportRow[] }) {
           <td>{cell(row, row.state ?? '—')}</td>
           <td>{cell(row, row.specialty ?? '—')}</td>
           <td>{cell(row, row.disposition ?? '—')}</td>
-          <td>{cell(row, row.callbackAt ? <><ClientDate iso={row.callbackAt} />{row.timezone ? ` ${row.timezone}` : ''}</> : '—')}</td>{/* ← CHANGED */}
+          <td>{cell(row, row.callbackAt ? formatInZone(row.callbackAt, row.timezone) : '—')}</td>{/* ← CHANGED: practice time, e.g. 10:00 AM EST */}
           <td>{cell(row, <ClientDate iso={row.lastUpdatedAt} />)}</td>{/* ← CHANGED */}
           {columns.map(column => {
             const value = row.importData?.[column]
@@ -287,7 +289,7 @@ function ReportTable({
                     <td>{r.filledBy ?? '—'}</td>
                     <td>{r.assignedCloser ?? '—'}</td>
                     <td>{r.disposition ? <span className="badge badge-blue">{r.disposition}</span> : '—'}</td>
-                    <td><ClientDate iso={r.callbackAt} />{r.timezone ? ` ${r.timezone}` : ''}</td>{/* ← CHANGED */}
+                    <td>{r.callbackAt ? formatInZone(r.callbackAt, r.timezone) : '—'}</td>{/* ← CHANGED: practice time */}
                     <td>
                       <ClientDate iso={r.lastUpdatedAt} />{/* ← CHANGED */}
                       {r.lastUpdatedBy && <div className="subtle" style={{ fontSize: 10.5 }}>by {r.lastUpdatedBy}</div>}

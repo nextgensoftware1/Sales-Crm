@@ -22,6 +22,8 @@ function loadTs(file, mocks = {}) {
   const loadedModule = { exports: {} }
   const localRequire = (name) => {
     if (Object.hasOwn(mocks, name)) return mocks[name]
+    // CSS modules (Next.js): each class name maps to itself.
+    if (name.endsWith('.module.css')) return new Proxy({}, { get: (_, key) => (typeof key === 'string' && key !== '__esModule' ? key : undefined) })
     if (name.startsWith('.')) {
       const resolved = path.resolve(path.dirname(filename), name)
       for (const ext of ['.ts', '.tsx']) if (fs.existsSync(resolved + ext)) return loadTs(resolved + ext, mocks)
@@ -270,6 +272,47 @@ test('New disposition and callback are sent through the atomic worksheet RPC', a
   assert.equal(call.payload.p_disposition, 'New')
   assert.equal(call.payload.p_callback_at, '2026-09-22T12:00:00.000Z')
 })
+test('callback typed on the practice clock is stored as the exact moment (EST/CST/MST/PST)', async () => {
+  for (const [callbackAt, timezone, expected] of [
+    ['2026-10-24T10:00', 'Eastern', '2026-10-24T14:00:00.000Z'],    // daylight time
+    ['2026-12-24T10:00', 'Eastern', '2026-12-24T15:00:00.000Z'],    // standard time
+    ['2026-10-24T10:00', 'Central', '2026-10-24T15:00:00.000Z'],
+    ['2026-07-01T10:00', 'Mountain', '2026-07-01T16:00:00.000Z'],
+    ['2026-07-01T10:00', 'Arizona', '2026-07-01T17:00:00.000Z'],    // Arizona: no daylight saving
+    ['2026-10-24T10:00', 'Pacific', '2026-10-24T17:00:00.000Z'],
+  ]) {
+    const run = loadWorksheet()
+    assert.equal((await run.save('PR-p1', { ...worksheet, callbackAt, timezone })).ok, true)
+    const call = run.calls.find((c) => c.table === 'rpc:save_company_worksheet')
+    assert.equal(call.payload.p_callback_at, expected, `${callbackAt} ${timezone}`)
+    assert.equal(call.payload.p_timezone, timezone)
+  }
+})
+test('callback needs a real zone and a valid time', async () => {
+  for (const [callbackAt, timezone, pattern] of [['2026-10-24T10:00', 'Other', /time zone/], ['2026-10-24T10:00', '', /time zone/], ['tomorrow', 'Eastern', /valid callback/]]) {
+    const run = loadWorksheet()
+    const res = await run.save('PR-p1', { ...worksheet, callbackAt, timezone })
+    assert.equal(res.ok, false); assert.match(res.message, pattern)
+    assert.equal(run.calls.some((c) => c.table === 'rpc:save_company_worksheet'), false)
+  }
+  const run = loadWorksheet()   // no callback: any zone (even an old "Other") is fine
+  assert.equal((await run.save('PR-p1', { ...worksheet, callbackAt: '', timezone: 'Other' })).ok, true)
+})
+test('US time helper: same answers on any computer clock, quick picks on the practice clock', () => {
+  const u = loadTs('lib/us-time.ts')
+  assert.equal(u.formatInZone('2026-10-24T14:00:00Z', 'Eastern'), '24/10/2026, 10:00 AM EST')
+  assert.equal(u.formatInZone('2026-10-24T17:00:00Z', 'Pacific'), '24/10/2026, 10:00 AM PST')
+  assert.equal(u.utcToZonedWallTime('2026-12-24T15:00:00Z', 'Eastern'), '2026-12-24T10:00')
+  assert.equal(u.normalizeZone('PST'), 'Pacific'); assert.equal(u.normalizeZone('Other'), null)
+  assert.deepEqual(['NY', 'TX', 'CO', 'AZ', 'CA', 'HI', null].map(u.zoneForState), ['Eastern', 'Central', 'Mountain', 'Arizona', 'Pacific', 'Eastern', 'Eastern'])
+  const friEvening = Date.parse('2026-10-23T22:30:00Z')     // Fri 6:30 PM in New York
+  assert.equal(u.quickWallTime('plus1h', 'Eastern', friEvening), '2026-10-23T19:30')
+  assert.equal(u.quickWallTime('tomorrow9', 'Eastern', friEvening), '2026-10-24T09:00')
+  assert.equal(u.quickWallTime('nextMonday10', 'Eastern', friEvening), '2026-10-26T10:00')
+  assert.equal(u.quickWallTime('nextMonday10', 'Eastern', Date.parse('2026-10-26T14:00:00Z')), '2026-11-02T10:00')   // on a Monday → next week
+  assert.equal(u.quickWallTime('tomorrow9', 'Pacific', Date.parse('2026-10-24T05:00:00Z')), '2026-10-24T09:00')     // still Friday in LA
+})
+
 test('atomic worksheet failure is reported without partial client writes', async () => {
   const run = loadWorksheet({ failures: { 'rpc:save_company_worksheet': { message: 'unavailable' } } })
   const result = await run.save('PR-p1', worksheet)
@@ -327,6 +370,50 @@ for (const [role, expectedScope] of [['super_admin', 'all'], ['manager', 'compan
     assert.deepEqual(calls.map(c=>c.table), ['lead_reminders'])
   })
 }
+
+// Bell reminders: one small, windowed, role-scoped query.
+function bellHarness(role) {
+  const steps = []
+  const q = new Proxy({}, { get: (_, method) => method === 'then'
+    ? (resolve) => resolve({ data: [{ id: 'r1', practice_id: 'p1', tenant_id: 'a', agent_id: 'me', remind_at: '2026-10-26T15:00:00Z', note: 'Call', done: false,
+        completed_at: null, master_practices: { practice_code: 'PR-1', name: 'One', state: 'CA' }, users: { full_name: 'Me' }, tenants: { name: 'A' } }], error: null })
+    : (...args) => { steps.push([method, ...args]); return q } })
+  const db = { from: (table) => { steps.push(['from', table]); return q } }
+  const actions = loadTs('app/reminders-actions.ts', { '../lib/supabase-server': {
+    createSupabaseServer: async () => db,
+    getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+    getCurrentProfile: async () => ({ data: { id: 'me', tenant_id: 'a', roles: { key: role } } }),
+  } })
+  return { actions, steps }
+}
+for (const [role, scopeStep] of [['super_admin', null], ['company_admin', ['eq', 'tenant_id', 'a']], ['team_lead', ['eq', 'tenant_id', 'a']], ['agent', ['eq', 'agent_id', 'me']], ['closer', ['eq', 'agent_id', 'me']]]) {
+  test(`bell reminders (${role}): active only, inside the window, max 100, same scoping`, async () => {
+    const h = bellHarness(role)
+    const res = await h.actions.getBellReminders('2026-10-25T12:00:00.000Z', '2026-10-27T12:00:00.000Z')
+    assert.equal(res.ok, true); assert.equal(res.reminders.length, 1); assert.equal(res.reminders[0].zone, 'Pacific')
+    assert.deepEqual(h.steps.filter(s => s[0] === 'from'), [['from', 'lead_reminders']])   // one query
+    const has = (step) => h.steps.some(s => JSON.stringify(s) === JSON.stringify(step))
+    assert.ok(has(['or', 'done.is.null,done.eq.false']))
+    assert.ok(has(['gte', 'remind_at', '2026-10-25T12:00:00.000Z']))
+    assert.ok(has(['lte', 'remind_at', '2026-10-27T12:00:00.000Z']))
+    assert.ok(has(['limit', 100]))
+    if (scopeStep) assert.ok(has(scopeStep)); else assert.equal(h.steps.some(s => s[0] === 'eq'), false)
+  })
+}
+test('bell reminders: invalid or empty window is refused without a query', async () => {
+  for (const [from, to] of [['nope', '2026-10-27T00:00:00Z'], ['2026-10-27T00:00:00Z', ''], ['2026-10-27T00:00:00Z', '2026-10-27T00:00:00Z'], ['2026-10-28T00:00:00Z', '2026-10-27T00:00:00Z'], [undefined, null]]) {
+    const h = bellHarness('agent')
+    const res = await h.actions.getBellReminders(from, to)
+    assert.equal(res.ok, false)
+    assert.equal(h.steps.length, 0)
+  }
+})
+test('getReminders / getActiveReminders keep working with no window', async () => {
+  const h = bellHarness('agent')
+  await h.actions.getReminders(); await h.actions.getActiveReminders()
+  assert.equal(h.steps.some(s => ['gte', 'lte', 'limit'].includes(s[0])), false)
+  assert.equal(h.steps.filter(s => s[0] === 'or').length, 1)   // only the active-only call filters done
+})
 
 test('roster gets editor names without a separate users query', async () => {
   const calls = []
@@ -1113,6 +1200,240 @@ test('not-worked navigation rebuilds the filtered list for the signed-in user', 
   })
   assert.deepEqual(await getNotWorkedLeadNavigation('auth-user'), ['A', 'C'])
   assert.equal(await getNotWorkedLeadNavigation('other-user'), null)
+})
+
+// ---------------------------------------------------------------------------
+// Upload one agent's call work: NPI, Disposition / Response, Call details * / Note.
+// ---------------------------------------------------------------------------
+test('agent worksheet CSV: reads the three columns, skips bad rows with a reason', () => {
+  const r = loadTs('lib/agent-worksheet-import.ts')
+  const row = (npi, d, n) => ({ 'NPI': npi, 'Disposition / Response': d, 'Call details * / Note': n })
+  const out = r.readAgentWorksheetCsv([
+    row('1234567890', 'Interested', 'Spoke to OM'),
+    row(' 1234567891 ', 'call back', 'Asked to call Monday'),        // case / spaces
+    row('1234567892.0', 'FOLLOW-UP', 'Excel number'),               // Excel ".0", dash
+    row('1.23457E+09', 'No Answer', 'x'),                           // Excel scientific
+    row('12345', 'No Answer', 'x'),
+    row('1234567893', '', 'x'),
+    row('1234567894', 'Email Sent', 'x'),                           // email response
+    row('1234567895', 'Maybe later', 'x'),
+    row('1234567896', 'Voicemail', '   '),                         // empty note → allowed
+    row('1234567890', 'Voicemail', 'dup'),                          // same NPI again
+    row('', '', ''),                                                // blank line ignored
+    row('1234567897', 'Not Interested', 'In both lists → a call disposition'),
+  ])
+  assert.equal(out.ok, true)
+  assert.deepEqual(out.rows.map(x => [x.row_number, x.npi, x.disposition]), [
+    [2, '1234567890', 'Interested'], [3, '1234567891', 'Call back'], [4, '1234567892', 'Follow Up'], [10, '1234567896', 'Voicemail'], [13, '1234567897', 'Not Interested']])
+  assert.deepEqual(out.skipped.map(x => [x.row, x.reason.split(' ').slice(0, 3).join(' ')]), [
+    [5, 'NPI was changed'], [6, 'NPI must contain'], [7, 'Disposition is empty'], [8, '"Email Sent" is'],
+    [9, 'Unknown disposition "Maybe'], [11, 'Same NPI appears']])
+  // empty note: the disposition is sent as the note, flagged so the database keeps an existing note
+  const voicemail = out.rows.find(x => x.npi === '1234567896')
+  assert.deepEqual([voicemail.notes, voicemail.note_given], ['Voicemail', false])
+  assert.equal(out.rows[0].note_given, true)
+})
+
+test('agent worksheet CSV: common spellings agents use are understood', () => {
+  const r = loadTs('lib/agent-worksheet-import.ts')
+  const cases = [['HANG UP', 'Hung up'], ['Hangup', 'Hung up'], ['hung-up', 'Hung up'], ['VM', 'Voicemail'], ['Left VM', 'Voicemail'],
+    ['NA', 'No Answer'], ['no answer', 'No Answer'], ['CB', 'Call back'], ['Callback', 'Call back'], ['Front desk', 'Front Desk'],
+    ['Do Not Call', 'DNC'], ['F/U', 'Follow Up'], ['Not interested', 'Not Interested'], ['Closed', 'Offc Perm Closed'], ['MEETING', 'Meeting']]
+  const out = r.readAgentWorksheetCsv(cases.map(([d], i) => ({ NPI: String(1000000000 + i), 'Disposition / Response': d, 'Call details * / Note': '' })))
+  assert.deepEqual(out.skipped, [])
+  assert.deepEqual(out.rows.map(x => x.disposition), cases.map(([, want]) => want))
+})
+
+test('agent worksheet CSV: header names are matched loosely; missing columns are named', () => {
+  const r = loadTs('lib/agent-worksheet-import.ts')
+  const ok = r.readAgentWorksheetCsv([{ npi: '1234567890', Disposition: 'Meeting', Notes: 'Booked' }])
+  assert.deepEqual(ok.rows.map(x => x.disposition), ['Meeting'])
+  const bad = r.readAgentWorksheetCsv([{ NPI: '1234567890', Status: 'x' }])
+  assert.equal(bad.ok, false); assert.match(bad.message, /Call details \* \/ Note/)
+  assert.equal(r.isFullWorksheetFormat([{ 'Company Name': 'HBS', 'Agent Name': 'A', NPI: '1', Notes: 'n' }]), true)
+  assert.equal(r.isFullWorksheetFormat([{ NPI: '1', 'Disposition / Response': 'x', 'Call details * / Note': 'n' }]), false)
+})
+
+test('agent worksheet CSV: comma, tab, semicolon, Unicode Text, title row and Excel BOM all read the same', async () => {
+  const csv = loadTs('lib/csv.ts'), r = loadTs('lib/agent-worksheet-import.ts')
+  const header = ['NPI', 'Disposition / Response', 'Call details * / Note']
+  const data = [['1234567890', 'Interested', 'Spoke to OM, will call back'], ['1234567891', 'Voicemail', 'Left VM']]
+  const make = (d, lines) => lines.map(cells => cells.map(c => (c.includes(d) || c.includes(',') ? `"${c}"` : c)).join(d)).join('\r\n')
+  const variants = {
+    comma: Buffer.from('\uFEFF' + make(',', [header, ...data]), 'utf8'),
+    tab: Buffer.from(make('\t', [header, ...data]), 'utf8'),
+    semicolon: Buffer.from(make(';', [header, ...data]), 'utf8'),
+    unicodeText: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(make('\t', [header, ...data]), 'utf16le')]),
+    titleRow: Buffer.from(make(',', [['October calls - Aqsam', '', ''], ['', '', ''], header, ...data]), 'utf8'),
+  }
+  for (const [name, bytes] of Object.entries(variants)) {
+    const read = await csv.readUploadText(new File([bytes], name + '.csv'))
+    assert.equal(read.ok, true, name)
+    const rows = csv.parseCsv(read.text, { delimiter: csv.detectDelimiter(read.text), findHeader: r.looksLikeWorksheetHeader })
+    const out = r.readAgentWorksheetCsv(rows)
+    assert.equal(out.ok, true, name + ': ' + out.message)
+    assert.deepEqual(out.rows.map(x => [x.npi, x.disposition, x.notes]), [
+      ['1234567890', 'Interested', 'Spoke to OM, will call back'], ['1234567891', 'Voicemail', 'Left VM']], name)
+  }
+  const xlsx = await csv.readUploadText(new File([Buffer.from('PK\u0003\u0004rest-of-zip')], 'calls.xlsx'))
+  assert.equal(xlsx.ok, false); assert.match(xlsx.message, /Excel workbook/)
+  // Existing callers (Upload Leads) are unchanged: comma only, header on row 1.
+  assert.deepEqual(csv.parseCsv('a,b\n1,2\n'), [{ a: '1', b: '2' }])
+})
+
+test('agent worksheet CSV: a wrong file says which columns it did find', () => {
+  const r = loadTs('lib/agent-worksheet-import.ts')
+  const out = r.readAgentWorksheetCsv([{ 'Provider Name': 'x', 'Phone': '1' }])
+  assert.equal(out.ok, false)
+  assert.match(out.message, /Missing column\(s\): NPI, Disposition \/ Response, Call details \* \/ Note\. Columns found in the file: "Provider Name", "Phone"\./)
+})
+
+function agentImportHarness({ role = 'super_admin', rpcResult, rpcError = null } = {}) {
+  const rpcCalls = [], removed = []
+  const actions = loadTs('app/worksheet-import-actions.ts', {
+    '../lib/supabase-server': {
+      createSupabaseServer: async () => ({ rpc: async (name, args) => { rpcCalls.push([name, args]); return { data: rpcResult, error: rpcError } } }),
+      getCurrentUser: async () => ({ data: { user: { id: 'auth-admin' } } }),
+      getCurrentProfile: async () => ({ data: { id: 'admin', roles: { key: role } } }),
+    },
+    '../lib/lead-snapshots': { removeLeadsFromSnapshots: (userId, codes) => removed.push([userId, codes]) },
+    'next/cache': { revalidatePath() {} },
+  })
+  return { ...actions, rpcCalls, removed }
+}
+const IMPORT_TENANT = '11111111-1111-1111-1111-111111111111', IMPORT_AGENT = 'bbbbbbbb-0000-0000-0000-000000000001'
+const fileRows = [
+  { NPI: '1111111111', 'Disposition / Response': 'Interested', 'Call details * / Note': 'Spoke' },
+  { NPI: 'bad', 'Disposition / Response': 'Voicemail', 'Call details * / Note': 'x' },
+  { NPI: '2222222222', 'Disposition / Response': 'Voicemail', 'Call details * / Note': 'Left VM' },
+]
+
+test('agent import: good rows go to the database, skipped rows from file and database are merged', async () => {
+  const h = agentImportHarness({ rpcResult: { ok: true, imported: 1, npis: ['1111111111'], agent_auth_id: 'auth-agent',
+    skipped: [{ row: 4, npi: '2222222222', reason: 'Lead is claimed by another company' }] } })
+  const res = await h.importAgentWorksheetCsv('calls.csv', IMPORT_TENANT, IMPORT_AGENT, fileRows)
+  assert.equal(res.ok, true); assert.equal(res.imported, 1)
+  assert.deepEqual(res.skipped.map(x => x.row), [3, 4])
+  assert.match(res.message, /Imported 1 lead\(s\) to Active Call\. 2 row\(s\) skipped/)
+  const [name, args] = h.rpcCalls[0]
+  assert.equal(name, 'import_agent_worksheets')
+  assert.deepEqual([args.p_tenant_id, args.p_agent_id, args.p_rows.map(r => r.npi)], [IMPORT_TENANT, IMPORT_AGENT, ['1111111111', '2222222222']])
+  assert.deepEqual(h.removed, [['auth-agent', ['PR-1111111111']]])   // leaves the agent's cached queue
+})
+
+test('agent import: refused for non-Super-Admin, missing choices, full-format files; all-bad file makes no database call', async () => {
+  for (const role of ['company_admin', 'manager', 'agent']) {
+    const h = agentImportHarness({ role })
+    assert.equal((await h.importAgentWorksheetCsv('f.csv', IMPORT_TENANT, IMPORT_AGENT, fileRows)).ok, false); assert.equal(h.rpcCalls.length, 0)
+  }
+  const h = agentImportHarness()
+  assert.match((await h.importAgentWorksheetCsv('f.csv', '', IMPORT_AGENT, fileRows)).message, /company/)
+  assert.match((await h.importAgentWorksheetCsv('f.csv', IMPORT_TENANT, 'nope', fileRows)).message, /agent/)
+  const full = await h.importAgentWorksheetCsv('f.csv', IMPORT_TENANT, IMPORT_AGENT, [{ 'Company Name': 'HBS', 'Agent Name': 'A', NPI: '1111111111', Notes: 'n' }])
+  assert.equal(full.fullFormat, true)
+  const allBad = await h.importAgentWorksheetCsv('f.csv', IMPORT_TENANT, IMPORT_AGENT, [{ NPI: 'x', 'Disposition / Response': 'Voicemail', 'Call details * / Note': 'n' }])
+  assert.equal(allBad.ok, false); assert.equal(allBad.skipped.length, 1)
+  assert.equal(h.rpcCalls.length, 0)
+})
+
+test('agent import: missing database function gives the SQL file to run', async () => {
+  const h = agentImportHarness({ rpcError: { code: 'PGRST202', message: 'Could not find the function public.import_agent_worksheets' } })
+  assert.match((await h.importAgentWorksheetCsv('f.csv', IMPORT_TENANT, IMPORT_AGENT, fileRows)).message, /agent-worksheet-import\.sql/)
+})
+
+// ---------------------------------------------------------------------------
+// Spreadsheet view: saved leads leave the cached queue (memory only).
+// ---------------------------------------------------------------------------
+test('spreadsheet: a saved lead leaves every cached copy of the queue; counts follow', () => {
+  const snapshots = loadTs('lib/lead-snapshots.ts')
+  const lead = (code, state = 'NY') => ({ practiceCode: code, name: code, state, specialty: 'Family' })
+  const data = () => ({ isSuperAdmin: false, myAssignedCodes: ['A', 'B', 'C'], newLeadCodes: [], workedLeadCodes: [],
+    practices: [lead('A'), lead('B', 'CA'), lead('C')], completedWorksheetCount: 4 })
+  const older = snapshots.saveLeadSnapshot('sheet-user', data())
+  const newer = snapshots.saveLeadSnapshot('sheet-user', data())
+  const other = snapshots.saveLeadSnapshot('someone-else', data())
+  const overview = snapshots.removeLeadsFromSnapshots('sheet-user', ['B'])
+  assert.equal(overview.summaryCounts.total, 2)          // My Lead Queue 3 → 2
+  assert.equal(overview.summaryCounts.worked, 5)         // Worked 4 → 5
+  assert.equal(overview.zoneCounts.PST, 0)
+  for (const snap of [older, newer]) {
+    const s = snapshots.getLeadSnapshot(snap.id, 'sheet-user')
+    assert.deepEqual(s.practices.map(p => p.practiceCode), ['A', 'C'])
+    assert.deepEqual(s.data.practices.map(p => p.practiceCode), ['A', 'C'])
+    assert.deepEqual(snapshots.queryLeadSnapshot(s, {}, null, 1, 10, true).codes, ['A', 'C'])
+  }
+  assert.equal(snapshots.getLeadSnapshot(other.id, 'someone-else').practices.length, 3)   // other users untouched
+  assert.equal(snapshots.removeLeadsFromSnapshots('sheet-user', ['B']).summaryCounts.worked, 5)   // saving twice counts once
+  assert.equal(snapshots.removeLeadsFromSnapshots('nobody-here', ['A']), null)
+})
+
+function sheetHarness({ role = 'agent', tables = {} } = {}) {
+  const calls = []
+  const db = database({
+    master_practices: [
+      { id: 'p1', practice_code: 'PR-1', phone: '(555) 111-2222', lead_category: null, deleted_at: null },
+      { id: 'p2', practice_code: 'PR-2', phone: null, lead_category: 'Email', deleted_at: null },
+      { id: 'p3', practice_code: 'PR-3', phone: '555', lead_category: null, deleted_at: null },
+      { id: 'p9', practice_code: 'PR-9', phone: '1', lead_category: null, deleted_at: '2026-10-01' },
+    ],
+    lead_worksheets: [
+      { practice_id: 'p1', tenant_id: 'a', call_details: 'Old notes', additional_phone: '', email: 'x@y.com', concerned_person: 'Ann', direct_line: '',
+        callback_at: '2026-10-24T14:00:00Z', timezone: 'Eastern', disposition: 'Follow Up' },
+      { practice_id: 'p3', tenant_id: 'OTHER', call_details: 'Not ours', disposition: 'Sold' },
+    ],
+    lead_email_worksheets: [{ practice_id: 'p2', tenant_id: 'a', email: 'e@p.com', response: 'Email Sent', note: 'n' }],
+    lead_transfers: [{ practice_id: 'p3', to_user_id: 'closer-x' }],
+    ...tables,
+  }, calls)
+  const removed = []
+  const actions = loadTs('app/sheet-actions.ts', {
+    '../lib/supabase-server': {
+      createSupabaseServer: async () => db,
+      getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }),
+      getCurrentProfile: async () => ({ data: { id: 'me', status: 'active', tenant_id: 'a', roles: { key: role } } }),
+    },
+    '../lib/lead-snapshots': { removeLeadsFromSnapshots: (userId, codes) => { removed.push([userId, codes]); return { summaryCounts: { total: 1 } } } },
+  })
+  return { ...actions, calls, removed }
+}
+
+test('spreadsheet details: phone, own company worksheet prefill, email worksheet, transfer lock — one small read', async () => {
+  const h = sheetHarness()
+  const res = await h.getSheetDetails(['PR-1', 'PR-2', 'PR-3', 'PR-9', 'PR-404'])
+  assert.equal(res.ok, true)
+  const by = Object.fromEntries(res.details.map(d => [d.practiceCode, d]))
+  assert.deepEqual(Object.keys(by).sort(), ['PR-1', 'PR-2', 'PR-3'])           // deleted / unknown leads not returned
+  assert.equal(by['PR-1'].phone, '(555) 111-2222')
+  assert.equal(by['PR-1'].worksheet.callDetails, 'Old notes')                 // a previous agent's work is kept, not blanked
+  assert.equal(by['PR-1'].worksheet.disposition, 'Follow Up')
+  assert.equal(by['PR-3'].worksheet, null)                                    // another company's worksheet is never shown
+  assert.equal(by['PR-2'].isEmailLead, true); assert.equal(by['PR-2'].emailWorksheet.response, 'Email Sent')
+  assert.equal(by['PR-3'].locked, true); assert.equal(by['PR-1'].locked, false)
+  assert.deepEqual(h.calls.map(c => c.table).sort(), ['lead_email_worksheets', 'lead_transfers', 'lead_worksheets', 'master_practices'])
+  assert.equal(h.calls.every(c => c.operation === 'select'), true)            // read only
+})
+
+test('spreadsheet details: the receiving closer is not locked; bad input makes no query', async () => {
+  const h = sheetHarness({ role: 'closer', tables: { lead_transfers: [{ practice_id: 'p3', to_user_id: 'me' }] } })
+  assert.equal((await h.getSheetDetails(['PR-3'])).details[0].locked, false)
+  const empty = sheetHarness()
+  assert.deepEqual(await empty.getSheetDetails(['', '; drop table', 42, null]), { ok: true, details: [] })
+  assert.deepEqual(await empty.getSheetDetails('PR-1'), { ok: true, details: [] })
+  assert.equal(empty.calls.length, 0)
+})
+
+test('spreadsheet: only Agents / Closers drop saved leads from their cached queue', async () => {
+  for (const role of ['agent', 'closer']) {
+    const h = sheetHarness({ role })
+    const res = await h.forgetSavedLeads(['PR-1', 'bad code!'])
+    assert.equal(res.ok, true); assert.equal(res.overview.summaryCounts.total, 1)
+    assert.deepEqual(h.removed, [['auth-me', ['PR-1']]])
+  }
+  for (const role of ['company_admin', 'manager', 'team_lead', 'super_admin']) {
+    const h = sheetHarness({ role })
+    assert.equal((await h.forgetSavedLeads(['PR-1'])).overview, null)
+    assert.equal(h.removed.length, 0)
+  }
 })
 
 // ---------------------------------------------------------------------------

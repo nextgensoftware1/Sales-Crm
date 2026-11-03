@@ -58,6 +58,7 @@ export default function ImportedWorksheetEditor({
     setMessage(result.message)
     if (result.ok) {
       setSavedFields(fields)
+      window.dispatchEvent(new CustomEvent('reminders:changed')) // ← ADDED: saving can close this lead's reminder
       router.refresh()
     }
   }

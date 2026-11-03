@@ -2,6 +2,7 @@
 
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server'
 import { authorizePractice } from '../lib/lead-access'
+import { normalizeZone, zonedWallTimeToUtcIso } from '../lib/us-time' // ← ADDED
 
 export type WorksheetData = {
   callDetails: string
@@ -9,8 +10,8 @@ export type WorksheetData = {
   email: string
   concernedPerson: string
   directLine: string
-  callbackAt: string   // ISO string or ''
-  timezone: string
+  callbackAt: string   // ← CHANGED: "YYYY-MM-DDTHH:mm" on the chosen zone's clock (or a full ISO time), or ''
+  timezone: string     // ← CHANGED: Eastern | Central | Mountain | Arizona | Pacific
   disposition: string
 }
 
@@ -55,11 +56,20 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     }
   }
 
+  // ← CHANGED: the callback time is the PRACTICE'S clock in the chosen US
+  // zone (EST / CST / MST / PST). It used to be read on the server's own
+  // clock (your PC or UTC), ignoring the zone — so "10:00 EST" was stored
+  // hours too early and showed as Overdue for everyone else.
+  const zone = normalizeZone(ws.timezone)
   let callbackIso: string | null = null
   if (ws.callbackAt) {
-    const parsed = new Date(ws.callbackAt)
-    if (Number.isNaN(parsed.getTime())) return { ok: false, message: 'Choose a valid callback date and time.' }
-    callbackIso = parsed.toISOString()
+    if (!zone) return { ok: false, message: 'Choose the callback time zone (EST, CST, MST or PST).' }
+    const raw = ws.callbackAt.trim()
+    // A full timestamp with its own offset (e.g. "…Z") is already exact.
+    callbackIso = /(Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+      ? (Number.isNaN(new Date(raw).getTime()) ? null : new Date(raw).toISOString())
+      : zonedWallTimeToUtcIso(raw, zone)
+    if (!callbackIso) return { ok: false, message: 'Choose a valid callback date and time.' }
   }
 
   const { data, error } = await supabase.rpc('save_company_worksheet', {
@@ -70,7 +80,7 @@ export async function saveWorksheet(practiceCode: string, ws: WorksheetData): Pr
     p_concerned_person: ws.concernedPerson,
     p_direct_line: ws.directLine,
     p_callback_at: callbackIso,
-    p_timezone: ws.timezone,
+    p_timezone: zone ?? (ws.timezone || null), // ← CHANGED: stored as Eastern / Central / …
     p_disposition: ws.disposition || 'New',
   })
 

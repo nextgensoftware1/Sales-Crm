@@ -4,11 +4,15 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { saveWorksheet, type WorksheetData } from './worksheet-actions'
 import { getClosers, transferToCloser, markAsSold } from './actions'
+import { US_ZONES, normalizeZone, quickWallTime, zonedWallTimeToUtcIso, formatInZone } from '../lib/us-time' // ← ADDED
+import { bellHasReminderFor } from '../lib/reminder-bell-cache' // ← ADDED (standalone: works with the old or new bell)
 
 // Disposition options live in lib/dispositions.ts (shared with the filters).
 import { DISPOSITIONS } from '../lib/dispositions'
 export { DISPOSITIONS }
-export const TIMEZONES = ['Eastern', 'Central', 'Mountain', 'Pacific', 'Other']
+// ← CHANGED: the callback zones (EST / CST / MST / MST-Arizona / PST). "Other" is gone —
+// every callback needs a real zone so its time is exact for every role.
+export const TIMEZONES = US_ZONES.map((z) => z.value) as string[]
 const HANDOFF_STATUSES = ['Pending', 'Sent', 'Signed']
 
 // All of these fields are optional — an empty value is always valid. These
@@ -32,8 +36,10 @@ function isValidName(v: string) { return !v.trim() || NAME_RE.test(v.trim()) }
 type Initial = Partial<WorksheetData> & { updatedByName?: string | null; updatedAt?: string | null }
 type ExistingTransfer = { closerName: string; handoffStatus: string | null; transferredAt: string } | null
 
-export default function Worksheet({ practiceCode, initial, existingTransfer, locked: lockedProp }: {
+export default function Worksheet({ practiceCode, initial, existingTransfer, locked: lockedProp, defaultTimezone }: {
   practiceCode: string
+  /** ← ADDED: the practice's own zone (from its state), used when none was saved yet. */
+  defaultTimezone?: string
   initial?: Initial
   existingTransfer?: ExistingTransfer
   // Whether THIS viewer is locked out. Not the same as "has this lead been
@@ -51,7 +57,9 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   const [concernedPerson, setConcernedPerson] = useState(initial?.concernedPerson ?? '')
   const [directLine, setDirectLine] = useState(initial?.directLine ?? '')
   const [callbackAt, setCallbackAt] = useState(initial?.callbackAt ?? '')
-  const [timezone, setTimezone] = useState(initial?.timezone ?? 'Eastern')
+  // ← CHANGED: saved zone → practice's zone → Eastern (old "Other" counts as not set)
+  const startZone = normalizeZone(initial?.timezone) ?? normalizeZone(defaultTimezone) ?? 'Eastern'
+  const [timezone, setTimezone] = useState<string>(startZone)
   const [disposition, setDisposition] = useState(initial?.disposition ?? 'New')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -95,11 +103,14 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   // to "locked whenever a transfer exists" if the caller doesn't specify.
   const locked = lockedProp ?? !!existingTransfer
 
-  const setQuick = (mins: number) => {
-    const d = new Date(Date.now() + mins * 60000)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    setCallbackAt(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
-  }
+  // ← CHANGED: quick picks are real times on the PRACTICE'S clock in the
+  // chosen zone ("Tomorrow 9:00" = 9:00 AM there). They used to add a fixed
+  // number of hours to the agent's PC time.
+  const setQuick = (kind: Parameters<typeof quickWallTime>[0]) => setCallbackAt(quickWallTime(kind, timezone))
+  // ← ADDED: the same moment on the agent's own computer clock, as a check.
+  const callbackIso = callbackAt ? zonedWallTimeToUtcIso(callbackAt, timezone) : null
+  const yourTime = callbackIso ? new Date(callbackIso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''
+  const callbackInPast = callbackIso ? new Date(callbackIso).getTime() < Date.now() : false
 
   // Save the worksheet. Also logs an activity (disposition + call details as the note)
   // so Activity History records it, and creates a reminder if a callback is set.
@@ -108,7 +119,7 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(() =>
     String(initial?.callDetails ?? '').trim() ? JSON.stringify([
       initial?.callDetails ?? '', initial?.additionalPhone ?? '', initial?.email ?? '', initial?.concernedPerson ?? '',
-      initial?.directLine ?? '', initial?.callbackAt ?? '', initial?.timezone ?? 'Eastern', initial?.disposition ?? 'New',
+      initial?.directLine ?? '', initial?.callbackAt ?? '', startZone, initial?.disposition ?? 'New', // ← CHANGED
     ]) : null)
 
   const save = async () => {
@@ -123,8 +134,15 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
     setMsg(res.message)
     if (res.ok) {
       setSavedSnapshot(formSnapshot)
+<<<<<<< HEAD
       // ← ADDED: a saved callback creates a reminder, so tell the bell to reload once.
       if (callbackAt) window.dispatchEvent(new CustomEvent('reminders:changed'))
+=======
+      // ← ADDED: tell the bell to reload once. With a callback, a reminder was
+      // created/moved. Without one, the database closes this lead's open
+      // reminder — reload only if the bell is actually showing one for it.
+      if (callbackAt || bellHasReminderFor(practiceCode)) window.dispatchEvent(new CustomEvent('reminders:changed'))
+>>>>>>> edc47c0 (Describe your changes)
       router.refresh()
     }
   }
@@ -221,18 +239,27 @@ export default function Worksheet({ practiceCode, initial, existingTransfer, loc
       <label className="lead-field-label">Follow-up / Callback</label>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <input type="datetime-local" value={callbackAt} onChange={(e) => setCallbackAt(e.target.value)} className="lead-input" style={{ flex: 1, minWidth: 190 }} disabled={locked} />
-        <select value={timezone} onChange={(e) => setTimezone(e.target.value)} className="lead-select" style={{ width: 120 }} disabled={locked}>
-          {TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}
+        {/* ← CHANGED: EST / CST / MST / PST — the time you type is the practice's clock in this zone */}
+        <select value={timezone} onChange={(e) => setTimezone(e.target.value)} className="lead-select" style={{ width: 150 }} disabled={locked}
+          aria-label="Callback time zone">
+          {US_ZONES.map((z) => <option key={z.value} value={z.value}>{z.name}</option>)}
         </select>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-        {[['Today +1h', 60], ['Tomorrow 9:00', 60 * 24], ['Tomorrow 11:00', 60 * 26], ['Tomorrow 14:00', 60 * 29], ['Next Monday 10:00', 60 * 24 * 3]].map(([label, mins]) => (
-          <button key={label as string} type="button" onClick={() => setQuick(mins as number)} className="lead-quickbtn" disabled={locked}>
+        {([['Today +1h', 'plus1h'], ['Tomorrow 9:00', 'tomorrow9'], ['Tomorrow 11:00', 'tomorrow11'], ['Tomorrow 14:00', 'tomorrow14'], ['Next Monday 10:00', 'nextMonday10']] as const).map(([label, kind]) => (
+          <button key={label} type="button" onClick={() => setQuick(kind)} className="lead-quickbtn" disabled={locked}>
             {label}
           </button>
         ))}
       </div>
       {!callbackAt && <p style={{ fontSize: 11, color: 'var(--muted)', fontStyle: 'italic', margin: '0 0 16px' }}>No callback scheduled — pick a date to create a reminder.</p>}
+      {/* ← ADDED: shows exactly when the reminder will fire, in both clocks */}
+      {callbackIso && (
+        <p style={{ fontSize: 11.5, margin: '0 0 16px', color: callbackInPast ? 'var(--danger)' : 'var(--muted)' }}>
+          Callback at <strong>{formatInZone(callbackIso, timezone)}</strong> (practice time) = <strong>{yourTime}</strong> on your computer
+          {callbackInPast && ' — this time has already passed.'}
+        </p>
+      )}
 
       <div className="grid-fields-2" style={{ marginBottom: 16 }}>
         <div>
