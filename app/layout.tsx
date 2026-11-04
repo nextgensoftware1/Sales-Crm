@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import "./design-system.css";
+import RingCentralEmbeddable from "./RingCentralEmbeddable";
 
 const interTight = localFont({
   src: './fonts/inter-tight-normal.woff2',
@@ -47,7 +48,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           }}
         />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <RingCentralEmbeddable />
+      </body>
     </html>
   );
 }

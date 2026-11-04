@@ -11,6 +11,7 @@ import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Em
 import { leadReturn } from '../../../lib/lead-return'
 import { npiLabel } from '../../../lib/npi-label'
 import { normalizeZone, zoneForState, utcToZonedWallTime } from '../../../lib/us-time' // ← ADDED
+import RingCentralDialButton from '../../RingCentralDialButton'
 import { practiceLocations } from '../../../lib/practice-locations' // ← ADDED // ← ADDED: show NPI instead of PR-
 import { getLeadNavigation, leadProfileKey, resolveLeadNavigation } from '../../../lib/lead-snapshots'
 import { getNotWorkedLeadNavigation } from '../../../lib/lead-navigation'
@@ -501,7 +502,14 @@ export default async function PracticeDetail({
                     <div className="lead-kv"><span>Name</span><span>{primaryProvider?.auth_official_name || (isIndividualNpi ? primaryProvider?.name : null) || '—'}</span></div>
                     <div className="lead-kv"><span>Title</span><span>{primaryProvider?.auth_official_title || '—'}</span></div>
                     {primaryProvider?.auth_official_credential && <div className="lead-kv"><span>Credential</span><span>{primaryProvider.auth_official_credential}</span></div>}
-                    <div className="lead-kv"><span>Phone</span><span className="mono">{primaryProvider?.auth_official_phone || (isIndividualNpi ? (primaryProvider?.phone ?? practice.phone) : null) || '—'}</span></div>
+                    <div className="lead-kv">
+                      <span>Phone</span>
+                      <span className="mono">
+                        <RingCentralDialButton
+                          phoneNumber={primaryProvider?.auth_official_phone || (isIndividualNpi ? (primaryProvider?.phone ?? practice.phone) : null)}
+                        />
+                      </span>
+                    </div>
                   </div>
 
                   <div className="lead-divider">
@@ -531,7 +539,14 @@ export default async function PracticeDetail({
                                 <span className="lead-pill-sm lead-pill-neutral" style={{ fontSize: 9 }}>{loc.labels.join(' · ')}</span>
                               </div>
                               {loc.phones.length > 0 && (
-                                <div className="mono" style={{ marginTop: 2, color: 'var(--muted)', fontSize: 11.5 }}>{loc.phones.join(' · ')}</div>
+                                <div className="mono" style={{ marginTop: 2, color: 'var(--muted)', fontSize: 11.5 }}>
+                                  {loc.phones.map((phone, phoneIndex) => (
+                                    <span key={`${phone}-${phoneIndex}`}>
+                                      {phoneIndex > 0 && ' · '}
+                                      <RingCentralDialButton phoneNumber={phone} />
+                                    </span>
+                                  ))}
+                                </div>
                               )}
                             </div>
                           </div>
@@ -641,7 +656,7 @@ export default async function PracticeDetail({
                     <>
                       <span className="lead-meta-sep">|</span>
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" /></svg>
-                      <span>{practice.phone}</span>
+                      <RingCentralDialButton phoneNumber={practice.phone} />
                     </>
                   )}
                 </div>
@@ -665,7 +680,9 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <span className="lead-field-label">Contact Phone</span>
-                <div className="lead-field-value">{primaryProvider?.mailing_phone || '—'}</div>
+                <div className="lead-field-value">
+                  <RingCentralDialButton phoneNumber={primaryProvider?.mailing_phone || practice.phone} />
+                </div>
               </div>
               <div>
                 <span className="lead-field-label">NPPES_LastUpdated</span>

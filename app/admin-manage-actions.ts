@@ -193,6 +193,7 @@ const MANAGEABLE_ROLES = ['manager', 'team_lead', 'agent', 'closer']
 type ManagedUser = {
   id: string; auth_id: string | null; tenant_id: string | null; status: string; full_name: string | null
   roles: { key: string; level: number } | null
+  tenants?: { status: string } | null
 }
 
 // ← ADDED: one permission check shared by rename and delete.
@@ -216,7 +217,7 @@ async function loadManageableUser(userId: string, verb: string): Promise<
     return { ok: false, message: error instanceof Error ? error.message : 'User management is not configured.' }
   }
   const { data: row, error: readError } = await admin.from('users')
-    .select('id, auth_id, tenant_id, status, full_name, roles(key, level)')
+    .select('id, auth_id, tenant_id, status, full_name, roles(key, level), tenants(status)')
     .eq('id', userId).maybeSingle()
   if (readError) return { ok: false, message: `Could not load that user: ${readError.message}` }
   const target = row as unknown as ManagedUser | null
@@ -225,7 +226,14 @@ async function loadManageableUser(userId: string, verb: string): Promise<
     return { ok: false, message: `You can only ${verb} users in your own company.` }
   }
   if (!MANAGEABLE_ROLES.includes(target.roles?.key ?? '')) {
-    return { ok: false, message: `Only Managers, Team Leads, Agents and Closers can be ${verb === 'rename' ? 'renamed' : 'deleted'} here.` }
+    const lifecycleAction = verb === 'rename'
+      ? 'renamed'
+      : verb === 'suspend'
+        ? 'suspended'
+        : verb === 'activate'
+          ? 'activated'
+          : 'deleted'
+    return { ok: false, message: `Only Managers, Team Leads, Agents and Closers can be ${lifecycleAction} here.` }
   }
   if (!isSuperAdmin && (target.roles?.level ?? 0) <= me.level) {
     return { ok: false, message: `You can only ${verb} users with a more junior role than yours.` }
@@ -246,6 +254,9 @@ export async function renameCompanyUser(userId: string, newName: string): Promis
   const loaded = await loadManageableUser(userId, 'rename')
   if (!loaded.ok) return loaded
   const { admin, target } = loaded
+  if ((target.status ?? '') === 'deleted') {
+    return { ok: false, message: 'This user has been deleted and cannot be renamed.' }
+  }
   if ((target.full_name ?? '') === fullName) return { ok: true, message: 'Name is unchanged.' }
 
   const { error } = await admin.from('users').update({ full_name: fullName }).eq('id', target.id)
@@ -274,42 +285,158 @@ export async function renameCompanyUser(userId: string, newName: string): Promis
 // Their worksheets, email work, call activity, transfers and sales are KEPT,
 // under their name: Active Call, Active Email and reports stay correct.
 export async function removeCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
-  const loaded = await loadManageableUser(userId, 'delete') // ← CHANGED: Super Admin allowed too
+  return lifecycleSetUserStatus(userId, 'deleted')
+}
+
+async function lifecycleSetUserStatus(
+  userId: string,
+  nextStatus: 'deleted' | 'suspended' | 'active',
+): Promise<{ ok: boolean; message: string }> {
+  const loaded = await loadManageableUser(userId, nextStatus === 'active' ? 'activate' : nextStatus === 'deleted' ? 'delete' : 'suspend')
   if (!loaded.ok) return loaded
   const { admin, target } = loaded
-  if (target.status !== 'active') return { ok: false, message: 'This user has already been deleted or suspended.' }
-  const tenantId = target.tenant_id ?? '' // ← CHANGED: the user's own company (works for Super Admin)
+  const originalStatus = target.status ?? 'active'
+  const tenantId = target.tenant_id ?? ''
 
-  // 1. Deactivate the profile (only if it is still active).
-  const { error: deactivateError } = await admin.from('users').update({ status: 'suspended' })
-    .eq('id', target.id).eq('tenant_id', tenantId).eq('status', 'active')
-  if (deactivateError) return { ok: false, message: `Could not delete this user: ${deactivateError.message}` }
+  if (nextStatus === 'deleted') {
+    if (originalStatus === 'deleted') return { ok: false, message: 'This user has already been deleted or suspended.' }
+    if (originalStatus !== 'active' && originalStatus !== 'suspended') {
+      return { ok: false, message: 'This user is not eligible to be deleted.' }
+    }
+  } else if (nextStatus === 'suspended') {
+    if (originalStatus === 'deleted') return { ok: false, message: 'This user has already been deleted and cannot be suspended.' }
+    if (originalStatus === 'suspended') return { ok: false, message: 'This user is already suspended.' }
+    if (originalStatus !== 'active') return { ok: false, message: 'Only an active user can be suspended.' }
+  } else {
+    if (originalStatus === 'deleted') return { ok: false, message: 'Only a suspended user can be made active again.' }
+    if (originalStatus === 'active') return { ok: false, message: 'This user is already active.' }
+    if (originalStatus !== 'suspended') return { ok: false, message: 'Only a suspended user can be made active again.' }
+    if ((target as ManagedUser & { tenants?: { status?: string } }).tenants?.status === 'suspended') {
+      return { ok: false, message: 'reactivate the company first before activating this user.' }
+    }
+  }
 
-  // 2. Revoke their login. If that fails, undo step 1 so nothing is half-done.
+  const name = target.full_name || 'This user'
+
+  if (nextStatus === 'active') {
+    if (target.auth_id) {
+      const { error: restoreLoginError } = await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: 'none' })
+      if (restoreLoginError) {
+        return { ok: false, message: `Could not restore this user's login: ${restoreLoginError.message}` }
+      }
+    }
+    const { error: activateError } = await admin.from('users').update({ status: 'active' })
+      .eq('id', target.id).eq('tenant_id', tenantId).eq('status', 'suspended')
+    if (activateError) {
+      if (target.auth_id) await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: '876000h' })
+      return { ok: false, message: `Could not activate this user: ${activateError.message}` }
+    }
+    return { ok: true, message: `${name} is active again and can sign in.` }
+  }
+
+  const { error: statusError } = await admin.from('users').update({ status: nextStatus })
+    .eq('id', target.id).eq('tenant_id', tenantId).eq('status', originalStatus)
+  if (statusError) {
+    if ((statusError as { code?: string }).code === '23514') {
+      if (nextStatus === 'deleted') {
+        return { ok: false, message: 'This CRM database does not allow the "deleted" user status yet. Apply database/user-status-deleted.sql in a compatible release, then retry. No login or lead changes were made.' }
+      }
+      return { ok: false, message: `Could not suspend this user: ${statusError.message}` }
+    }
+    return { ok: false, message: `Could not ${nextStatus === 'deleted' ? 'delete' : 'suspend'} this user: ${statusError.message}` }
+  }
+
   if (target.auth_id) {
     const { error: banError } = await admin.auth.admin.updateUserById(target.auth_id, { ban_duration: '876000h' })
     if (banError) {
-      const { error: restoreError } = await admin.from('users').update({ status: 'active' })
-        .eq('id', target.id).eq('tenant_id', tenantId).eq('status', 'suspended')
+      const { error: restoreError } = await admin.from('users').update({ status: originalStatus })
+        .eq('id', target.id).eq('tenant_id', tenantId).eq('status', nextStatus)
       return { ok: false, message: restoreError
         ? `Could not revoke login (${banError.message}) or restore the profile (${restoreError.message}). Please contact support.`
         : `Could not revoke this user's login, so nothing was changed: ${banError.message}` }
     }
   }
 
-  // 3. Return their active leads to the company pool.
-  const { data: released, error: releaseError } = await admin.from('lead_assignments')
-    .delete()
+  const { data: assigned, error: assignedError } = await admin.from('lead_assignments')
+    .select('practice_id')
     .eq('assigned_to', target.id)
     .eq('tenant_id', tenantId)
     .eq('status', 'active')
-    .select('practice_id')
-  const name = target.full_name || 'This user'
-  if (releaseError) {
-    return { ok: true, message: `${name} was deleted and can no longer sign in, but their assigned leads could not be released (${releaseError.message}). Unassign them from Manage Assignments.` }
+  if (assignedError) {
+    return lifecycleReleaseFailureMessage(name, nextStatus, assignedError.message ?? 'Lead assignment lookup failed.')
   }
-  const count = released?.length ?? 0
-  return { ok: true, message: `${name} was deleted and can no longer sign in. ${count} assigned lead${count === 1 ? '' : 's'} returned to the pool. Their saved work stays on Active Call / Active Email.` }
+
+  const assignedIds = Array.from(new Set((assigned ?? [])
+    .map((row: { practice_id?: string | null }) => row.practice_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)))
+
+  if (assignedIds.length === 0) {
+    return lifecycleCompletedMessage(name, nextStatus, 0, 0)
+  }
+
+  const [{ data: callWorked }, { data: emailWorked }] = await Promise.all([
+    admin.from('lead_worksheets').select('practice_id').eq('tenant_id', tenantId).in('practice_id', assignedIds),
+    admin.from('lead_email_worksheets').select('practice_id').eq('tenant_id', tenantId).in('practice_id', assignedIds),
+  ])
+
+  const workedIds = new Set<string>()
+  for (const row of [...(callWorked ?? []), ...(emailWorked ?? [])] as Array<{ practice_id?: string | null }>) {
+    if (row.practice_id) workedIds.add(row.practice_id)
+  }
+  const unworkedIds = assignedIds.filter((id) => !workedIds.has(id))
+
+  let releaseError: { message?: string } | null = null
+  if (unworkedIds.length > 0) {
+    const result = await admin.from('lead_assignments')
+      .delete()
+      .eq('assigned_to', target.id)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'active')
+      .in('practice_id', unworkedIds)
+      .select('practice_id')
+    releaseError = result.error ? { message: result.error.message } : null
+  }
+
+  const unworkedCount = unworkedIds.length
+  const workedCount = assignedIds.length - unworkedCount
+  if (releaseError) {
+    return lifecycleReleaseFailureMessage(name, nextStatus, releaseError.message ?? 'Lead release failed.')
+  }
+  return lifecycleCompletedMessage(name, nextStatus, unworkedCount, workedCount)
+}
+
+function lifecycleReleaseFailureMessage(name: string, nextStatus: 'deleted' | 'suspended', detail: string) {
+  const action = nextStatus === 'deleted' ? 'deleted and can no longer sign in' : 'was suspended and can no longer sign in'
+  return {
+    ok: true,
+    message: `${name} ${action}, but their assigned leads could not be released (${detail}). Manage Assignments.`,
+  }
+}
+
+function lifecycleCompletedMessage(
+  name: string,
+  nextStatus: 'deleted' | 'suspended',
+  unworkedCount: number,
+  workedCount: number,
+) {
+  if (nextStatus === 'deleted') {
+    return {
+      ok: true,
+      message: `${name} was deleted and can no longer sign in. ${unworkedCount} leads not yet worked returned to the pool; ${workedCount} leads already worked stay with the user history. Saved work stays on Active Call / Active Email.`,
+    }
+  }
+  return {
+    ok: true,
+    message: `${name} was suspended and can no longer sign in. ${unworkedCount} leads not yet worked returned to the pool; ${workedCount} leads already worked stay with the user history.`,
+  }
+}
+
+export async function suspendCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
+  return lifecycleSetUserStatus(userId, 'suspended')
+}
+
+export async function activateCompanyUser(userId: string): Promise<{ ok: boolean; message: string }> {
+  return lifecycleSetUserStatus(userId, 'active')
 }
 
 // ---- Company lifecycle: suspend / reactivate / delete (Super Admin only) ----

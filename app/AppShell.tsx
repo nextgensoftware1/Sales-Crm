@@ -13,7 +13,7 @@ import {
   Activity, AlertTriangle, BadgeDollarSign, BarChart3, Building2, CalendarClock,
   ChartNoAxesCombined, CircleCheckBig, FileCheck2, FileText, Gauge, History,
   ListChecks, RotateCcw, ShieldCheck, Trophy, UserRoundCheck, UsersRound, Wallet,
-  Mail, // ← ADDED: Email Sheet Report
+  Mail, PhoneCall, // ← ADDED: Email Sheet Report / RingCentral
 } from 'lucide-react'
 
 // Hand-authored, stroke-based icons (matches the style already used
@@ -47,6 +47,7 @@ const NAV: NavItem[] = [
   // visibility rules as before, just visually separated to match the
   // reference image's sidebar grouping.
   { href: '/admin',         label: 'Admin',          icon: <IconSettings />, admin: true },
+  { href: '/ringcentral',   label: 'RingCentral',    icon: <PhoneCall aria-hidden="true" />, admin: true },
   { href: '/worksheet-reports', label: 'Active Call', icon: <IconReport />, admin: true }, // ← CHANGED: renamed
   { href: '/email-reports', label: 'Active Email', icon: <Mail aria-hidden="true" />, admin: true }, // ← ADDED
   { href: '/worksheet-updates', label: 'Worksheet Updates', icon: <History aria-hidden="true" />, admin: true },
@@ -176,6 +177,7 @@ export default function AppShell({
   const items = NAV.filter((n) => {
     if (n.href === '/deleted-leads') return showAdmin
     if (n.href === '/admin') return showAdmin || canManageUsers
+    if (n.href === '/ringcentral') return showAdmin || canManageUsers
     // Every authenticated role can open reports; the server action scopes
     // managers to their company and agents/closers to their own saved work.
     if (n.href === '/worksheet-reports' || n.href === '/email-reports') return true // ← CHANGED: + email report
