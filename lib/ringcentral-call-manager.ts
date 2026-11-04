@@ -8,13 +8,11 @@ export type RingCentralCallSnapshot = {
   loginNumber?: string
   busy: boolean
   callStatus: string
-  fallbackPhone?: string
 }
 
 type Subscriber = (snapshot: RingCentralCallSnapshot) => void
 
-const CALL_TIMEOUT_MS = 25_000
-const RINGOUT_TIMEOUT_MS = 15_000
+const CALL_TIMEOUT_MS = 12_000
 
 class RingCentralCallManager {
   private snapshot: RingCentralCallSnapshot = {
@@ -28,7 +26,7 @@ class RingCentralCallManager {
   private subscribers = new Set<Subscriber>()
   private transactionId: string | null = null
   private transactionTimeout: ReturnType<typeof setTimeout> | null = null
-  private ringOutAbort: AbortController | null = null
+  private callStarted = false
   private attached = false
   private messageHandler: ((event: MessageEvent) => void) | null = null
 
@@ -71,13 +69,17 @@ class RingCentralCallManager {
       clearTimeout(this.transactionTimeout)
       this.transactionTimeout = null
     }
-    this.ringOutAbort?.abort()
-    this.ringOutAbort = null
     this.transactionId = null
+    this.callStarted = false
     this.emit({ busy: false })
   }
 
   setAdapterReady(adapterReady: boolean) {
+    if (!adapterReady && this.transactionId) {
+      this.failTransaction('Call failed: RingCentral adapter disconnected.')
+      this.emit({ adapterReady: false })
+      return
+    }
     this.emit({
       adapterReady,
       callStatus: adapterReady ? 'RingCentral adapter ready' : 'RingCentral adapter unavailable',
@@ -114,6 +116,11 @@ class RingCentralCallManager {
       this.emit({ callStatus: 'Calling...' })
       window.dispatchEvent(new CustomEvent('ringcentral-call-status', { detail: { status: 'Calling' } }))
     } else if (message.type === 'rc-call-start-notify') {
+      this.callStarted = true
+      if (this.transactionTimeout) {
+        clearTimeout(this.transactionTimeout)
+        this.transactionTimeout = null
+      }
       this.emit({ callStatus: 'Call started' })
       window.dispatchEvent(new CustomEvent('ringcentral-call-status', { detail: { status: 'Call started' } }))
     } else if (message.type === 'rc-call-end-notify') {
@@ -127,6 +134,7 @@ class RingCentralCallManager {
     if (this.transactionTimeout) clearTimeout(this.transactionTimeout)
     this.transactionTimeout = null
     this.transactionId = null
+    this.callStarted = false
     this.emit({ busy: false, callStatus })
     window.dispatchEvent(new CustomEvent('ringcentral-call-status', { detail: { status: callStatus } }))
   }
@@ -135,6 +143,7 @@ class RingCentralCallManager {
     if (this.transactionTimeout) clearTimeout(this.transactionTimeout)
     this.transactionTimeout = null
     this.transactionId = null
+    this.callStarted = false
     this.emit({ busy: false, callStatus })
     window.dispatchEvent(new CustomEvent('ringcentral-call-status', { detail: { status: callStatus } }))
   }
@@ -149,20 +158,22 @@ class RingCentralCallManager {
     const e164 = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith('1') ? `+${digits}` : `+${digits}`
 
     if (!this.snapshot.adapterReady || typeof window.RCAdapter?.clickToCall !== 'function') {
-      this.emit({ fallbackPhone: e164, callStatus: 'Call failed: RingCentral Embeddable is not ready. Use RingOut fallback.' })
+      this.emit({ callStatus: 'Call failed: RingCentral adapter is not ready. Refresh the page and retry.' })
       return false
     }
     if (!this.snapshot.loggedIn) {
-      this.emit({ fallbackPhone: e164, callStatus: 'Call failed: sign in to your RingCentral account in the embedded widget.' })
+      this.emit({ callStatus: 'Call failed: sign in to your RingCentral account.' })
       return false
     }
     if (this.snapshot.hasOutboundPermission === false) {
-      this.emit({ fallbackPhone: e164, callStatus: 'Call failed: no verified outbound calling configuration.' })
+      this.emit({ callStatus: 'Call failed: no verified outbound calling configuration.' })
       return false
     }
     this.transactionId = `call-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    this.emit({ busy: true, fallbackPhone: e164, callStatus: `Calling ${e164}` })
+    this.callStarted = false
+    this.emit({ busy: true, callStatus: `Calling ${e164}` })
     this.transactionTimeout = setTimeout(() => {
+      if (this.callStarted) return
       this.failTransaction(`Call failed: no call status received within ${CALL_TIMEOUT_MS / 1000} seconds.`)
     }, CALL_TIMEOUT_MS)
 
@@ -172,37 +183,6 @@ class RingCentralCallManager {
     } catch {
       this.failTransaction(`Call failed: RingCentral could not start the call to ${e164}.`)
       return false
-    }
-  }
-
-  async ringOutFallback(): Promise<boolean> {
-    const phoneNumber = this.snapshot.fallbackPhone
-    if (!phoneNumber || this.transactionId) return false
-    this.transactionId = `ringout-${Date.now()}`
-    this.ringOutAbort = new AbortController()
-    const timeout = setTimeout(() => this.ringOutAbort?.abort(), RINGOUT_TIMEOUT_MS)
-    this.emit({ busy: true, callStatus: `Calling ${phoneNumber} through RingOut fallback` })
-    try {
-      const response = await fetch('/api/ringcentral/dial', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        signal: this.ringOutAbort.signal,
-        body: JSON.stringify({ phoneNumber }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        this.failTransaction(`Call failed: ${data.message || 'RingOut could not start the call.'}`)
-        return false
-      }
-      this.completeTransaction(`Calling ${phoneNumber} through RingOut fallback`)
-      return true
-    } catch {
-      this.failTransaction(`Call failed: RingOut timed out or could not be reached for ${phoneNumber}.`)
-      return false
-    } finally {
-      clearTimeout(timeout)
-      this.ringOutAbort = null
     }
   }
 }

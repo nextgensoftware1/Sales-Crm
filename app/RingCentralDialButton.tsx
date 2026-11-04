@@ -19,13 +19,6 @@ export default function RingCentralDialButton({
     return ringCentralCallManager.subscribe(setCallState)
   }, [])
 
-  const normalizeDigits = phoneNumber?.replace(/\D/g, '') ?? ''
-  const fallbackMatches = callState.fallbackPhone
-    ? callState.fallbackPhone.replace(/\D/g, '') === normalizeDigits
-      || (normalizeDigits.length === 10 && callState.fallbackPhone === `+1${normalizeDigits}`)
-      || (normalizeDigits.length === 11 && normalizeDigits.startsWith('1') && callState.fallbackPhone === `+${normalizeDigits}`)
-    : false
-
   const dial = () => {
     if (!phoneNumber) return
     void ringCentralCallManager.initiate(phoneNumber)
@@ -60,17 +53,6 @@ export default function RingCentralDialButton({
         <PhoneCall size={14} aria-hidden="true" />
         <span style={{ overflowWrap: 'anywhere' }}>{children ?? phoneNumber}</span>
       </button>
-      {fallbackMatches && callState.fallbackPhone && (
-        <button
-          type="button"
-          onClick={() => void ringCentralCallManager.ringOutFallback()}
-          disabled={callState.busy}
-          style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 11, textDecoration: 'underline', cursor: callState.busy ? 'default' : 'pointer' }}
-          title="Manual legacy fallback. Do not use together with Embeddable."
-        >
-          RingOut fallback
-        </button>
-      )}
     </span>
   )
 }

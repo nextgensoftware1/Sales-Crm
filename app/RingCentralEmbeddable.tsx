@@ -38,6 +38,8 @@ export default function RingCentralEmbeddable() {
     window.RC_EMBEDDABLE_ADAPTER_MANUAL_INIT = true
     ringCentralCallManager.attach()
     let observer: MutationObserver | null = null
+    let healthTimer: ReturnType<typeof setInterval> | null = null
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null
 
     const hideAdapterWidget = () => {
       const frame = document.querySelector<HTMLIFrameElement>('#rc-widget-adapter-frame')
@@ -58,6 +60,28 @@ export default function RingCentralEmbeddable() {
       observer.observe(document.body, { childList: true, subtree: true })
     }
 
+    const reloadAdapter = () => {
+      if (reloadTimer) return
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null
+        try {
+          window.RCAdapter?.dispose?.()
+        } catch {
+          console.warn('[RingCentral] Adapter cleanup failed.')
+        }
+        delete window.RCAdapter
+        document.querySelector('#rc-widget-adapter-frame')?.remove()
+        document.getElementById(ADAPTER_SCRIPT_ID)?.remove()
+        ringCentralCallManager.setAdapterReady(false)
+        const freshScript = document.createElement('script')
+        freshScript.id = ADAPTER_SCRIPT_ID
+        freshScript.src = `${ADAPTER_SCRIPT_URL}?retry=${Date.now()}`
+        freshScript.async = true
+        freshScript.onload = initialize
+        document.body.appendChild(freshScript)
+      }, 250)
+    }
+
     let script = document.getElementById(ADAPTER_SCRIPT_ID) as HTMLScriptElement | null
     if (!script) {
       script = document.createElement('script')
@@ -72,7 +96,22 @@ export default function RingCentralEmbeddable() {
       script.addEventListener('load', initialize, { once: true })
     }
 
-    return () => observer?.disconnect()
+    healthTimer = setInterval(() => {
+      const frame = document.querySelector('#rc-widget-adapter-frame')
+      const adapterReady = typeof window.RCAdapter?.clickToCall === 'function'
+      if (!frame || !adapterReady) reloadAdapter()
+      else {
+        frame.setAttribute('style', 'display:none !important')
+        ringCentralCallManager.setAdapterReady(true)
+      }
+    }, 10_000)
+
+    return () => {
+      observer?.disconnect()
+      if (healthTimer) clearInterval(healthTimer)
+      if (reloadTimer) clearTimeout(reloadTimer)
+      ringCentralCallManager.detach()
+    }
   }, [])
 
   return null
