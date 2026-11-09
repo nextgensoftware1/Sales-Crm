@@ -421,9 +421,9 @@ export default async function PracticeDetail({
   const penaltyRaw = (primaryProvider?.penalty ?? '').toString().trim()
   const penaltyValue = penaltyRaw ? `$${Number(penaltyRaw).toLocaleString()}` : '—'
 
-  // ← ADDED: MIPS view only — the CMS figures from the lead file. Each value is
-  // read from the provider row by its column name (snake_case or the CSV
-  // header as-is), so it works whichever way the column was named.
+  // ← ADDED: MIPS view only — the CMS figures from the lead file, shown
+  // exactly as they are in the CSV (no rounding or reformatting). Each value
+  // is read from the provider row by its column name.
   const providerField = (keys: string[]): string => {
     for (const key of keys) {
       const value = primaryProvider?.[key]
@@ -431,47 +431,22 @@ export default async function PracticeDetail({
     }
     return ''
   }
-  const toNumber = (raw: string): number | null => {
-    const n = Number(raw.replace(/[$,%\s]/g, ''))
-    return raw && Number.isFinite(n) ? n : null
+  // ← ADDED: Excel saves big numbers as "1.10E+08". Show them as plain digits
+  // ("110000000"), like Excel does when you click into the cell. Every other
+  // value is shown exactly as in the CSV.
+  const plainNumber = (raw: string): string => {
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)e[-+]?\d+$/i.test(raw)) return raw
+    const n = Number(raw)
+    return Number.isFinite(n) ? n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 }) : raw
   }
-  // Score: plain number (e.g. 100).
-  const formatScore = (raw: string) => {
-    const n = toNumber(raw)
-    return n === null ? (raw || '—') : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  }
-  // Payment adjustment: the file stores a fraction (0.0105 = +1.05%).
-  // A value that already has a "%" sign is shown as it is.
-  const formatAdjPct = (raw: string) => {
-    if (!raw) return '—'
-    if (raw.includes('%')) return raw
-    const n = toNumber(raw)
-    if (n === null) return raw
-    const pct = n * 100
-    return `${pct > 0 ? '+' : ''}${pct.toLocaleString('en-US', { maximumFractionDigits: 2 })}%`
-  }
-  // Money: compact in the box ($110M, $1.15M); the full amount is the tooltip.
-  const formatMoney = (raw: string) => {
-    const n = toNumber(raw)
-    if (n === null) return { short: raw || '—', full: raw || '' }
-    const full = `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
-    const short = Math.abs(n) >= 1_000_000
-      ? `$${n.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 2 })}`
-      : `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-    return { short, full }
-  }
-  const mipsScore2024Raw = providerField(['mips_score_2024', 'MIPS_Score_2024'])
-  const paymentAdj2026Raw = providerField(['payment_adj_2026_pct', 'payment_adj_2026', 'Payment_Adj_2026_%'])
-  const allowedCharges2024 = formatMoney(providerField(['allowed_charges_2024', 'Allowed_Charges_2024']))
-  const estPenalty2026 = formatMoney(providerField(['est_penalty_2026', 'est_penalty_2026_usd', 'Est_Penalty_2026_$']))
-  const paymentAdjRaw = providerField(['payment_adj_pct', 'Payment_Adj_%'])
-  const mipsStats: { label: string; value: string; title: string }[] = [
-    { label: 'MIPS Score 2024', value: formatScore(mipsScore2024Raw), title: mipsScore2024Raw },
-    { label: 'Payment Adj 2026 %', value: formatAdjPct(paymentAdj2026Raw), title: paymentAdj2026Raw },
-    { label: 'Allowed Charges 2024', value: allowedCharges2024.short, title: allowedCharges2024.full },
-    { label: 'Est Penalty 2026 $', value: estPenalty2026.short, title: estPenalty2026.full },
-    { label: 'Payment Adj %', value: formatAdjPct(paymentAdjRaw), title: paymentAdjRaw },
-  ]
+  const mipsStats: { label: string; value: string }[] = [
+    { label: 'MIPS Score 2024', value: providerField(['mips_score_2024', 'MIPS_Score_2024']) },
+    { label: 'Payment Adj 2026 %', value: providerField(['payment_adj_2026_pct', 'payment_adj_2026', 'Payment_Adj_2026_%']) },
+    { label: 'Allowed Charges 2024', value: providerField(['allowed_charges_2024', 'Allowed_Charges_2024']) },
+    { label: 'Est Penalty 2026 $', value: providerField(['est_penalty_2026', 'est_penalty_2026_usd', 'Est_Penalty_2026_$']) },
+    // ← CHANGED: Medicare Patients replaces Payment Adj % (needs database/mips-medicare-patients.sql)
+    { label: 'Medicare Patients', value: providerField(['medicare_patients', 'medicare patients']) },
+  ].map((stat) => ({ ...stat, value: plainNumber(stat.value) }))
 
   // MIPS eligibility across the WHOLE organization roster (all clinicians
   // sharing this org's PAC id), classified purely from the MIPS 2026 text:
@@ -823,8 +798,9 @@ export default async function PracticeDetail({
           </div>
           {/* ← ADDED: MIPS view only — CMS figures from the lead file. */}
           {mipsView && mipsStats.map((stat) => (
-            <div className="lead-stat" key={stat.label} title={stat.title || undefined}>
-              <span className="lead-stat-value">{stat.value}</span>
+            <div className="lead-stat" key={stat.label} title={stat.value || undefined}>
+              {/* ← CHANGED: full value, wrapped onto a second line if needed — never cut off with "…" */}
+              <span className="lead-stat-value" style={{ whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip', overflowWrap: 'anywhere', lineHeight: 1.2 }}>{stat.value || '—'}</span>
               <span className="lead-stat-label">{stat.label}</span>
             </div>
           ))}

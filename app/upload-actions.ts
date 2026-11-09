@@ -905,6 +905,7 @@ const KNOWN_HEADERS = [
   'CMS_CCM', 'CMS_PCM', 'CMS_AWV', 'CMS_TCM', 'CMS_BHI', 'CMS_RPM', 'CMS_RCM', 'CMS_Category', 'MIPS_By_Year',
   'Lead_Category', // ← ADDED: "Email" marks an email-marketing lead
   'MIPS_Score_2024', 'Payment_Adj_2026_%', 'Allowed_Charges_2024', 'Est_Penalty_2026_$', // ← ADDED: CMS MIPS figures (needs database/mips-cms-figures.sql)
+  'medicare patients', 'Medicare_Patients', // ← ADDED: needs database/mips-medicare-patients.sql
 ].map((h) => h.toLowerCase())
 const yes = (v: string | undefined) => (v ?? '').trim().toLowerCase() === 'yes'
 
@@ -1005,6 +1006,7 @@ export async function uploadLeadsCsv(
     payment_adj_2026_pct: col(row, 'Payment_Adj_2026_%'),
     allowed_charges_2024: col(row, 'Allowed_Charges_2024'),
     est_penalty_2026: col(row, 'Est_Penalty_2026_$'),
+    medicare_patients: col(row, 'medicare patients') || col(row, 'Medicare_Patients'), // ← ADDED: needs database/mips-medicare-patients.sql
   })
   // ← ADDED: columns in this file that the CRM does not use.
   const knownHeaders = new Set(KNOWN_HEADERS)
