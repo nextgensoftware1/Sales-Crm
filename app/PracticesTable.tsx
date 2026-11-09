@@ -993,8 +993,8 @@ export default function PracticesTable({ practices: practicesProp, packedPractic
                       <Link
                         prefetch={false}
                         href={serverPaging
-                          ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}&pool=${poolNavigationKey}&pos=${filteredPositionByCode.get(p.practiceCode) ?? 0}`
-                          : `/practice/${encodeURIComponent(p.practiceCode)}`}
+                          ? `/practice/${encodeURIComponent(p.practiceCode)}?from=leads&snapshot=${encodeURIComponent(serverView.snapshotId)}&nav=${encodeURIComponent(serverView.navigationId)}&pool=${poolNavigationKey}&pos=${filteredPositionByCode.get(p.practiceCode) ?? 0}${catTab === 'MIPS' ? '&cat=mips' : ''}` // ← CHANGED: MIPS layout on the lead page
+                          : `/practice/${encodeURIComponent(p.practiceCode)}${catTab === 'MIPS' ? '?from=leads&cat=mips' : ''}`}
                         style={{ color: C.cyan, textDecoration: 'none', fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}
                       >
                         {p.name}

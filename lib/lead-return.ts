@@ -30,10 +30,13 @@ export function leadHref(practiceCode: string | null | undefined, from: LeadSour
  * Back link + the query to keep on further lead links (Previous / Next,
  * related practices), from the lead page's search params.
  */
-export function leadReturn(sp: { from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string }): { href: string; label: string; query: string } {
+export function leadReturn(sp: { from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string; cat?: string }): { href: string; label: string; query: string } {
   // Only the listed pages (an own key — not inherited names like "__proto__").
   const from = (typeof sp.from === 'string' && Object.prototype.hasOwnProperty.call(SOURCES, sp.from) ? sp.from : null) as LeadSource | null
   if (!from) return { href: '/', label: 'Back to all practices', query: '' }
+  // ← ADDED: opened from the Lead Pool's MIPS category — keep `cat=mips` on
+  // Previous / Next so every lead in that queue shows the MIPS layout.
+  const mipsCat = from === 'leads' && sp.cat === 'mips' ? '&cat=mips' : ''
   if (from === 'worksheet-reports') {
     const company = typeof sp.company === 'string' ? sp.company : ''
     const view = sp.view === 'sheet' ? 'sheet' : 'reports'
@@ -44,8 +47,8 @@ export function leadReturn(sp: { from?: string; company?: string; view?: string;
       && typeof sp.nav === 'string' && /^[0-9a-f-]{36}$/i.test(sp.nav)) {
     const pool = ['all', 'new', 'worked', 'not-worked'].includes(sp.pool ?? '') ? sp.pool! : 'all'
     const position = /^\d{1,6}$/.test(sp.pos ?? '') ? sp.pos! : '0'
-    const keep = `from=leads&snapshot=${encodeURIComponent(sp.snapshot)}&nav=${encodeURIComponent(sp.nav)}&pool=${pool}&pos=${position}`
+    const keep = `from=leads&snapshot=${encodeURIComponent(sp.snapshot)}&nav=${encodeURIComponent(sp.nav)}&pool=${pool}&pos=${position}${mipsCat}` // ← CHANGED: + MIPS category
     return { href: SOURCES[from].path, label: SOURCES[from].label, query: `?${keep}` }
   }
-  return { href: SOURCES[from].path, label: SOURCES[from].label, query: `?from=${from}` }
+  return { href: SOURCES[from].path, label: SOURCES[from].label, query: `?from=${from}${mipsCat}` } // ← CHANGED: + MIPS category
 }

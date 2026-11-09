@@ -9,6 +9,7 @@ import SectionTabs from '../../SectionTabs'
 import EmailWorksheet, { type EmailHistoryItem, type EmailWorksheetInitial } from './EmailWorksheet' // ← ADDED
 import { getEmailReports } from '../../email-worksheet-actions' // ← ADDED: Email Sheet Report navigation
 import { leadReturn } from '../../../lib/lead-return'
+import { isMipsLead } from '../../../lib/mips-lead' // ← ADDED: MIPS layout for every MIPS lead
 import { npiLabel } from '../../../lib/npi-label'
 import { normalizeZone, zoneForState, utcToZonedWallTime } from '../../../lib/us-time' // ← ADDED
 import RingCentralDialButton from '../../RingCentralDialButton'
@@ -56,13 +57,17 @@ export default async function PracticeDetail({
   searchParams,
 }: {
   params: Promise<{ code: string }>
-  searchParams: Promise<{ from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string }>
+  searchParams: Promise<{ from?: string; company?: string; view?: string; snapshot?: string; nav?: string; pool?: string; pos?: string; cat?: string }>
 }) {
   const { code } = await params
-  const { from, company, view, snapshot, nav, pool, pos } = await searchParams
+  const { from, company, view, snapshot, nav, pool, pos, cat } = await searchParams
   // Where "Back" goes and the query kept on Previous / Next and related
   // links — one shared rule for every page that opens a lead (lib/lead-return).
-  const back = leadReturn({ from, company, view, snapshot, nav, pool, pos })
+  const back = leadReturn({ from, company, view, snapshot, nav, pool, pos, cat })
+  // ← ADDED: opened from the Lead Pool's MIPS category. Only then the header
+  // shows the Authorized Official as the title (organization name and the
+  // practice profile IDs underneath) and the Practice Profile rows are hidden.
+  const openedFromMipsTab = from === 'leads' && cat === 'mips' // ← CHANGED: the MIPS view itself is decided below from the lead's own MIPS data
   const navQuery = back.query
   // Opened from Active Email → Previous / Next move through its leads only.
   const fromEmailReport = from === 'email-reports'
@@ -110,7 +115,7 @@ export default async function PracticeDetail({
         providers (
           *,
           provider_signals ( ccm, pcm, awv, tcm, bhi, rpm, rcm_fit, cms_category ),
-          provider_mips ( reporting_option )
+          provider_mips ( performance_year, status, reporting_option )
         )
       )
     `)
@@ -388,6 +393,23 @@ export default async function PracticeDetail({
   const npiType2Value = isNpiType2 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
   const npiType1Value = isNpiType1 ? (primaryProvider?.npi ?? 'N/A') : 'N/A'
   const isIndividualNpi = isNpiType1 && !isNpiType2 // ← ADDED: for the Authorized Official panel
+  const authOfficialName: string | null = (primaryProvider?.auth_official_name || (isIndividualNpi ? primaryProvider?.name : null) || '').toString().trim() || null // ← ADDED
+  const orgPacId: string = primaryProvider?.org_pac_id || 'N/A' // ← ADDED
+  // ← ADDED: MIPS layout — the official's name is the title; with no official
+  // on file the organization name stays the title (nothing is lost).
+  // ← CHANGED: MIPS layout whenever this lead is a MIPS lead (same rule as the
+  // Lead Pool's MIPS tab), however it was opened — MIPS tab, New / any other
+  // filter, or search. Non-MIPS leads keep the normal layout.
+  const mipsRowsForView: any[] = Array.isArray(primaryProvider?.provider_mips)
+    ? primaryProvider.provider_mips
+    : (primaryProvider?.provider_mips ? [primaryProvider.provider_mips] : [])
+  const mipsView = openedFromMipsTab || isMipsLead(mipsRowsForView)
+  const mipsTitle = mipsView && authOfficialName ? authOfficialName : displayTitle
+  // ← ADDED: Credentialing badge follows the CSV's Record_Source column — the
+  // same rule as the Lead Pool's Credentialing tab ("NPPES - Found" = yes,
+  // "NPPES - Not Found" or empty = no).
+  const recordSourceLower = (primaryProvider?.record_source ?? '').toString().trim().toLowerCase()
+  const isCredentialingLead = recordSourceLower.includes('found') && !recordSourceLower.includes('not found')
 
   const primaryMipsRows: any[] = Array.isArray(primaryProvider?.provider_mips)
     ? primaryProvider.provider_mips
@@ -398,6 +420,58 @@ export default async function PracticeDetail({
   // Penalty: the CSV "Panelty" value for this lead, shown with a $ sign.
   const penaltyRaw = (primaryProvider?.penalty ?? '').toString().trim()
   const penaltyValue = penaltyRaw ? `$${Number(penaltyRaw).toLocaleString()}` : '—'
+
+  // ← ADDED: MIPS view only — the CMS figures from the lead file. Each value is
+  // read from the provider row by its column name (snake_case or the CSV
+  // header as-is), so it works whichever way the column was named.
+  const providerField = (keys: string[]): string => {
+    for (const key of keys) {
+      const value = primaryProvider?.[key]
+      if (value !== null && value !== undefined && String(value).trim() !== '') return String(value).trim()
+    }
+    return ''
+  }
+  const toNumber = (raw: string): number | null => {
+    const n = Number(raw.replace(/[$,%\s]/g, ''))
+    return raw && Number.isFinite(n) ? n : null
+  }
+  // Score: plain number (e.g. 100).
+  const formatScore = (raw: string) => {
+    const n = toNumber(raw)
+    return n === null ? (raw || '—') : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+  }
+  // Payment adjustment: the file stores a fraction (0.0105 = +1.05%).
+  // A value that already has a "%" sign is shown as it is.
+  const formatAdjPct = (raw: string) => {
+    if (!raw) return '—'
+    if (raw.includes('%')) return raw
+    const n = toNumber(raw)
+    if (n === null) return raw
+    const pct = n * 100
+    return `${pct > 0 ? '+' : ''}${pct.toLocaleString('en-US', { maximumFractionDigits: 2 })}%`
+  }
+  // Money: compact in the box ($110M, $1.15M); the full amount is the tooltip.
+  const formatMoney = (raw: string) => {
+    const n = toNumber(raw)
+    if (n === null) return { short: raw || '—', full: raw || '' }
+    const full = `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+    const short = Math.abs(n) >= 1_000_000
+      ? `$${n.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 2 })}`
+      : `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+    return { short, full }
+  }
+  const mipsScore2024Raw = providerField(['mips_score_2024', 'MIPS_Score_2024'])
+  const paymentAdj2026Raw = providerField(['payment_adj_2026_pct', 'payment_adj_2026', 'Payment_Adj_2026_%'])
+  const allowedCharges2024 = formatMoney(providerField(['allowed_charges_2024', 'Allowed_Charges_2024']))
+  const estPenalty2026 = formatMoney(providerField(['est_penalty_2026', 'est_penalty_2026_usd', 'Est_Penalty_2026_$']))
+  const paymentAdjRaw = providerField(['payment_adj_pct', 'Payment_Adj_%'])
+  const mipsStats: { label: string; value: string; title: string }[] = [
+    { label: 'MIPS Score 2024', value: formatScore(mipsScore2024Raw), title: mipsScore2024Raw },
+    { label: 'Payment Adj 2026 %', value: formatAdjPct(paymentAdj2026Raw), title: paymentAdj2026Raw },
+    { label: 'Allowed Charges 2024', value: allowedCharges2024.short, title: allowedCharges2024.full },
+    { label: 'Est Penalty 2026 $', value: estPenalty2026.short, title: estPenalty2026.full },
+    { label: 'Payment Adj %', value: formatAdjPct(paymentAdjRaw), title: paymentAdjRaw },
+  ]
 
   // MIPS eligibility across the WHOLE organization roster (all clinicians
   // sharing this org's PAC id), classified purely from the MIPS 2026 text:
@@ -483,23 +557,29 @@ export default async function PracticeDetail({
   const profileAside = (
               <aside style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
                 <div className="lead-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
-                    <h4 style={{ margin: 0, border: 'none', padding: 0 }}>
-                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" /></svg>
-                      Practice Profile
-                    </h4>
-                  </div>
+                  {/* ← CHANGED: in the MIPS view these IDs are shown in the
+                      header under the organization name instead. */}
+                  {!mipsView && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
+                        <h4 style={{ margin: 0, border: 'none', padding: 0 }}>
+                          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" /></svg>
+                          Practice Profile
+                        </h4>
+                      </div>
 
-                  <div className="lead-kv"><span>NPI Type 1</span><span className="mono">{npiType1Value}</span></div>
-                  <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{npiType2Value}</span></div>
-                  <div className="lead-kv"><span>Org PAC ID</span><span className="mono">{primaryProvider?.org_pac_id || 'N/A'}</span></div>
+                      <div className="lead-kv"><span>NPI Type 1</span><span className="mono">{npiType1Value}</span></div>
+                      <div className="lead-kv"><span>NPI Type 2</span><span className="mono">{npiType2Value}</span></div>
+                      <div className="lead-kv"><span>Org PAC ID</span><span className="mono">{orgPacId}</span></div>
+                    </>
+                  )}
 
-                  <div className="lead-divider">
+                  <div className="lead-divider" style={mipsView ? { borderTop: 'none', paddingTop: 0, marginTop: 0 } : undefined}>
                     <span className="lead-subhead">Authorized Official</span>
                     {/* ← CHANGED: shows the NPPES Authorized Official columns from
                         the CSV. An individual (NPI-1) has no separate official,
                         so their own name and phone are shown instead. */}
-                    <div className="lead-kv"><span>Name</span><span>{primaryProvider?.auth_official_name || (isIndividualNpi ? primaryProvider?.name : null) || '—'}</span></div>
+                    <div className="lead-kv"><span>Name</span><span>{authOfficialName || '—'}</span></div>
                     <div className="lead-kv"><span>Title</span><span>{primaryProvider?.auth_official_title || '—'}</span></div>
                     {primaryProvider?.auth_official_credential && <div className="lead-kv"><span>Credential</span><span>{primaryProvider.auth_official_credential}</span></div>}
                     <div className="lead-kv">
@@ -642,13 +722,24 @@ export default async function PracticeDetail({
               </div>
               <div>
                 <div className="lead-title-row">
-                  <h2 className="lead-title">{displayTitle}</h2>
+                  <h2 className="lead-title">{mipsTitle}</h2>{/* ← CHANGED: Authorized Official in the MIPS view */}
                   <span className="lead-code">{npiLabel(practice.practice_code)}</span>
                   <span className="lead-badge"><span className="lead-badge-dot" />{statusLabel}</span>
                   {practice.specialty && <span className="lead-badge">{practice.specialty}</span>}
                   {zone && <span className="lead-badge">{zone}</span>}
+                  {mipsView && isCredentialingLead && <span className="lead-badge">Credentialing</span>}{/* ← CHANGED: MIPS view, and only when the CSV marks the lead as Credentialing */}
                   {/* <span className="lead-badge">{providersList.length} Providers</span> */}
                 </div>
+                {/* ← ADDED: MIPS view — organization name (small) with the
+                    practice profile IDs that used to be in the side card. */}
+                {mipsView && (
+                  <p className="lead-org-sub">
+                    {mipsTitle !== displayTitle && <span className="lead-org-sub-name">{displayTitle}</span>}
+                    <span>NPI Type 1: <span className="mono">{npiType1Value}</span></span>
+                    <span>NPI Type 2: <span className="mono">{npiType2Value}</span></span>
+                    <span>Org PAC ID: <span className="mono">{orgPacId}</span></span>
+                  </p>
+                )}
                 <div className="lead-meta">
                   <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
                   <span>{[practice.city, practice.state, practice.postal].filter(Boolean).join(', ') || practice.city || '—'}</span>
@@ -715,10 +806,13 @@ export default async function PracticeDetail({
             </span>
             <span className="lead-stat-label">MIPS 2026</span>
           </div>
-          <div className="lead-stat">
-            <span className="lead-stat-value">{penaltyValue}</span>
-            <span className="lead-stat-label">Penalty</span>
-          </div>
+          {/* ← CHANGED: MIPS view shows Est Penalty 2026 $ instead of this box. */}
+          {!mipsView && (
+            <div className="lead-stat">
+              <span className="lead-stat-value">{penaltyValue}</span>
+              <span className="lead-stat-label">Penalty</span>
+            </div>
+          )}
           <div className="lead-stat">
             <span className="lead-stat-value">{totalProviders}</span>
             <span className="lead-stat-label">Providers</span>
@@ -727,6 +821,13 @@ export default async function PracticeDetail({
             <span className={`lead-stat-value${anyCcm ? ' good' : ''}`}>{anyCcm ? 'Yes' : 'No'}</span>
             <span className="lead-stat-label">CCM</span>
           </div>
+          {/* ← ADDED: MIPS view only — CMS figures from the lead file. */}
+          {mipsView && mipsStats.map((stat) => (
+            <div className="lead-stat" key={stat.label} title={stat.title || undefined}>
+              <span className="lead-stat-value">{stat.value}</span>
+              <span className="lead-stat-label">{stat.label}</span>
+            </div>
+          ))}
         </div>
 
         <SectionTabs label="Lead details" sections={[

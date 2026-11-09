@@ -1,0 +1,104 @@
+[33mcommit 7836dea6d82bda70638047a36272eba4efa4c859[m
+Author:     shoaibzahid560 <03024066563sh@gmail.com>
+AuthorDate: Tue Oct 13 12:49:09 2026 -0700
+Commit:     shoaibzahid560 <03024066563sh@gmail.com>
+CommitDate: Tue Oct 13 12:49:09 2026 -0700
+
+    Searching Done
+
+[1mdiff --git a/app/worksheet-reports-actions.ts b/app/worksheet-reports-actions.ts[m
+[1mindex 8bd842d..b82fb25 100644[m
+[1m--- a/app/worksheet-reports-actions.ts[m
+[1m+++ b/app/worksheet-reports-actions.ts[m
+[36m@@ -6,6 +6,8 @@[m [mexport type WorksheetReportRow = {[m
+   practiceId: string; tenantId: string; practiceCode: string; practiceName: string; providerName: string | null; orgName: string | null[m
+   state: string | null; specialty: string | null; companyName: string | null[m
+   practicePhone: string | null // ← ADDED: the practice's own phone number (from the lead)[m
+[32m+[m[32m  contactPhone: string | null // ← ADDED: NPPES contact / mailing phone[m
+[32m+[m[32m  officialPhone: string | null // ← ADDED: authorized official's phone[m
+   filledBy: string | null; assignedCloser: string | null; callDetails: string | null[m
+   additionalPhone: string | null; email: string | null; concernedPerson: string | null[m
+   directLine: string | null; callbackAt: string | null; timezone: string | null[m
+[36m@@ -99,6 +101,7 @@[m [mtype RawWorksheet = {[m
+     lead_transfers?: RawTransfer[] // ← ADDED: nested transfers (when available)[m
+     practice_providers: Array<{ providers: {[m
+       name: string | null; org_name: string | null[m
+[32m+[m[32m      phone?: string | null; mailing_phone?: string | null; auth_official_phone?: string | null // ← ADDED[m
+       record_source: string | null; entity_type: string | null; enumeration_date: string | null; nppes_last_updated: string | null[m
+       provider_signals: { ccm: boolean | null; pcm: boolean | null; awv: boolean | null; tcm: boolean | null; bhi: boolean | null; rpm: boolean | null; rcm_fit: boolean | null } | null[m
+       provider_mips: Array<{ performance_year: number | null; status: string | null; reporting_option: string | null }> | null[m
+[36m@@ -144,7 +147,7 @@[m [mexport async function getWorksheetReports(): Promise<WorksheetReportsResult> {[m
+       practice_code, name, state, specialty, phone, deleted_at,${withTransfers ? `[m
+       lead_transfers(practice_id, tenant_id, note, users!lead_transfers_to_user_id_fkey(full_name)),` : ''}[m
+       practice_providers(providers([m
+[31m-        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,[m
+[32m+[m[32m        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated, phone, mailing_phone, auth_official_phone,[m
+         provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),[m
+         provider_mips(performance_year, status, reporting_option)[m
+       ))[m
+[36m@@ -213,7 +216,9 @@[m [mexport async function getWorksheetReports(): Promise<WorksheetReportsResult> {[m
+       tenantId: worksheet.tenant_id,[m
+       practiceCode: practice.practice_code,[m
+       practiceName: practice.name,[m
+[31m-      practicePhone: practice.phone ?? null, // ← ADDED[m
+[32m+[m[32m      practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone[m
+[32m+[m[32m      contactPhone: provider?.mailing_phone ?? null, // ← ADDED[m
+[32m+[m[32m      officialPhone: provider?.auth_official_phone ?? null, // ← ADDED[m
+       providerName: getImportedProviderName(worksheet.import_data) ?? worksheet.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,[m
+       orgName: provider?.org_name ?? null,[m
+       state: practice.state,[m
+[36m@@ -271,7 +276,7 @@[m [mexport async function getWorksheetReportDetail(tenantId: string, practiceId: str[m
+     master_practices!inner([m
+       practice_code, name, state, specialty, phone, deleted_at,[m
+       practice_providers(providers([m
+[31m-        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated,[m
+[32m+[m[32m        name, org_name, record_source, entity_type, enumeration_date, nppes_last_updated, phone, mailing_phone, auth_official_phone,[m
+         provider_signals(ccm, pcm, awv, tcm, bhi, rpm, rcm_fit),[m
+         provider_mips(performance_year, status, reporting_option)[m
+       ))[m
+[36m@@ -294,7 +299,9 @@[m [mexport async function getWorksheetReportDetail(tenantId: string, practiceId: str[m
+     tenantId: item.tenant_id,[m
+     practiceCode: practice.practice_code,[m
+     practiceName: practice.name,[m
+[31m-    practicePhone: practice.phone ?? null, // ← ADDED[m
+[32m+[m[32m    practicePhone: practice.phone ?? provider?.phone ?? null, // ← CHANGED: falls back to the provider's phone[m
+[32m+[m[32m    contactPhone: provider?.mailing_phone ?? null, // ← ADDED[m
+[32m+[m[32m    officialPhone: provider?.auth_official_phone ?? null, // ← ADDED[m
+     providerName: getImportedProviderName(item.import_data) ?? item.concerned_person ?? (provider?.name && !/^Practice\s*\(/i.test(provider.name) ? provider.name : null) ?? provider?.org_name ?? null,[m
+     orgName: provider?.org_name ?? null,[m
+     state: practice.state,[m
+[36m@@ -316,4 +323,4 @@[m [mexport async function getWorksheetReportDetail(tenantId: string, practiceId: str[m
+     importData: Object.fromEntries(Object.entries(item.import_data).map(([key, value]) => [key, String(value ?? '')])),[m
+     ...deriveSignals(provider),[m
+   } }[m
+[31m-}[m
+\ No newline at end of file[m
+[32m+[m[32m}[m
+[1mdiff --git a/app/worksheet-reports/WorksheetReportsClient.tsx b/app/worksheet-reports/WorksheetReportsClient.tsx[m
+[1mindex dcaa05e..d588a9b 100644[m
+[1m--- a/app/worksheet-reports/WorksheetReportsClient.tsx[m
+[1m+++ b/app/worksheet-reports/WorksheetReportsClient.tsx[m
+[36m@@ -28,7 +28,7 @@[m [mconst npiOf = (r: WorksheetReportRow) => r.practiceCode.replace(/^PR-/, '')[m
+ function phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {[m
+   const seen = new Set<string>()[m
+   const out: { label: string; value: string }[] = [][m
+[31m-  for (const [label, value] of [['Practice', r.practicePhone], ['Direct', r.directLine], ['Additional', r.additionalPhone]] as const) {[m
+[32m+[m[32m  for (const [label, value] of [['Practice', r.practicePhone], ['Contact', r.contactPhone], ['Official', r.officialPhone], ['Direct', r.directLine], ['Additional', r.additionalPhone]] as const) { // ← CHANGED: + contact / official phones[m
+     const v = (value ?? '').trim()[m
+     const digits = v.replace(/\D/g, '')[m
+     if (!v || seen.has(digits || v)) continue[m
+[36m@@ -42,11 +42,11 @@[m [mfunction phonesOf(r: WorksheetReportRow): { label: string; value: string }[] {[m
+ function exportTable(rows: WorksheetReportRow[]): ExportTable {[m
+   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')[m
+   return {[m
+[31m-    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Direct Line',[m
+[32m+[m[32m    headers: ['NPI', 'Practice', 'Provider / Contact Name', 'Company', 'State', 'Specialty', 'Practice Phone', 'Contact Phone', 'Official Phone', 'Direct Line',[m
+       'Additional Phone', 'Email', 'Concerned Person', 'Filled By', 'Closer', 'Disposition', 'Callback', 'Callback Timezone',[m
+       'Call Details', 'Handoff Status', 'Last Updated', 'Last Updated By'],[m
+     rows: rows.map((r) => [[m
+[31m-      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.directLine,[m
+[32m+[m[32m      npiOf(r), r.practiceName, r.providerName, r.companyName, r.state, r.specialty, r.practicePhone, r.contactPhone, r.officialPhone, r.directLine,[m
+       r.additionalPhone, r.email, r.concernedPerson, r.filledBy, r.assignedCloser, r.disposition, when(r.callbackAt), r.timezone,[m
+       r.callDetails, r.handoffStatus, when(r.lastUpdatedAt), r.lastUpdatedBy,[m
+     ]),[m
+[36m@@ -86,12 +86,15 @@[m [mfunction worksheetMa
