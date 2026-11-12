@@ -12,6 +12,10 @@ const root = path.resolve(__dirname, '..')
 process.env.CRM_SERVER_PAGED_LEADS = '0'
 // Lead data tests use the v3/original paths unless a test opts into compact rows.
 process.env.CRM_COMPACT_LEAD_RPC = '0'
+// The tests below check the in-memory Lead Pool (still used by Agents,
+// Closers, Managers, Team Leads and as the fallback). The database-paged
+// Lead Pool for admins has its own tests at the end of this file.
+process.env.CRM_DB_PAGED_LEADS = '0'
 function loadTs(file, mocks = {}) {
   const filename = path.resolve(root, file)
   const { outputText } = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -2507,4 +2511,168 @@ test('reminders: friend\'s history feature merged without losing the Back fix; S
   const sql = read('database/reminders-follow-latest-callback.sql')
   assert.match(sql, /DROP TRIGGER IF EXISTS trg_replace_active_lead_reminder ON public\.lead_reminders/)   // replaces, not adds
   assert.match(sql, /BEGIN;[\s\S]*COMMIT;/)
+})
+
+// ---------------------------------------------------------------------------
+// Database-paged Lead Pool (Super Admin / Company Admin): the filters run in
+// public.crm_lead_page; only one page of rows is read.
+// (Exact result parity with the in-memory filters was verified against a real
+// PostgreSQL database — see database/lead-pool-db-paging.sql.)
+// ---------------------------------------------------------------------------
+function dbPagedFixture(role, { missing = false, failLater = null } = {}) {
+  const { me, tables } = homeFixture(role)
+  const calls = []
+  const base = database(tables, calls)
+  const codes = ['PR-p1', 'PR-p5', 'PR-p2']
+  const entry = (code) => ({ id: code.slice(3), code, alloc: code === 'PR-p2', companies: role === 'super_admin' && code === 'PR-p2' ? [{ id: 'a', name: 'A' }] : [], email: false })
+  const flat = (id) => [id, `PR-${id}`, id, 'NY', 'Family', 'a', '2026-09-21T00:00:00Z', id === 'p1' ? '2026-09-21T01:00:00Z' : null, null, null]
+  const db = { ...base, rpc(name, payload) {
+    calls.push({ rpc: name, payload })
+    if (name === 'crm_lead_page') {
+      if (missing) return Promise.resolve({ data: null, error: { code: 'PGRST202', message: 'not found' } })
+      if (failLater?.on) return Promise.resolve({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+      const overview = { total: 3, stateCounts: [['NY', 3]], specialties: ['Family'],
+        allocatedCount: 1, assignedAwayCount: 1, workedCount: 1, newCount: 3, leadCompanies: [] }
+      if (payload.p_action === 'overview') return Promise.resolve({ data: overview, error: null })
+      if (payload.p_action === 'first') return Promise.resolve({ data: { overview, total: codes.length, codes: codes.join('\n'),
+        page: codes.slice(0, payload.p_limit).map(entry) }, error: null })
+      if (payload.p_action === 'list') return Promise.resolve({ data: { total: codes.length, codes: payload.p_want_codes ? codes.join('\n') : null,
+        page: codes.slice(payload.p_offset, payload.p_offset + payload.p_limit).map(entry) }, error: null })
+      if (payload.p_action === 'resolve') return Promise.resolve({ data: { page: payload.p_codes.map(entry) }, error: null })
+    }
+    if (name === 'crm_lead_rows_page') return Promise.resolve({ data: payload.p_ids.map(flat), error: null })
+    return base.rpc(name, payload)
+  } }
+  return { me, db, calls }
+}
+function loadDbPagedHome(role, options = {}) {
+  const { me, db, calls } = dbPagedFixture(role, options)
+  const cookieJar = options.cookies ?? {}
+  const supabaseMock = { createSupabaseServer: async () => db,
+    getCurrentUser: async () => ({ data: { user: { id: 'auth-me' } } }), getCurrentProfile: async () => ({ data: { ...me, status: 'active' } }) }
+  const mocks = { '../lib/supabase-server': supabaseMock, './supabase-server': supabaseMock,
+    './PracticesTable': 'PracticesTable', './UploadLeadsButton': 'UploadLeadsButton', './AppShell': 'AppShell',
+    'next/navigation': { redirect: () => { throw Error('unexpected redirect') } }, 'next/headers': { cookies: async () => ({ get: (name) => (name in cookieJar ? { value: cookieJar[name] } : undefined) }) } }
+  return { Home: loadTs('app/page.tsx', mocks).default, actions: loadTs('app/leads-page-actions.ts', mocks), calls }
+}
+
+for (const role of ['super_admin']) {
+  test(`database-paged Lead Pool for ${role}: one page is read, never the whole list`, async () => {
+    process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+    try {
+      const { Home, actions, calls } = loadDbPagedHome(role)
+      const props = (await Home()).props.children.props
+      const paging = props.serverPaging
+      assert.equal(paging.stale, false)
+      assert.deepEqual(paging.codes, ['PR-p1', 'PR-p5', 'PR-p2'])
+      assert.deepEqual(paging.rows.map((r) => r.practiceCode), ['PR-p1', 'PR-p5', 'PR-p2'])
+      assert.equal(paging.rows[0].lastDialed, '2026-09-21T01:00:00Z')
+      assert.equal(paging.rows[2].source, 'Allocated')
+      assert.equal(paging.overview.summaryCounts.total, 3)
+      assert.equal(paging.overview.notWorkedCount, 2)
+      // No full lead read: only the page's rows are read.
+      assert.ok(!calls.some((c) => c.rpc === 'crm_lead_rows_flat'))
+      assert.ok(calls.some((c) => c.rpc === 'crm_lead_rows_page'))
+      // Opening = ONE crm_lead_page call (counts + first page together).
+      assert.deepEqual(calls.filter((c) => c.rpc === 'crm_lead_page').map((c) => c.payload.p_action), ['first'])
+      assert.ok(!calls.some((c) => c.rpc === 'crm_active_allocations'))
+      // Page 2 of the same filters: codes come from the cache (resolve, not list).
+      calls.length = 0
+      const res = await actions.queryLeadPage({ snapshotId: paging.snapshotId, filters: {}, page: 2, pageSize: 2, wantCodes: false })
+      assert.equal(res.ok, true); assert.equal(res.total, 3); assert.equal(res.page, 2)
+      assert.deepEqual(res.rows.map((r) => r.practiceCode), ['PR-p2'])
+      assert.ok(calls.some((c) => c.payload?.p_action === 'resolve'))
+      assert.ok(!calls.some((c) => c.payload?.p_action === 'list'))
+      // A page past the end is clamped to the last page, as before.
+      const last = await actions.queryLeadPage({ snapshotId: paging.snapshotId, filters: {}, page: 99, pageSize: 2, wantCodes: false })
+      assert.equal(last.page, 2)
+    } finally {
+      process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+    }
+  })
+}
+
+test('database-paged Lead Pool falls back to the full load until the SQL is installed', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+  try {
+    const { Home, calls } = loadDbPagedHome('super_admin', { missing: true, cookies: { crm_leads_fresh: '1' } })
+    const props = (await Home()).props.children.props
+    assert.ok(props.serverPaging)
+    assert.deepEqual(props.serverPaging.codes.slice().sort(), ['PR-p1', 'PR-p2', 'PR-p3', 'PR-p5', 'PR-p6'])
+    assert.ok(calls.some((c) => c.rpc === 'crm_lead_page'))
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+  }
+})
+
+test('only Super Admin uses it: Company Admin, Managers, Team Leads, Agents and Closers keep the in-memory Lead Pool', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+  try {
+    for (const role of ['company_admin', 'agent', 'closer', 'manager', 'team_lead']) {
+      const { Home, calls } = loadDbPagedHome(role)
+      const props = (await Home()).props.children.props
+      assert.ok(props.serverPaging, role)
+      assert.ok(!calls.some((c) => c.rpc === 'crm_lead_page'), role)
+    }
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+  }
+})
+
+test('database-paged Lead Pool: a database error while paging falls back to the full load', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+  const failLater = { on: false }
+  try {
+    const { Home, actions } = loadDbPagedHome('super_admin', { failLater })
+    const paging = (await Home()).props.children.props.serverPaging
+    failLater.on = true // e.g. a statement timeout on the next filter change
+    const res = await actions.queryLeadPage({ snapshotId: paging.snapshotId, filters: { search: 'p' }, page: 1, pageSize: 20, wantCodes: true })
+    assert.equal(res.ok, true)
+    assert.notEqual(res.snapshotId, paging.snapshotId)
+    assert.ok(res.overview, 'the fresh counts are sent with the fallback')
+    assert.deepEqual(res.codes.slice().sort(), ['PR-p1', 'PR-p2', 'PR-p3', 'PR-p5', 'PR-p6'])
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+  }
+})
+
+test('database-paged Lead Pool: reopening within 2 minutes reuses the counts; a change loads fresh', async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+  try {
+    const { Home, calls } = loadDbPagedHome('super_admin')
+    const firstOpen = (await Home()).props.children.props.serverPaging
+    calls.length = 0
+    const reopen = (await Home()).props.children.props.serverPaging
+    assert.equal(reopen.snapshotId, firstOpen.snapshotId)
+    assert.ok(!calls.some((c) => c.rpc === 'crm_lead_page'), 'no count/search query on a quick reopen')
+    assert.deepEqual(reopen.rows.map((r) => r.practiceCode), firstOpen.rows.map((r) => r.practiceCode))
+    // Right after this user changed leads (cookie set by the browser): fresh.
+    const fresh = loadDbPagedHome('super_admin', { cookies: { crm_leads_fresh: '1' } })
+    const before = (await fresh.Home()).props.children.props.serverPaging
+    fresh.calls.length = 0
+    const after = (await fresh.Home()).props.children.props.serverPaging
+    assert.notEqual(after.snapshotId, before.snapshotId)
+    assert.ok(fresh.calls.some((c) => c.payload?.p_action === 'first'))
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+  }
+})
+
+test("database-paged Lead Pool: the browser's first request after opening is served from the cache", async () => {
+  process.env.CRM_SERVER_PAGED_LEADS = '1'; process.env.CRM_DB_PAGED_LEADS = '1'
+  try {
+    const { Home, actions, calls } = loadDbPagedHome('super_admin', { cookies: { crm_leads_fresh: '1' } })
+    const paging = (await Home()).props.children.props.serverPaging
+    calls.length = 0
+    // Same default filters, but with the browser's time zone.
+    const res = await actions.queryLeadPage({ snapshotId: paging.snapshotId, filters: {}, timeZone: 'Asia/Karachi', page: 1, pageSize: 20, wantCodes: true })
+    assert.equal(res.ok, true); assert.equal(res.total, 3)
+    assert.ok(!calls.some((c) => c.rpc === 'crm_lead_page'), 'no new search for the same filters')
+    // The time zone still matters when the "Assigned on" filter is used.
+    await actions.queryLeadPage({ snapshotId: paging.snapshotId, filters: { assignedDateFilter: '2026-11-01' }, timeZone: 'Asia/Karachi', page: 1, pageSize: 20, wantCodes: true })
+    const list = calls.find((c) => c.payload?.p_action === 'list')
+    assert.equal(list.payload.p_time_zone, 'Asia/Karachi')
+  } finally {
+    process.env.CRM_SERVER_PAGED_LEADS = '0'; process.env.CRM_DB_PAGED_LEADS = '0'
+  }
 })

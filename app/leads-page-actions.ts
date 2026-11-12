@@ -10,6 +10,27 @@ import { getLeadSnapshot, saveLeadSnapshot, queryLeadSnapshot, leadProfileKey, s
 import { sanitizeLeadFilters } from '../lib/lead-filters'
 import { deepSearchLeadCodes } from '../lib/lead-deep-search'
 import { createSupabaseServer, getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // ← CHANGED: + getCurrentProfile
+import { loadDbLeadView, buildDbLeadSnapshot, queryDbLeadSnapshot } from '../lib/lead-db-view' // ← ADDED
+import { isDbPagingError, dbPagingEnabled } from '../lib/lead-db-paging' // ← ADDED
+import type { LeadSnapshot } from '../lib/lead-snapshots' // ← ADDED
+
+// ← ADDED: a fresh snapshot for this viewer — database-paged for Super Admin /
+// Company Admin (no lead rows read), otherwise the full lead load as before.
+async function rebuildSnapshot(userId: string, allowDb = true): Promise<LeadSnapshot | null> {
+  const view = allowDb && dbPagingEnabled() ? await loadDbLeadView() : null
+  if (view && view.data.authUserId === userId) {
+    try {
+      return await buildDbLeadSnapshot(view)
+    } catch (error) {
+      if (!isDbPagingError(error)) throw error
+      console.error('[crm] database-paged Lead Pool failed; loading every lead as before:', (error as Error).message)
+    }
+  }
+  const data = await loadLeadsData()
+  if (data.kind !== 'ok' || data.authUserId !== userId) return null
+  const { data: me } = await getCurrentProfile(userId)
+  return saveLeadSnapshot(userId, data, leadProfileKey(me))
+}
 
 export async function queryLeadPage(input: {
   snapshotId: string
@@ -25,12 +46,10 @@ export async function queryLeadPage(input: {
   let snapshot = getLeadSnapshot(String(input?.snapshotId ?? ''), user.id)
   let rebuilt = false
   if (!snapshot) {
-    const data = await loadLeadsData()
-    if (data.kind !== 'ok' || data.authUserId !== user.id) {
+    snapshot = await rebuildSnapshot(user.id) // ← CHANGED: database-paged for admins
+    if (!snapshot) {
       return { ok: false as const, message: 'Could not load leads. Please refresh the page.' }
     }
-    const { data: me } = await getCurrentProfile(user.id) // ← ADDED
-    snapshot = saveLeadSnapshot(user.id, data, leadProfileKey(me)) // ← CHANGED: + profile key
     rebuilt = true
   }
 
@@ -56,14 +75,37 @@ export async function queryLeadPage(input: {
     }
   }
 
+  // ← CHANGED: a database-paged snapshot reads the page from the database.
+  // If that fails for any database reason, this request falls back to the
+  // full lead load (as before), so paging and filtering keep working.
+  let dbResult: Awaited<ReturnType<typeof queryDbLeadSnapshot>> | null = null
+  if (snapshot.dbScope) {
+    try {
+      dbResult = await queryDbLeadSnapshot(
+        snapshot, filters, timeZone,
+        Number(input?.page), Number(input?.pageSize),
+        Boolean(input?.wantCodes) || rebuilt,
+        searchExtraCodes,
+      )
+    } catch (error) {
+      if (!isDbPagingError(error)) throw error
+      console.error('[crm] database-paged Lead Pool failed; loading every lead as before:', (error as Error).message)
+      const fallback = await rebuildSnapshot(user.id, false)
+      if (!fallback) return { ok: false as const, message: 'Could not load leads. Please refresh the page.' }
+      fallback.deepSearch = snapshot.deepSearch
+      snapshot = fallback
+      rebuilt = true
+    }
+  }
   const shouldReturnCodes = Boolean(input?.wantCodes) || rebuilt
-  const result = queryLeadSnapshot(
-    snapshot, filters, timeZone,
-    Number(input?.page), Number(input?.pageSize),
-    // A rebuilt snapshot may differ, so always send its codes and counts.
-    shouldReturnCodes,
-    searchExtraCodes,
-  )
+  const result = dbResult
+    ?? queryLeadSnapshot(
+        snapshot, filters, timeZone,
+        Number(input?.page), Number(input?.pageSize),
+        // A rebuilt snapshot may differ, so always send its codes and counts.
+        shouldReturnCodes,
+        searchExtraCodes,
+      )
   const navigationId = shouldReturnCodes && result.codes
     ? saveLeadNavigation(snapshot, result.codes)
     : undefined
@@ -83,12 +125,11 @@ export async function queryLeadPage(input: {
 export async function refreshLeadSnapshot() {
   const { data: { user } } = await getCurrentUser()
   if (!user) return { ok: false as const, message: 'Your session has ended. Please sign in again.' }
-  const data = await loadLeadsData()
-  if (data.kind !== 'ok' || data.authUserId !== user.id) {
+  const snapshot = await rebuildSnapshot(user.id) // ← CHANGED: database-paged for admins
+  if (!snapshot) {
     return { ok: false as const, message: 'Could not refresh leads. Please reload the page.' }
   }
-  const { data: me } = await getCurrentProfile(user.id)
-  const snapshot = saveLeadSnapshot(user.id, data, leadProfileKey(me))
+  const data = snapshot.data
   // ← CHANGED: + the viewer's own assigned leads, so "My assigned" and the
   // priority order in the browser match the fresh data too.
   return { ok: true as const, snapshotId: snapshot.id, overview: snapshot.overview, myAssignedCodes: data.myAssignedCodes ?? [] }

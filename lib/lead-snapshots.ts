@@ -14,6 +14,7 @@ import {
   type LeadFilters, type LeadOverview, type LeadRow, type LeadContext,
 } from './lead-filters'
 import { compactRow } from './query-utils'
+import type { DbLeadScope } from './lead-db-paging' // ← ADDED
 
 export type LeadSnapshot = {
   id: string
@@ -31,6 +32,13 @@ export type LeadSnapshot = {
   // plus the signed-in profile (id|status|role|company) it was built for.
   data: LeadsData
   profileKey: string | null
+  // ← ADDED: set for a database-paged snapshot (Super Admin / Company Admin).
+  // It holds no lead rows (practices is empty): every page is read from the
+  // database, and the ordered code list of recent filters is kept here.
+  dbScope?: DbLeadScope
+  codeCache?: Map<string, string[]>
+  /** The first page read together with the overview (saves one query). */
+  dbFirstPage?: { key: string; pageSize: number; entries: unknown[] }
 }
 
 const TTL_MS = 30 * 60 * 1000
@@ -75,6 +83,67 @@ export function saveLeadSnapshot(userId: string, data: LeadsData, profileKey: st
   store.set(snap.id, snap)
   prune(now)
   return snap
+}
+
+// ← ADDED: a database-paged snapshot — the viewer's context and the summary
+// numbers only, no lead rows (see lib/lead-db-paging.ts).
+export function saveDbLeadSnapshot(
+  userId: string,
+  data: LeadsData,
+  profileKey: string | null,
+  scope: DbLeadScope,
+  overview: LeadOverview,
+): LeadSnapshot {
+  const now = Date.now()
+  const snap: LeadSnapshot = {
+    id: globalThis.crypto.randomUUID(),
+    userId,
+    tenantId: data.tenantId ?? null,
+    createdAt: now,
+    practices: [],
+    ctx: {
+      isSuperAdmin: data.isSuperAdmin,
+      prioritySet: new Set(data.myAssignedCodes),
+      newLeadSet: new Set(),
+      workedLeadSet: new Set(),
+    },
+    overview,
+    deepSearch: new Map(),
+    navigations: new Map(),
+    data,
+    profileKey,
+    dbScope: scope,
+    codeCache: new Map(),
+  }
+  const mine = [...store.values()].filter((s) => s.userId === userId).sort((a, b) => a.createdAt - b.createdAt)
+  while (mine.length >= PER_USER) store.delete(mine.shift()!.id)
+  store.set(snap.id, snap)
+  prune(now)
+  return snap
+}
+
+/**
+ * ← ADDED: this user's newest database-paged snapshot, if younger than
+ * maxAgeMs — reopening the Lead Pool then needs no new count query.
+ */
+export function getReusableDbSnapshot(userId: string, profileKey: string | null, maxAgeMs: number): LeadSnapshot | null {
+  if (!profileKey) return null
+  const now = Date.now()
+  let best: LeadSnapshot | null = null
+  for (const snap of store.values()) {
+    if (!snap.dbScope || snap.userId !== userId || snap.profileKey !== profileKey) continue
+    if (now - snap.createdAt > Math.min(maxAgeMs, TTL_MS)) continue
+    if (!best || snap.createdAt > best.createdAt) best = snap
+  }
+  return best
+}
+
+/** ← ADDED: remember a filter's ordered code list (newest 20 per snapshot). */
+export function cacheDbCodes(snap: LeadSnapshot, key: string, codes: string[]) {
+  if (!snap.codeCache) return
+  snap.codeCache.delete(key)
+  if (snap.codeCache.size >= 20) snap.codeCache.delete(snap.codeCache.keys().next().value as string)
+  snap.codeCache.set(key, codes)
 }
 
 export function getLeadSnapshot(id: string, userId: string): LeadSnapshot | null {
@@ -138,6 +207,7 @@ export function getReusableLeadSnapshot(userId: string, profileKey: string | nul
   let best: LeadSnapshot | null = null
   for (const snap of store.values()) {
     if (snap.userId !== userId || snap.profileKey !== profileKey) continue
+    if (snap.dbScope) continue // ← ADDED: database-paged snapshots hold no rows to reuse
     if (now - snap.createdAt > Math.min(maxAgeMs, TTL_MS)) continue
     if (!best || snap.createdAt > best.createdAt) best = snap
   }

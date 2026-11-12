@@ -5,9 +5,11 @@ import { compactRow } from '../lib/query-utils'
 import { packRows } from '../lib/lead-pack'
 import { cookies } from 'next/headers' // ← ADDED
 import { loadLeadsData } from '../lib/leads-data'
-import { saveLeadSnapshot, queryLeadSnapshot, getReusableLeadSnapshot, leadProfileKey, saveLeadNavigation, type LeadSnapshot } from '../lib/lead-snapshots' // ← CHANGED
+import { saveLeadSnapshot, queryLeadSnapshot, getReusableLeadSnapshot, getReusableDbSnapshot, leadProfileKey, saveLeadNavigation, type LeadSnapshot } from '../lib/lead-snapshots' // ← CHANGED
 import { DEFAULT_LEAD_FILTERS } from '../lib/lead-filters'
 import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // ← ADDED
+import { loadDbLeadView, buildDbLeadSnapshot, queryDbLeadSnapshot } from '../lib/lead-db-view' // ← ADDED
+import { isMissingDbPagingFunction, isDbPagingError, dbPagingEnabled } from '../lib/lead-db-paging' // ← ADDED
 
 // ← ADDED: open the page instantly from this user's recent lead snapshot
 // (up to 10 minutes old) and refresh it in the background. Set
@@ -15,12 +17,84 @@ import { getCurrentUser, getCurrentProfile } from '../lib/supabase-server' // �
 const REUSE_SNAPSHOT_MS = 10 * 60 * 1000
 const FRESH_COOKIE = 'crm_leads_fresh'
 const BACKGROUND_REFRESH_AFTER_MS = 2 * 60 * 1000 // ← ADDED
+// ← ADDED: Super Admin's database-paged Lead Pool reopens from its last
+// counts for up to 2 minutes (skipped right after this user changed leads).
+const REUSE_DB_SNAPSHOT_MS = 2 * 60 * 1000
 function snapshotOlderThan(createdAt: number, ms: number) { // ← ADDED
   return Date.now() - createdAt > ms
 }
 
 export default async function Home() {
   const serverPaged = process.env.CRM_SERVER_PAGED_LEADS !== '0'
+
+  // ← ADDED: Super Admin and Company Admin — filter and page the Lead Pool in
+  // the database (lib/lead-db-view.ts) instead of reading every lead. Falls
+  // back to the full load below if database/lead-pool-db-paging.sql has not
+  // been run yet. CRM_DB_PAGED_LEADS=0 switches it off.
+  if (serverPaged && dbPagingEnabled()) {
+    const view = await loadDbLeadView()
+    let dbPage: { snapshot: LeadSnapshot; navigationId: string; first: Awaited<ReturnType<typeof queryDbLeadSnapshot>> } | null = null
+    if (view) {
+      try {
+        const pageSize = view.data.isSuperAdmin ? 20 : 8
+        let wantsFresh = true
+        try {
+          wantsFresh = (await cookies()).get(FRESH_COOKIE)?.value === '1'
+        } catch {
+          // Outside a real request (e.g. tests): always load fresh.
+        }
+        const reusable = wantsFresh ? null : getReusableDbSnapshot(view.data.authUserId, view.profileKey, REUSE_DB_SNAPSHOT_MS)
+        const snapshot = reusable ?? await buildDbLeadSnapshot(view, pageSize)
+        const first = await queryDbLeadSnapshot(snapshot, DEFAULT_LEAD_FILTERS, null, 1, pageSize, true)
+        dbPage = { snapshot, first, navigationId: saveLeadNavigation(snapshot, first.codes ?? []) }
+      } catch (error) {
+        if (!isDbPagingError(error)) throw error
+        if (isMissingDbPagingFunction(error)) {
+          console.warn('[crm] database/lead-pool-db-paging.sql not installed yet; loading every lead as before')
+        } else {
+          console.error('[crm] database-paged Lead Pool failed; loading every lead as before:', (error as Error).message)
+        }
+      }
+    }
+    if (view && dbPage) {
+      const d = view.data
+      const { snapshot, first, navigationId } = dbPage
+      return (
+        <AppShell
+          title="Leads Management Engine"
+          subtitle="Import, deduplicate, and assign practice-first leads to employees"
+          currentUser={d.currentUser}
+          active="/"
+          showAdmin={d.isSuperAdmin}
+          showTransfers={d.showTransfers}
+          canManageUsers={d.canManageUsers}
+          headerRight={d.canUpload ? <UploadLeadsButton /> : null}
+        >
+          <PracticesTable
+            {...({
+              serverPaging: {
+                snapshotId: snapshot.id,
+                navigationId,
+                overview: snapshot.overview,
+                rows: first.rows,
+                codes: first.codes,
+                pageSize: first.pageSize,
+                stale: false, // always read live from the database
+              },
+            } as Record<string, unknown>)}
+            currentUser={d.currentUser}
+            viewerUserId={d.myUserId}
+            isSuperAdmin={d.isSuperAdmin}
+            lazyOptions
+            canAssign={d.canAssign}
+            myAssignedCodes={d.myAssignedCodes}
+            viewerRole={d.roleKey}
+            completedWorksheetCount={d.completedWorksheetCount}
+          />
+        </AppShell>
+      )
+    }
+  }
 
   // ← ADDED: reuse a recent snapshot when possible. Skipped right after this
   // user changed leads on the Leads page (cookie set by the browser), and for

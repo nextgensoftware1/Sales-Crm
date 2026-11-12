@@ -52,7 +52,9 @@ export default async function RemindersPage() {
       // ← CHANGED: the bell only needs reminders that aren't done yet, so the
       // page no longer sends the whole history twice.
       initialReminders={reminderResult.ok ? (reminderResult.reminders ?? []).filter((r) => !r.done) : undefined}
-      contextExtra={isSuperAdmin ? <ReminderCompanyNav counts={companyReminderCounts} /> : null}
+      // ← CHANGED: fixed key — stops React's dev-only "unique key" warning for
+      // this element, which is created here and rendered inside AppShell.
+      contextExtra={isSuperAdmin ? <ReminderCompanyNav key="reminder-company-nav" counts={companyReminderCounts} /> : null}
     >
       <RemindersClient initialData={reminderResult.ok ? {
         reminders: reminderResult.reminders ?? [],
